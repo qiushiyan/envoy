@@ -724,12 +724,31 @@ func TestClaudeInitOnlyIsNotAcceptance(t *testing.T) {
 }
 
 // An explicit help request is not a usage error: agents read exit codes.
-func TestSubcommandHelpExitsZero(t *testing.T) {
+//
+// The page is also the tool description a caller reads before driving envoy,
+// so it has to stand alone: the loop, what a turn leaves behind, the facts
+// that decide whether a retry is safe, and what each exit code licenses. A
+// caller that has read this should need no other instructions.
+func TestHelpIsSelfSufficient(t *testing.T) {
 	res := runEnvoy(t, newEnv(t), "collect", "--help")
 	if res.code != 0 {
 		t.Fatalf("collect --help exit = %d, want 0\nstderr:\n%s", res.code, res.stderr)
 	}
-	mustContain(t, "stdout", res.stdout, "envoy turn --provider", "exit codes, and what each one licenses:")
+	mustContain(t, "stdout", res.stdout,
+		"envoy turn --provider",            // the dispatch form
+		"THE LOOP",                         // dispatch → run to completion → collect
+		"envoy collect",                    // the read path
+		"shows progress, never completion", // a quiet log is not done
+		"WHAT A TURN LEAVES BEHIND",        // the artifacts
+		"BEFORE YOU DISPATCH",              // the facts a caller cannot discover
+		"envoy never substitutes",          // no model substitution
+		"not a sandbox",                    // --allow-write is intent
+		"One live turn per session",        // the concurrency rule
+		"takes a NEW prompt file",          // resume discipline
+		"counts healthy work",              // cap semantics
+		"EXIT CODES, AND WHAT EACH ONE LICENSES",
+		"claude: low medium high xhigh max", // rendered from the provider map
+	)
 }
 
 func TestUsageErrors(t *testing.T) {
