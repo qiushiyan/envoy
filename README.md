@@ -27,7 +27,9 @@ envoy version
 
 `envoy turn` prints a startup coordinate block (out-dir, watch command,
 session, takeover), runs the provider to terminal state, then prints a
-terminal block. The durable files in the job dir are authoritative:
+terminal block. Its stdout is written for the agent driving it: every status
+carries what it rules out, and every failure ends in one runnable next
+command. The durable files in the job dir are authoritative:
 
 | File | Meaning |
 |---|---|
@@ -63,9 +65,11 @@ Exit codes: `0` ok · `1` provider failure · `2` infra · `3` usage · `4` time
   deadline (laptop sleep cannot stretch it). It is not a stall detector.
 - **The terminal envelope wins.** If the cap fires while an already-complete
   turn is draining, the observed success is published, not a timeout.
-- **Prompt-state recovery.** `accepted` → resume the session, never
-  redispatch; `not_started` → one identical retry is safe; `unknown` →
-  absence of output is not proof of no work.
+- **Prompt-state recovery.** `accepted` → continue the session with a new
+  prompt, never re-send the original; `not_started` → one identical retry is
+  safe; `unknown` → absence of output is not proof of no work. The recovery
+  line hands over the complete follow-up command, carrying the settings the
+  turn was dispatched with.
 - **Process-group lifecycle.** Providers run in their own group; stop
   escalates SIGTERM → SIGKILL and survives grandchildren holding the pipes.
 
@@ -82,7 +86,8 @@ envoy.Pending(base, os.Stdout, os.Stderr)
 ```
 
 Providers implement `internal/provider.Driver`; adding one is a single driver
-file, the lifecycle never changes.
+file, the lifecycle never changes. Everything envoy says to its caller is
+worded in `internal/steer` — one situation, one wording.
 
 ## Development
 

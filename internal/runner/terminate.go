@@ -7,6 +7,7 @@ import (
 
 	"github.com/qiushiyan/envoy/internal/job"
 	"github.com/qiushiyan/envoy/internal/provider"
+	"github.com/qiushiyan/envoy/internal/steer"
 )
 
 // afterFunc schedules fn onto the event loop, so timer callbacks share the
@@ -43,7 +44,7 @@ func (r *run) requestTermination(kind, signalName string) {
 		if kind == "interrupted" {
 			m.InterruptionSignal = job.Ptr(signalName)
 		}
-		m.NextAction = "The provider is stopping. Wait for the terminal task notification before inspecting or resuming the job."
+		m.NextAction = steer.Stopping()
 	})
 	reason := signalName
 	if kind == "timeout" {
@@ -145,9 +146,9 @@ func (r *run) onChildDone(exit exitResult) {
 		ev, _ := r.driver.Recovery()
 		r.finish(finishArgs{
 			status: job.StatusInfra,
-			errorText: fmt.Sprintf("%s was stopped after reporting a session id that is already locked. %s",
-				capitalize(r.opts.Provider), *r.meta.SessionLockConflict),
-			nextAction:          "Inspect or collect the job named in the lock error. Do not resume or redispatch this session until that turn and any orphan provider are terminal.",
+			errorText: fmt.Sprintf("%s reported a session id that another turn already holds, so this turn was stopped.",
+				capitalize(r.opts.Provider)),
+			recovery:            steer.LockedSession(*r.meta.SessionLockConflict, false),
 			partial:             ev.Partial,
 			tokens:              ev.Tokens,
 			promptState:         job.PromptAccepted,
@@ -166,27 +167,23 @@ func (r *run) onChildDone(exit exitResult) {
 	if exit.signal != nil && r.meta.ProviderTerminalAt == nil {
 		ev, evs := r.driver.Recovery()
 		r.handleEvents(evs)
-		args := finishArgs{
+		promptState := job.PromptUnknown
+		if ev.Accepted {
+			promptState = job.PromptAccepted
+		}
+		r.finish(finishArgs{
 			status: job.StatusInfra,
-			errorText: fmt.Sprintf("%s ended unexpectedly after signal %s; the envoy runner itself was not asked to stop.",
+			errorText: fmt.Sprintf("%s was killed by signal %s, which envoy did not send.",
 				r.opts.Provider, *exit.signal),
+			recovery:            steer.Recovery(promptState, r.resumeCommand(), ""),
 			partial:             ev.Partial,
 			tokens:              ev.Tokens,
 			costUSD:             ev.CostUSD,
-			promptState:         job.PromptUnknown,
+			promptState:         promptState,
 			promptStateEvidence: ptrIfNonEmpty(ev.Label),
 			hasEvidence:         true,
 			exit:                exit,
-		}
-		if ev.Accepted && r.session() != "" {
-			args.promptState = job.PromptAccepted
-			args.nextAction = fmt.Sprintf(
-				"Inspect the recovered output, progress.log, stderr.log, and working tree, then continue with %s; do not redispatch the original prompt.",
-				r.driver.ResumeArgs())
-		} else {
-			args.nextAction = "Prompt acceptance is unconfirmed. Inspect progress.log, raw.log, stderr.log, the provider process state, and the working tree before choosing retry or resume."
-		}
-		r.finish(args)
+		})
 		return
 	}
 
@@ -200,11 +197,21 @@ func (r *run) onChildDone(exit exitResult) {
 	if outcome.SessionID != "" {
 		r.setSession(outcome.SessionID)
 	}
+	// The driver reported the cause; the prescription follows from the prompt
+	// state it observed, worded once in steer.
+	recovery := ""
+	if outcome.Status != job.StatusOK {
+		promptState := outcome.PromptState
+		if promptState == "" {
+			promptState = r.meta.PromptState
+		}
+		recovery = steer.Recovery(promptState, r.resumeCommand(), outcome.Remedy)
+	}
 	r.finish(finishArgs{
 		status:              outcome.Status,
 		text:                outcome.Text,
 		errorText:           outcome.ErrorText,
-		nextAction:          outcome.NextAction,
+		recovery:            recovery,
 		partial:             outcome.Partial,
 		tokens:              outcome.Tokens,
 		costUSD:             outcome.CostUSD,
@@ -225,49 +232,38 @@ func (r *run) finishAfterStop(exit exitResult) {
 	var stopped string
 	if r.term.kind == "timeout" {
 		stopped = fmt.Sprintf(
-			"The %g-minute hard wall-clock cap ended this %s turn. Reaching the cap includes healthy active work and is not evidence that the provider hung.",
+			"The %g-minute wall-clock cap ended this %s turn. The cap counts healthy work too, so reaching it is not evidence the provider hung.",
 			r.opts.Turn.TimeoutMin, r.opts.Provider)
 	} else {
 		sig := r.term.signal
 		if sig == "" {
 			sig = "an external signal"
 		}
-		stopped = fmt.Sprintf("The envoy runtime stopped %s after receiving %s.", r.opts.Provider, sig)
+		stopped = fmt.Sprintf("envoy stopped %s after receiving %s.", r.opts.Provider, sig)
 	}
 
 	status := job.StatusInterrupted
 	if r.term.kind == "timeout" {
 		status = job.StatusTimeout
 	}
-	args := finishArgs{
-		status:  status,
-		partial: ev.Partial,
-		tokens:  ev.Tokens,
-		costUSD: ev.CostUSD,
-		exit:    exit,
+	promptState := job.PromptUnknown
+	var evidence *string
+	if ev.Accepted {
+		promptState = job.PromptAccepted
+		evidence = ptrIfNonEmpty(ev.Label)
 	}
-	if ev.Accepted && r.session() != "" {
-		args.promptState = job.PromptAccepted
-		args.promptStateEvidence = ptrIfNonEmpty(ev.Label)
-		args.hasEvidence = true
-		args.errorText = stopped + " The provider accepted the prompt, so the session or working tree may contain partial work."
-		args.nextAction = fmt.Sprintf(
-			"Inspect the recovered result, progress.log, stderr.log, and the working tree, then continue the same session with %s. Do not redispatch the original prompt because it could duplicate accepted work.",
-			r.driver.ResumeArgs())
-	} else {
-		args.promptState = job.PromptUnknown
-		args.promptStateEvidence = nil
-		args.hasEvidence = true
-		args.errorText = stopped + " Prompt acceptance is unconfirmed; absence of provider output is not proof that no work occurred."
-		tailHint := ""
-		if r.session() != "" {
-			tailHint = fmt.Sprintf("; otherwise continue the existing session with %s", r.driver.ResumeArgs())
-		}
-		args.nextAction = fmt.Sprintf(
-			"Inspect progress.log, raw.log, stderr.log, and the working tree. Redispatch only if you can positively establish that the prompt never began%s.",
-			tailHint)
-	}
-	r.finish(args)
+	r.finish(finishArgs{
+		status:              status,
+		errorText:           stopped,
+		recovery:            steer.Recovery(promptState, r.resumeCommand(), ""),
+		partial:             ev.Partial,
+		tokens:              ev.Tokens,
+		costUSD:             ev.CostUSD,
+		promptState:         promptState,
+		promptStateEvidence: evidence,
+		hasEvidence:         true,
+		exit:                exit,
+	})
 }
 
 func capitalize(s string) string {

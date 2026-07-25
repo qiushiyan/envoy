@@ -13,34 +13,58 @@ import (
 	"io"
 	"math"
 	"os"
+	"strings"
 
 	"github.com/qiushiyan/envoy"
 )
 
-const usageText = `envoy — run one headless AI-session turn (claude or codex) and return it as data
+// usageText is read by the agent driving this CLI, so it teaches the workflow
+// and what each exit code licenses — not just the flag list. Effort values are
+// rendered from the provider package so help and validation cannot disagree.
+var usageText = fmt.Sprintf(`envoy — run one headless AI-session turn (claude or codex) and return it as data
 
-usage:
   envoy turn --provider <claude|codex> --prompt-file <F> [flags]
-  envoy collect [out-dir]
-  envoy pending [--base DIR]
+  envoy collect [job-dir]        print one job: status, coordinates, result.md
+  envoy pending [--base DIR]     jobs still needing attention, after a missed completion
   envoy version
+
+Dispatch a turn, let the command run to completion, then collect it. A turn
+can take minutes to hours, so run it as a background job and collect when the
+process exits. Tailing the logs shows progress, never completion: a quiet log
+means the model is thinking.
+
+Every turn writes a job directory: prompt.md (what was sent), result.md (the
+return value), meta.json (status and recovery coordinates), progress.log,
+raw.log, stderr.log. collect reads them for you; the newest job for the
+current project is the default.
 
 turn flags:
   --provider        claude or codex (required)
-  --prompt-file     full prompt file, copied to <out-dir>/prompt.md (required)
-  --model           provider model override; omitted = the provider's own config
-  --effort          claude: low medium high xhigh max · codex: none minimal low medium high xhigh max ultra
-  --resume ID       continue the same provider session (never cross providers)
-  --allow-write     claude: bypassPermissions; codex: ~/.codex/config.toml governs
-  --baseline SHA    review anchor; write turns default to HEAD
-  --cwd DIR         provider working directory (default: current dir)
+  --prompt-file     the full prompt (required); it is copied into the job dir
+  --model           model override; omitted means the provider's own config chooses
+  --effort          claude: %s · codex: %s
+  --resume ID       continue an existing session with a new prompt; never across providers
+  --allow-write     let the turn edit files and run commands unattended
+  --baseline SHA    diff anchor for collect; write turns default to HEAD
+  --cwd DIR         directory the provider works in (default: current dir)
   --out-dir DIR     job directory (default: the central store, ~/.local/state/envoy/jobs/<project>/)
-  --timeout-min N   hard wall-clock cap, 0 = off (default 30)
-  --max-budget-usd  claude-only per-turn cost cap
-  --label TEXT      job-dir label (default: provider name)
+  --timeout-min N   wall-clock safety cap in minutes, 0 = off (default 30)
+  --max-budget-usd  per-turn cost cap (claude only)
+  --label TEXT      names the job dir (default: provider name)
 
-exit codes: 0 ok · 1 provider failure · 2 infra · 3 usage · 4 timeout · 5 interrupted
-`
+exit codes, and what each one licenses:
+  0 ok           result.md holds the turn's answer
+  1 failed       the provider ran and reported a failure; partial work may exist
+  2 infra        envoy or the environment failed, not the model
+  3 usage        flags were rejected, or the session is locked; nothing ran
+  4 timeout      the cap elapsed — not evidence the provider hung
+  5 interrupted  a signal stopped the turn
+  For 1, 2, 4, and 5, collect the job and follow its recovery line rather than
+  re-sending the prompt: a turn the provider accepted may already have changed
+  the working tree.
+`,
+	strings.Join(envoy.Efforts("claude"), " "),
+	strings.Join(envoy.Efforts("codex"), " "))
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))

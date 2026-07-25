@@ -25,9 +25,10 @@ Integration tests need `node` on PATH: `tests/TestMain` builds a **race-instrume
 
 ## Architecture
 
-Flow: `cmd/envoy` (flags only) → `envoy.go` facade (validation, usage errors) → `internal/runner` (lifecycle) ↔ `internal/provider` (drivers) → `internal/job` (artifacts). `internal/collect` reads what the runner wrote.
+Flow: `cmd/envoy` (flags only) → `envoy.go` facade (validation, usage errors) → `internal/runner` (lifecycle) ↔ `internal/provider` (drivers) → `internal/job` (artifacts). `internal/collect` reads what the runner wrote; `internal/steer` words everything either of them says to the caller.
 
-- **`internal/provider` is the extensibility seam.** A `Driver` is stateful per turn: it owns argv/env construction, accumulates the provider's stream, and translates raw JSON lines into five semantic event kinds (`Activity`, `SessionStarted`, `Accepted`, `Terminal`, `Note`). The runner consumes only those events and **never branches on provider name**. Adding a provider = one driver file + a case in `provider.New` + an entry in the `efforts` map.
+- **`internal/steer` owns every sentence addressed to the caller.** Recovery prescriptions, status glosses, and the resume/collect commands live there, so one situation has one wording and the whole agent-facing vocabulary is reviewable in one file. Callers contribute observations, never prose: a driver reports the cause (`Outcome.ErrorText`) plus any cause-specific fix (`Outcome.Remedy`), and `steer.Recovery` turns the observed prompt state into the prescription. Add wording here, not at the call site.
+- **`internal/provider` is the extensibility seam.** A `Driver` is stateful per turn: it owns argv/env construction, accumulates the provider's stream, and translates raw JSON lines into six semantic event kinds (`Activity`, `SessionStarted`, `Accepted`, `Terminal`, `Note`, `ModelReported`). The runner consumes only those events and **never branches on provider name**. Adding a provider = one driver file + a case in `provider.New` + an entry in the `efforts` map.
 - **`internal/runner` is a single-threaded state machine.** One event-loop goroutine owns all `run` state, unsynchronized on purpose; helper goroutines (stream pumps, process wait, timers via `afterFunc`) only send into its channels. Never mutate `run` fields from a new goroutine — route through `callCh`.
 - **Process exit and stream EOF are separate observations, by design.** `spawn` passes raw `os.Pipe` fds (not exec's managed pipes) so `wait()` sees pure process exit while pumps see EOF only when every pipe writer is gone. The exit → close-grace → residual-cleanup → SIGKILL escalation in `terminate.go` exists because a provider grandchild can outlive the CLI and hold the pipes open; the whole tree runs in its own process group so it can be stopped.
 - **`internal/job` owns the meta.json schema for both writer and reader.** The runner and collect share `job.Meta`, so they cannot drift. `collect` distinguishes an absent field from an explicit `null` (see `ReadMetaFile`'s raw map — `collectedAt: null` means "not yet collected", missing means legacy).
@@ -35,6 +36,14 @@ Flow: `cmd/envoy` (flags only) → `envoy.go` facade (validation, usage errors) 
 ## The Output Contract
 
 Stdout blocks, progress vocabulary, recovery prose, exit codes (0 ok · 1 failed · 2 infra · 3 usage · 4 timeout · 5 interrupted), and the job-dir file set are a **caller interface, frequently consumed by an AI agent** — the prose is a prompt surface, and integration tests assert exact strings. Changing wording is a contract change, not cosmetics; update tests and think about the agent reading it.
+
+Three rules govern that prose, all enforced in `internal/steer`:
+
+- **Say what happened, what it rules out, and the one action to take next** — an agent reading `status: infra` should not need envoy's status table, so every non-ok status carries its gloss.
+- **Prescribe only what the engine observed.** Recovery follows from prompt state, because that is the only thing the engine can prove: `not_started` licenses an identical retry, `accepted` licenses only a follow-up in the same session, `unknown` licenses inspection first. Getting this wrong duplicates work that already changed the tree.
+- **Hand over runnable commands, not fragments.** The resume command carries the settings the turn was dispatched with (`--allow-write`, `--model`, `--cwd`), with the prompt file left as an explicit placeholder — a resumed turn needs a new prompt, never the original.
+
+The engine names no particular caller: it says "let this command run to completion, then collect" rather than naming one harness's notification mechanism.
 
 Behavioral invariants the code encodes deliberately (each has a test):
 

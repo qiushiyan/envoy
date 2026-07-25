@@ -49,8 +49,7 @@ type Meta struct {
 	AllowWrite                bool     `json:"allowWrite"`
 	GitBaseline               *string  `json:"gitBaseline"`
 	SessionID                 *string  `json:"sessionId"`
-	ResumeFlag                *string  `json:"resumeFlag"` // session-only fragment
-	ResumeArgs                *string  `json:"resumeArgs"` // resume fragment plus --timeout-min
+	ResumeCommand             *string  `json:"resumeCommand"` // complete follow-up command, prompt file left as a placeholder
 	TakeoverCommand           *string  `json:"takeoverCommand"`
 	SessionLockConflict       *string  `json:"sessionLockConflict"`
 	StartedAt                 string   `json:"startedAt"`
@@ -97,7 +96,7 @@ type Meta struct {
 }
 
 // SchemaVersion for meta.json written by this engine.
-const MetaSchemaVersion = 4
+const MetaSchemaVersion = 5
 
 // Marshal renders the canonical on-disk form.
 func (m *Meta) Marshal() ([]byte, error) {

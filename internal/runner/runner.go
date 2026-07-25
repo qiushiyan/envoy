@@ -23,6 +23,7 @@ import (
 	"github.com/qiushiyan/envoy/internal/job"
 	"github.com/qiushiyan/envoy/internal/lock"
 	"github.com/qiushiyan/envoy/internal/provider"
+	"github.com/qiushiyan/envoy/internal/steer"
 	"github.com/qiushiyan/envoy/internal/text"
 )
 
@@ -216,8 +217,8 @@ func (r *run) execute(promptText string) int {
 	if err != nil {
 		r.finish(finishArgs{
 			status:              job.StatusInfra,
-			errorText:           fmt.Sprintf("The envoy runtime could not start %s: %s", r.opts.Provider, err),
-			nextAction:          "The prompt was not accepted. Retry the identical dispatch once; if startup fails again, check the provider executable and report the infrastructure failure.",
+			errorText:           steer.SpawnFailed(r.opts.Provider, err),
+			recovery:            steer.Recovery(job.PromptNotStarted, r.resumeCommand(), ""),
 			promptState:         job.PromptNotStarted,
 			promptStateEvidence: job.Ptr("provider spawn error"),
 			hasEvidence:         true,
@@ -320,6 +321,20 @@ func (r *run) session() string {
 
 func (r *run) conflicted() bool { return r.meta.SessionLockConflict != nil }
 
+// resumeCommand is the follow-up command for this turn's session, carrying
+// the settings it was dispatched with.
+func (r *run) resumeCommand() string {
+	return steer.Turn{
+		Provider:   r.opts.Provider,
+		SessionID:  r.session(),
+		Cwd:        r.opts.Cwd,
+		Model:      r.opts.Turn.Model,
+		Effort:     r.opts.Turn.Effort,
+		AllowWrite: r.opts.Turn.AllowWrite,
+		TimeoutMin: r.opts.Turn.TimeoutMin,
+	}.ResumeCommand()
+}
+
 // setSession records the session id and refreshes its derived coordinates.
 // The invariant "resume/takeover present iff a session id exists and no lock
 // conflict was recorded" lives here and in markLockConflict — nowhere else.
@@ -335,13 +350,11 @@ func (r *run) markLockConflict(msg string) {
 
 func (r *run) syncSessionCoords() {
 	if r.session() != "" && !r.conflicted() {
-		r.meta.ResumeFlag = job.Ptr("--resume " + r.session())
-		r.meta.ResumeArgs = ptrIfNonEmpty(r.driver.ResumeArgs())
+		r.meta.ResumeCommand = ptrIfNonEmpty(r.resumeCommand())
 		r.meta.TakeoverCommand = ptrIfNonEmpty(r.driver.Takeover())
 		return
 	}
-	r.meta.ResumeFlag = nil
-	r.meta.ResumeArgs = nil
+	r.meta.ResumeCommand = nil
 	r.meta.TakeoverCommand = nil
 }
 

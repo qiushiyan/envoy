@@ -17,7 +17,7 @@ import (
 	"github.com/qiushiyan/envoy/internal/gitx"
 	"github.com/qiushiyan/envoy/internal/job"
 	"github.com/qiushiyan/envoy/internal/proc"
-	"github.com/qiushiyan/envoy/internal/text"
+	"github.com/qiushiyan/envoy/internal/steer"
 )
 
 // JobDirs lists job directories under base, oldest first (stamped names make
@@ -97,66 +97,45 @@ func classifyRunning(meta *job.Meta) runningState {
 	}
 }
 
-// resumeArgs reconstructs the resume fragment, always carrying a --timeout-min
-// so a recovery turn does not silently fall back to the engine default.
-func resumeArgs(meta *job.Meta) string {
-	if meta.SessionLockConflict != nil {
+// resumeCommand rebuilds this job's follow-up command from what the turn was
+// dispatched with, so the caller never has to assemble one — or discover too
+// late that the original turn's write intent was dropped.
+func resumeCommand(meta *job.Meta) string {
+	if meta.SessionLockConflict != nil || meta.SessionID == nil {
 		return ""
 	}
-	base := ""
-	switch {
-	case meta.ResumeArgs != nil:
-		base = *meta.ResumeArgs
-	case meta.ResumeFlag != nil:
-		base = *meta.ResumeFlag
-	case meta.SessionID != nil:
-		base = "--resume " + *meta.SessionID
-	}
-	if base == "" || strings.Contains(base, "--timeout-min") {
-		return base
-	}
-	timeoutMin := meta.TimeoutMin
-	if timeoutMin < 0 {
-		timeoutMin = 30
-	}
-	return fmt.Sprintf("%s --timeout-min %g", base, timeoutMin)
+	return steer.Turn{
+		Provider:   meta.Provider,
+		SessionID:  *meta.SessionID,
+		Cwd:        meta.Cwd,
+		Model:      deref(meta.Model),
+		Effort:     deref(meta.Effort),
+		AllowWrite: meta.AllowWrite,
+		TimeoutMin: meta.TimeoutMin,
+	}.ResumeCommand()
 }
 
-// recoveryForStale prescribes the next move for a job whose runner is gone,
-// from observed prompt state only. Never redispatch merely because output was
-// quiet.
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// recoveryForStale prescribes the next move for a job whose runner is gone.
+// A live orphan provider outranks the prompt state: acting alongside it would
+// put two turns in one tree.
 func recoveryForStale(meta *job.Meta, state runningState) string {
 	if meta.SessionLockConflict != nil {
-		conflict := strings.TrimRight(*meta.SessionLockConflict, ". \t\n")
-		providerWarning := ""
-		if state.kind == "orphaned" {
-			providerWarning = " This job also has a provider process that may still be alive; stop or wait for it first."
-		}
-		return fmt.Sprintf(
-			"This turn recorded a session-lock collision: %s.%s Inspect or collect the job named in that conflict. Do not resume or redispatch the locked session from this job.",
-			conflict, providerWarning)
+		return steer.LockedSession(*meta.SessionLockConflict, state.kind == "orphaned")
 	}
 	switch state.kind {
 	case "orphaned":
-		return "Another provider process may still be changing the tree. Stop or wait for that process first, then inspect progress.log, raw.log, stderr.log, and the working tree. Resume or redispatch only after the process is gone."
+		return steer.Orphaned()
 	case "abandoned":
-		if meta.PromptState == job.PromptAccepted && meta.SessionID != nil {
-			return fmt.Sprintf(
-				"Inspect the recovered result, progress.log, raw.log, stderr.log, and the working tree, then continue the same session with %s; do not redispatch the original prompt because it could duplicate accepted work.",
-				resumeArgs(meta))
-		}
-		if meta.PromptState == job.PromptNotStarted {
-			return "The provider process did not start, so the prompt was not accepted. Retry the identical dispatch once."
-		}
-		tail := ""
-		if meta.SessionID != nil {
-			tail = fmt.Sprintf("; otherwise continue with %s", resumeArgs(meta))
-		}
-		return fmt.Sprintf(
-			"Prompt acceptance is unconfirmed; absence of output is not proof that no work occurred. Inspect progress.log, raw.log, stderr.log, and the working tree. Redispatch only if you can positively establish that the prompt never began%s.",
-			tail)
+		return steer.Recovery(meta.PromptState, resumeCommand(meta), "")
 	default:
-		return "Inspect progress.log, raw.log, stderr.log, the provider process list, and the working tree before resuming or redispatching; liveness is unknown."
+		return steer.Unprovable()
 	}
 }
 
@@ -166,11 +145,11 @@ func reconcileAbandoned(outDir string, meta *job.Meta, state runningState) *job.
 	if state.kind != "abandoned" {
 		return meta
 	}
-	errText := fmt.Sprintf("The envoy runner ended without publishing a terminal result; %s.", state.detail)
+	errText := fmt.Sprintf("This turn ended without publishing a result: %s.", state.detail)
 	meta.Status = job.StatusAbandoned
 	meta.ReconciledAt = job.Ptr(job.ISO(time.Now()))
 	meta.Error = job.Ptr(errText)
-	meta.NextAction = fmt.Sprintf("Collect and inspect this reconciled job: envoy collect %s.", text.ShellQuote(outDir))
+	meta.NextAction = steer.CollectThisJob(outDir)
 	meta.RecoveryAction = job.Ptr(recoveryForStale(meta, state))
 	resultPath := filepath.Join(outDir, "result.md")
 	if _, err := os.Stat(resultPath); os.IsNotExist(err) {
@@ -231,7 +210,7 @@ func Collect(outDir string, w, errW io.Writer) int {
 	if meta.Status == job.StatusRunning {
 		fmt.Fprintf(w, "status: running (%s — %s; result.md is not final)\n", state.kind, state.detail)
 	} else {
-		fmt.Fprintf(w, "status: %s\n", meta.Status)
+		fmt.Fprintf(w, "status: %s\n", steer.StatusLine(meta.Status))
 	}
 	display := func(v *string) string {
 		if v == nil {
@@ -292,7 +271,7 @@ func Collect(outDir string, w, errW io.Writer) int {
 		orDefault(meta.StderrPath, filepath.Join(outDir, "stderr.log")))
 	if meta.SessionID != nil {
 		fmt.Fprintf(w, "session: %s\n", *meta.SessionID)
-		if resume := resumeArgs(meta); resume != "" {
+		if resume := resumeCommand(meta); resume != "" {
 			fmt.Fprintf(w, "resume: %s\n", resume)
 		}
 		if meta.TakeoverCommand != nil {
@@ -327,11 +306,7 @@ func Collect(outDir string, w, errW io.Writer) int {
 
 	if meta.Status == job.StatusRunning {
 		if state.kind == "live" {
-			watchHint := ""
-			if meta.WatchCommand != "" {
-				watchHint = fmt.Sprintf(" Use %s only for live observation.", meta.WatchCommand)
-			}
-			fmt.Fprintf(w, "\nnext: Return now and wait for Claude Code's native background-task notification.%s\n", watchHint)
+			fmt.Fprintf(w, "\nnext: %s\n", steer.RunningNext(outDir, meta.WatchCommand))
 		} else {
 			fmt.Fprintf(w, "\nnext: %s\n", recoveryForStale(meta, state))
 		}
@@ -340,7 +315,7 @@ func Collect(outDir string, w, errW io.Writer) int {
 
 	postCollectionAction := ""
 	if meta.Status == job.StatusOK {
-		postCollectionAction = "Use this result in the invoking skill's verification, judgment, or synthesis step."
+		postCollectionAction = steer.CollectedOK()
 	} else if meta.RecoveryAction != nil {
 		postCollectionAction = *meta.RecoveryAction
 	} else {
@@ -426,7 +401,7 @@ func Pending(base string, w io.Writer) int {
 		fmt.Fprintf(w, "why: %s\n", item.detail)
 		switch item.kind {
 		case "terminal":
-			fmt.Fprintf(w, "next: envoy collect %s\n", text.ShellQuote(item.dir))
+			fmt.Fprintf(w, "next: %s\n", steer.CollectCommand(item.dir))
 		case "corrupt":
 			fmt.Fprintf(w, "next: inspect %s, %s, %s, and the working tree; do not infer completion from the damaged metadata\n",
 				filepath.Join(item.dir, "progress.log"),

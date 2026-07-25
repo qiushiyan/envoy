@@ -166,7 +166,8 @@ func TestCodexSuccess(t *testing.T) {
 		"watch: tail -f",
 		"session: fake-session-id",
 		"takeover-after-terminal: codex resume fake-session-id",
-		"next: return now; wait for the native background-task notification",
+		"next: let this command run to completion, then collect the job: envoy collect",
+		"tailing the logs is observation only",
 		"status: ok",
 		"takeover: codex resume fake-session-id",
 		"next: Collect and verify this job: envoy collect",
@@ -191,8 +192,13 @@ func TestCodexSuccess(t *testing.T) {
 	if meta["promptStateEvidence"] != "codex thread.started" {
 		t.Fatalf("evidence = %v", meta["promptStateEvidence"])
 	}
-	if meta["resumeArgs"] != "--resume fake-session-id --timeout-min 5" {
-		t.Fatalf("resumeArgs = %v", meta["resumeArgs"])
+	// The recorded follow-up is a complete command, not a fragment the caller
+	// has to assemble — and it carries the settings this turn was dispatched with.
+	resume, _ := meta["resumeCommand"].(string)
+	for _, want := range []string{"envoy turn", "--provider codex", "--resume fake-session-id", "--timeout-min 5", "--prompt-file <your-follow-up.md>"} {
+		if !strings.Contains(resume, want) {
+			t.Fatalf("resumeCommand %q is missing %q", resume, want)
+		}
 	}
 	tokens := meta["tokens"].(map[string]any)
 	if tokens["input"] != float64(13) || tokens["cachedInput"] != float64(5) || tokens["reasoningOutput"] != float64(3) {
@@ -303,11 +309,11 @@ func TestCodexTimeoutRecordsAcceptance(t *testing.T) {
 		t.Fatalf("meta = status %v prompt %v", meta["status"], meta["promptState"])
 	}
 	mustContain(t, "error", meta["error"].(string),
-		"hard wall-clock cap ended this codex turn",
-		"not evidence that the provider hung")
+		"wall-clock cap ended this codex turn",
+		"not evidence the provider hung")
 	mustContain(t, "recoveryAction", meta["recoveryAction"].(string),
-		"--resume fake-session-id --timeout-min 0.02",
-		"Do not redispatch the original prompt")
+		"--resume fake-session-id", "--timeout-min 0.02",
+		"would repeat work that already happened")
 	mustContain(t, "result.md", readFile(t, filepath.Join(outDir, "result.md")), "# Turn timeout")
 }
 
@@ -423,15 +429,15 @@ func TestCodexFreshSessionLockCollision(t *testing.T) {
 	if meta["sessionLockConflict"] == nil {
 		t.Fatal("meta must record the lock conflict")
 	}
-	if meta["resumeArgs"] != nil || meta["takeoverCommand"] != nil {
+	if meta["resumeCommand"] != nil || meta["takeoverCommand"] != nil {
 		t.Fatalf("a conflicted session must suppress resume/takeover coordinates: %v %v",
-			meta["resumeArgs"], meta["takeoverCommand"])
+			meta["resumeCommand"], meta["takeoverCommand"])
 	}
 	if meta["promptStateEvidence"] != "codex thread.started with conflicting session lock" {
 		t.Fatalf("evidence = %v", meta["promptStateEvidence"])
 	}
 	mustContain(t, "result.md", readFile(t, filepath.Join(outDir, "result.md")),
-		"# Turn infra", "already locked")
+		"# Turn infra", "another turn already holds")
 	if strings.Contains(res.stdout, "takeover-after-terminal:") {
 		t.Fatal("a conflicted fresh session must not advertise takeover")
 	}
@@ -481,7 +487,8 @@ func TestInterruptRecordsPartialAndResume(t *testing.T) {
 		t.Fatalf("meta = status %v signal %v", meta["status"], meta["interruptionSignal"])
 	}
 	mustContain(t, "error", meta["error"].(string), "stopped codex after receiving SIGINT")
-	mustContain(t, "recoveryAction", meta["recoveryAction"].(string), "--resume fake-session-id --timeout-min 5")
+	mustContain(t, "recoveryAction", meta["recoveryAction"].(string),
+		"envoy turn", "--resume fake-session-id", "--timeout-min 5")
 }
 
 func TestCollectStampsAndPendingDiscovers(t *testing.T) {
@@ -511,10 +518,10 @@ func TestCollectStampsAndPendingDiscovers(t *testing.T) {
 		"provider: codex",
 		"tokens: input 13 · cachedInput 5 · output 8 · reasoningOutput 3",
 		"session: fake-session-id",
-		"resume: --resume fake-session-id --timeout-min 5",
+		"resume: envoy turn --provider codex --resume fake-session-id",
 		"--- result.md ---",
 		"fake provider result",
-		"next: Use this result in the invoking skill's verification, judgment, or synthesis step.")
+		"next: result.md above is this turn's return value")
 
 	meta := readMeta(t, outDir)
 	if meta["collectedAt"] == nil {
@@ -534,8 +541,8 @@ func TestCollectReconcilesAbandonedJob(t *testing.T) {
 	meta := map[string]any{
 		"schemaVersion": 4, "status": "running", "provider": "codex",
 		"promptState": "accepted", "sessionId": "dead-session",
-		"resumeArgs": "--resume dead-session --timeout-min 180",
-		"runnerPid":  4194304, "providerPid": 4194304, "providerPgid": 4194304,
+		"resumeCommand": "envoy turn --provider codex --resume dead-session --timeout-min 180 --prompt-file <your-follow-up.md>",
+		"runnerPid":     4194304, "providerPid": 4194304, "providerPgid": 4194304,
 		"timeoutMin": 180.0, "nextAction": "wait", "resultKind": "none",
 		"collectedAt": nil,
 	}
@@ -547,9 +554,10 @@ func TestCollectReconcilesAbandonedJob(t *testing.T) {
 		t.Fatalf("collect = %d\n%s", res.code, res.stderr)
 	}
 	mustContain(t, "collect stdout", res.stdout,
-		"status: abandoned",
-		"The envoy runner ended without publishing a terminal result",
-		"continue the same session with --resume dead-session --timeout-min 180")
+		"status: abandoned — the process ended without publishing a result",
+		"This turn ended without publishing a result",
+		"continue the same session with a follow-up prompt",
+		"--resume dead-session")
 	got := readMeta(t, outDir)
 	if got["status"] != "abandoned" || got["reconciledAt"] == nil {
 		t.Fatalf("reconciled meta = status %v reconciledAt %v", got["status"], got["reconciledAt"])
@@ -712,7 +720,7 @@ func TestClaudeInitOnlyIsNotAcceptance(t *testing.T) {
 			meta["promptState"], meta["promptStateEvidence"])
 	}
 	mustContain(t, "recoveryAction", meta["recoveryAction"].(string),
-		"Redispatch only if you can positively establish")
+		"silence is not proof", "only once they show it never began")
 }
 
 // An explicit help request is not a usage error: agents read exit codes.
@@ -721,7 +729,7 @@ func TestSubcommandHelpExitsZero(t *testing.T) {
 	if res.code != 0 {
 		t.Fatalf("collect --help exit = %d, want 0\nstderr:\n%s", res.code, res.stderr)
 	}
-	mustContain(t, "stdout", res.stdout, "usage:")
+	mustContain(t, "stdout", res.stdout, "envoy turn --provider", "exit codes, and what each one licenses:")
 }
 
 func TestUsageErrors(t *testing.T) {

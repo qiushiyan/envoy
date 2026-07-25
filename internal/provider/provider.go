@@ -75,12 +75,15 @@ type ExitInfo struct {
 	StderrTail   string // last ~2000 chars of provider stderr
 }
 
-// Outcome is a driver's normal-path conclusion after process end.
+// Outcome is a driver's normal-path conclusion after process end. A driver
+// reports what it observed — the cause, and any cause-specific fix the caller
+// must apply first — and never the recovery prescription itself: that follows
+// from the prompt state and is worded once in internal/steer.
 type Outcome struct {
 	Status              string // job.StatusOK / StatusFailed / StatusInfra
 	Text                string // final text (ok only)
-	ErrorText           string
-	NextAction          string // recovery action; "" lets finish() use its default
+	ErrorText           string // what this provider reported or exited with
+	Remedy              string // cause-specific fix, e.g. "Raise the budget cap first."; "" when none
 	Partial             *string
 	Tokens              *job.Tokens
 	CostUSD             *float64
@@ -107,8 +110,8 @@ type Driver interface {
 	Recovery() (Evidence, []Event)
 	// Conclude assembles the outcome for a normally-ended process.
 	Conclude(exit ExitInfo) Outcome
-	// ResumeArgs is the caller-facing resume fragment incl. the current cap.
-	ResumeArgs() string
+	// Takeover is the provider's own command for continuing this session
+	// interactively, once the turn is terminal.
 	Takeover() string
 }
 
@@ -153,12 +156,9 @@ func ValidateEffort(providerName, effort string) error {
 		effort, providerName, strings.Join(valid, ", "), hint)
 }
 
-func resumeArgs(sessionID string, timeoutMin float64) string {
-	if sessionID == "" {
-		return ""
-	}
-	return fmt.Sprintf("--resume %s --timeout-min %g", sessionID, timeoutMin)
-}
+// EffortList is the provider's own effort vocabulary, so the CLI's help text
+// and its validation cannot drift apart.
+func EffortList(providerName string) []string { return efforts[providerName] }
 
 // stderrDetail condenses a stderr tail into the last three non-empty lines.
 func stderrDetail(tail string) string {

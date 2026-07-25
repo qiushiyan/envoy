@@ -141,3 +141,12 @@ Engine-relevant history, distilled from the predecessor and continued here.
   `providerReportedModel` — the provider's own init-event statement,
   surfaced in progress and collect. The boundary it sharpened: *observed* is
   recordable, *inferred* stays forbidden.
+- **2026-07-26 — the caller-facing prose became a package.** A prompt-
+  engineering pass found the same recovery rule written twelve ways across
+  the runner, both drivers, and collect, already drifting; a resume
+  *fragment* that made the caller assemble a command and silently dropped
+  the original turn's `--allow-write`; status words with no gloss; and
+  dispatch prose naming one specific caller harness. `internal/steer` now
+  owns every sentence: drivers report causes, steer prescribes. The rule
+  that generalizes — **a recovery line may prescribe only what the engine
+  observed, and must hand over a runnable command, not a fragment.**

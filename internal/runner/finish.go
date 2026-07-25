@@ -9,6 +9,7 @@ import (
 
 	"github.com/qiushiyan/envoy/internal/gitx"
 	"github.com/qiushiyan/envoy/internal/job"
+	"github.com/qiushiyan/envoy/internal/steer"
 	"github.com/qiushiyan/envoy/internal/text"
 )
 
@@ -53,7 +54,7 @@ func (r *run) initMeta() {
 		RunnerInstanceID: r.instance,
 		PromptState:      job.PromptUnknown,
 		ResultKind:       job.ResultNone,
-		NextAction:       "Return now and wait for Claude Code's native background-task notification. Use the watch command only for live observation; it is not a completion signal.",
+		NextAction:       steer.RunningNext(r.ws.Dir, r.ws.WatchCommand()),
 	}
 	r.setSession(r.driver.PreflightSessionID())
 }
@@ -90,14 +91,14 @@ func (r *run) printStartupBlock() {
 		fmt.Fprintf(w, "session: %s\n", r.session())
 		fmt.Fprintf(w, "takeover-after-terminal: %s\n", r.driver.Takeover())
 	}
-	fmt.Fprintln(w, "next: return now; wait for the native background-task notification, then collect this job")
+	fmt.Fprintf(w, "next: %s\n", steer.DispatchNext(r.ws.Dir))
 }
 
 type finishArgs struct {
 	status              string
 	text                string // final text, ok only
 	errorText           string
-	nextAction          string
+	recovery            string // the prescription; steer owns its wording
 	partial             *string
 	tokens              *job.Tokens
 	costUSD             *float64
@@ -120,15 +121,15 @@ func (r *run) finish(f finishArgs) {
 		}
 	}
 	endedAt := time.Now()
-	collectAction := fmt.Sprintf("Collect and verify this job: envoy collect %s.", text.ShellQuote(r.ws.Dir))
+	collectAction := steer.CollectThisJob(r.ws.Dir)
 
 	var recoveryAction *string
 	if f.status != job.StatusOK {
-		if f.nextAction != "" {
-			recoveryAction = job.Ptr(f.nextAction)
-		} else {
-			recoveryAction = job.Ptr("Inspect result.md, progress.log, raw.log, and stderr.log before choosing a recovery action.")
+		recovery := f.recovery
+		if recovery == "" {
+			recovery = steer.Recovery(r.meta.PromptState, r.resumeCommand(), "")
 		}
+		recoveryAction = job.Ptr(recovery)
 	}
 
 	hasPartial := f.partial != nil && strings.TrimSpace(*f.partial) != ""
@@ -182,7 +183,7 @@ func (r *run) finish(f finishArgs) {
 
 	w := r.opts.Stdout
 	fmt.Fprintln(w, "")
-	fmt.Fprintf(w, "status: %s\n", f.status)
+	fmt.Fprintf(w, "status: %s\n", steer.StatusLine(f.status))
 	fmt.Fprintf(w, "result: %s\n", r.ws.ResultPath())
 	fmt.Fprintf(w, "meta: %s\n", r.ws.MetaPath())
 	session := r.session()

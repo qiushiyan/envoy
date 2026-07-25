@@ -80,6 +80,10 @@ func resolveTimeout(req TurnRequest) (float64, error) {
 	return req.TimeoutMin, nil
 }
 
+// Efforts lists the effort values a provider accepts, so callers can render
+// them instead of hardcoding a copy that drifts.
+func Efforts(providerName string) []string { return provider.EffortList(providerName) }
+
 func usageError(w io.Writer, format string, args ...any) int {
 	fmt.Fprintf(w, "usage error: "+format+"\n", args...)
 	return ExitUsage

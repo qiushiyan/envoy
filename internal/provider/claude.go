@@ -224,19 +224,8 @@ func (c *claude) Conclude(exit ExitInfo) Outcome {
 			PromptStateEvidence: labelPtr(observed.Label),
 			HasEvidence:         true,
 		}
-		if observed.Accepted && c.sessionID != "" {
+		if observed.Accepted {
 			out.PromptState = job.PromptAccepted
-			out.NextAction = fmt.Sprintf(
-				"Inspect the recovered output, progress.log, stderr.log, and the working tree, then continue with %s; do not redispatch the original prompt.",
-				c.ResumeArgs())
-		} else {
-			tailHint := ""
-			if c.sessionID != "" {
-				tailHint = fmt.Sprintf(", otherwise continue with %s", c.ResumeArgs())
-			}
-			out.NextAction = fmt.Sprintf(
-				"Prompt acceptance is unconfirmed. Inspect progress.log, raw.log, stderr.log, and the working tree; retry unchanged only if work provably never began%s.",
-				tailHint)
 		}
 		return out
 	}
@@ -265,10 +254,8 @@ func (c *claude) Conclude(exit ExitInfo) Outcome {
 		return Outcome{
 			Status: job.StatusFailed,
 			ErrorText: fmt.Sprintf(
-				"Claude stopped at the --max-budget-usd %g cap after accepting the prompt. Partial work may be on disk.", budget),
-			NextAction: fmt.Sprintf(
-				"Inspect the partial output and working tree, raise the budget cap, then continue with %s. Re-sending the original prompt could duplicate work.",
-				c.ResumeArgs()),
+				"Claude stopped at the --max-budget-usd %g cap after accepting the prompt.", budget),
+			Remedy:      "Raise the budget cap before continuing.",
 			Partial:     job.Ptr(parsed.partial),
 			Tokens:      parsed.tokens,
 			CostUSD:     parsed.costUSD,
@@ -280,6 +267,7 @@ func (c *claude) Conclude(exit ExitInfo) Outcome {
 		out := Outcome{
 			Status:              job.StatusFailed,
 			ErrorText:           fmt.Sprintf("Claude reported a provider failure: %s", parsed.errorText),
+			Remedy:              "Fix the cause it reported first.",
 			Partial:             job.Ptr(parsed.partial),
 			Tokens:              parsed.tokens,
 			CostUSD:             parsed.costUSD,
@@ -288,18 +276,12 @@ func (c *claude) Conclude(exit ExitInfo) Outcome {
 			HasEvidence:         true,
 			SessionID:           parsed.sessionID,
 		}
-		if observed.Accepted && c.sessionID != "" {
+		if observed.Accepted {
 			out.PromptState = job.PromptAccepted
-			out.NextAction = fmt.Sprintf(
-				"Inspect the partial output and working tree, fix the reported cause, then continue with %s.", c.ResumeArgs())
-		} else {
-			out.NextAction = "Prompt acceptance is unconfirmed. Inspect progress.log, raw.log, stderr.log, and the working tree before choosing retry or resume."
 		}
 		return out
 	}
 }
-
-func (c *claude) ResumeArgs() string { return resumeArgs(c.sessionID, c.opts.TimeoutMin) }
 
 func (c *claude) Takeover() string {
 	if c.sessionID == "" {

@@ -168,8 +168,13 @@ func TestClaudeBudgetStop(t *testing.T) {
 	if out.Status != job.StatusFailed || !strings.Contains(out.ErrorText, "--max-budget-usd 0.25 cap") {
 		t.Fatalf("budget outcome = %+v", out)
 	}
-	if !strings.Contains(out.NextAction, "--resume s1 --timeout-min 30") {
-		t.Fatalf("budget next action must resume: %q", out.NextAction)
+	// The driver states the cause and the cause-specific fix; the recovery
+	// prescription itself is steer's, keyed off this prompt state.
+	if out.PromptState != job.PromptAccepted {
+		t.Fatalf("a budget stop happens after acceptance, got %q", out.PromptState)
+	}
+	if !strings.Contains(out.Remedy, "budget cap") {
+		t.Fatalf("budget remedy = %q", out.Remedy)
 	}
 }
 

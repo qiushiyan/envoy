@@ -154,6 +154,7 @@ func (c *codex) Conclude(exit ExitInfo) Outcome {
 		out := Outcome{
 			Status:    job.StatusFailed,
 			ErrorText: fmt.Sprintf("Codex reported a provider failure: %s", *c.errorText),
+			Remedy:    "Fix the cause it reported first.",
 			Partial:   recovered,
 			Tokens:    c.tokens,
 		}
@@ -161,13 +162,6 @@ func (c *codex) Conclude(exit ExitInfo) Outcome {
 			out.PromptState = job.PromptAccepted
 		} else {
 			out.PromptState = job.PromptUnknown
-		}
-		if c.sessionID != "" {
-			out.NextAction = fmt.Sprintf(
-				"Inspect the partial output and working tree. Fix the reported cause, then continue with %s; do not resend completed work.",
-				c.ResumeArgs())
-		} else {
-			out.NextAction = "Inspect progress.log, raw.log, stderr.log, and the working tree before retrying; the runtime cannot prove whether the provider began work."
 		}
 		return out
 	}
@@ -184,20 +178,13 @@ func (c *codex) Conclude(exit ExitInfo) Outcome {
 				PromptState: job.PromptAccepted,
 			}
 		}
-		out := Outcome{
+		return Outcome{
 			Status:      job.StatusFailed,
 			ErrorText:   fmt.Sprintf("Codex exited with code %s after producing a response.", codeStr(exit.Code)),
 			Partial:     recovered,
 			Tokens:      c.tokens,
 			PromptState: job.PromptAccepted,
 		}
-		if c.sessionID != "" {
-			out.NextAction = fmt.Sprintf(
-				"Read the recovered output and inspect the working tree, then continue with %s if work remains.", c.ResumeArgs())
-		} else {
-			out.NextAction = "Read the recovered output and inspect the working tree before deciding whether another dispatch is needed."
-		}
-		return out
 	}
 
 	out := Outcome{
@@ -212,17 +199,8 @@ func (c *codex) Conclude(exit ExitInfo) Outcome {
 	} else {
 		out.PromptState = job.PromptUnknown
 	}
-	if c.threadStarted && c.sessionID != "" {
-		out.NextAction = fmt.Sprintf(
-			"The prompt was accepted. Inspect progress.log, raw.log, stderr.log, and the working tree, then continue with %s; do not redispatch the original prompt.",
-			c.ResumeArgs())
-	} else {
-		out.NextAction = "Prompt acceptance is unconfirmed. Inspect progress.log, raw.log, stderr.log, and the working tree; retry unchanged only if they prove that work never began."
-	}
 	return out
 }
-
-func (c *codex) ResumeArgs() string { return resumeArgs(c.sessionID, c.opts.TimeoutMin) }
 
 func (c *codex) Takeover() string {
 	if c.sessionID == "" {
