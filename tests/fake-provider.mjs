@@ -16,13 +16,6 @@ if (!['codex', 'claude'].includes(provider)) {
   process.exit(64);
 }
 
-if (process.env.ENVOY_FAKE_PROVIDER_PID_FILE) {
-  fs.writeFileSync(process.env.ENVOY_FAKE_PROVIDER_PID_FILE, `${process.pid}\n`);
-}
-if (process.env.ENVOY_FAKE_ARGV_FILE) {
-  fs.writeFileSync(process.env.ENVOY_FAKE_ARGV_FILE, JSON.stringify(providerArgs));
-}
-
 if (scenario === 'exit-before-stdin') {
   process.stderr.write('fake provider exited before reading its prompt\n');
   process.exit(23);
