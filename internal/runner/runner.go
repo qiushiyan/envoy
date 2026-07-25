@@ -92,6 +92,7 @@ type run struct {
 	lastOutputAt   *string
 	lastActivityAt *string
 	lastEventType  *string
+	reportedModel  string // the provider's own statement, "" until announced
 
 	providerTerminalAt   string
 	providerTerminalType string
@@ -355,6 +356,9 @@ func (r *run) handleEvents(events []provider.Event) {
 			r.lastEventType = job.Ptr(ev.Type)
 		case provider.KindNote:
 			r.progress.Append(ev.State, ev.Fields...)
+		case provider.KindModelReported:
+			r.reportedModel = ev.Model
+			r.writeMeta(nil)
 		case provider.KindAccepted:
 			r.markPromptAccepted(ev.Evidence)
 		case provider.KindTerminal:

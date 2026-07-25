@@ -77,6 +77,7 @@ func (r *run) writeMeta(mutate func(*job.Meta)) {
 	m.LastProviderOutputAt = r.lastOutputAt
 	m.LastProviderActivityAt = r.lastActivityAt
 	m.LastProviderEventType = r.lastEventType
+	m.ProviderReportedModel = ptrIfNonEmpty(r.reportedModel)
 	if mutate != nil {
 		mutate(m)
 	}

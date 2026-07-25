@@ -114,7 +114,12 @@ func (c *claude) consume(parsed any) []Event {
 		if session == "" {
 			session = "pending"
 		}
-		events = append(events, Event{Kind: KindNote, State: "provider-initialized", Fields: []job.KV{{K: "session", V: session}}})
+		fields := []job.KV{{K: "session", V: session}}
+		if model := str(event, "model"); model != "" {
+			fields = append(fields, job.KV{K: "model", V: model})
+			events = append(events, Event{Kind: KindModelReported, Model: model})
+		}
+		events = append(events, Event{Kind: KindNote, State: "provider-initialized", Fields: fields})
 	} else if typ == "system" && subtype == "api_retry" {
 		events = append(events, Event{Kind: KindNote, State: "provider-retry", Fields: []job.KV{
 			{K: "attempt", V: event["attempt"]},

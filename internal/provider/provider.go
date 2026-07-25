@@ -43,6 +43,10 @@ const (
 	KindTerminal
 	// KindNote: a provider milestone worth a progress-log line.
 	KindNote
+	// KindModelReported: the provider announced the model it resolved for
+	// this turn. An observation of the provider's own statement — the engine
+	// still never infers what an alias or an omitted --model means.
+	KindModelReported
 )
 
 type Event struct {
@@ -53,6 +57,7 @@ type Event struct {
 	Terminal  string   // KindTerminal: label, e.g. "claude success"
 	State     string   // KindNote: progress state name
 	Fields    []job.KV // KindNote
+	Model     string   // KindModelReported
 }
 
 // Evidence is what a driver can prove about an abnormally ended turn.

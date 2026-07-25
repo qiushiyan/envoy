@@ -8,6 +8,8 @@ envoy runs **one headless AI-session turn** (the `claude` or `codex` CLI) as a s
 
 It ships as a library (root package `envoy` — `Turn`, `Collect`, `Pending`) and a thin CLI (`cmd/envoy`). **Zero third-party dependencies is a deliberate constraint** — the Go stdlib covers this domain; keep `go.mod` empty.
 
+[DESIGN.md](DESIGN.md) records the why — rejected alternatives, settled non-goals, and the evidence log of paid-for lessons. Read it before proposing a behavior change; update its log when an incident teaches something new.
+
 ## Commands
 
 ```sh
@@ -36,7 +38,7 @@ Stdout blocks, progress vocabulary, recovery prose, exit codes (0 ok · 1 failed
 
 Behavioral invariants the code encodes deliberately (each has a test):
 
-- **No model substitution.** Omitted `--model`/`--effort` means the provider's own config governs; the engine reports `(provider default)`, never an inferred value. Effort values are validated pre-spawn (claude silently degrades on bad effort; codex burns a turn on a 400).
+- **No model substitution.** Omitted `--model`/`--effort` means the provider's own config governs; the engine reports `(provider default)`, never an inferred value. When the provider announces its resolved model (claude's `system/init`), that lands as the `providerReportedModel` observation — the line between *observed* and *inferred* is the rule; alias translation inside the engine stays forbidden. Effort values are validated pre-spawn (claude silently degrades on bad effort; codex burns a turn on a 400).
 - **The terminal envelope wins.** An observed `turn.completed`/`result` beats a timeout that fires during cleanup.
 - **Session locks are never auto-reclaimed** — a dead runner can leave a live orphan provider; recovery must inspect first. One live turn per session id; a fresh codex thread id arrives mid-stream and a collision stops the turn rather than continuing unlocked.
 - **The timeout is a wall-clock deadline comparison, not a monotonic timer** (laptop sleep must not stretch the cap), and it is a safety cap, not a stall detector.

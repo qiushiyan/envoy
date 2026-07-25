@@ -55,6 +55,9 @@ Exit codes: `0` ok · `1` provider failure · `2` infra · `3` usage · `4` time
   their JSON event streams, never scraped.
 - **No model substitution.** Omitted `--model`/`--effort` means the provider's
   own config governs; the runner reports `(provider default)`, never a guess.
+  When the provider itself announces the model it resolved (claude's init
+  event), that is recorded as the `providerReportedModel` observation and
+  shown by collect — observed, never inferred.
 - **The timeout is a hard wall-clock safety cap**, compared against a fixed
   deadline (laptop sleep cannot stretch it). It is not a stall detector.
 - **The terminal envelope wins.** If the cap fires while an already-complete
