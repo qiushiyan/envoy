@@ -35,10 +35,6 @@ for await (const chunk of process.stdin) prompt += chunk;
 if (process.env.ENVOY_FAKE_PROMPT_FILE) {
   fs.writeFileSync(process.env.ENVOY_FAKE_PROMPT_FILE, prompt);
 }
-if (process.env.ENVOY_FAKE_STDERR) {
-  process.stderr.write(process.env.ENVOY_FAKE_STDERR);
-}
-
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const emit = (event) => process.stdout.write(`${JSON.stringify(event)}\n`);
 
@@ -178,8 +174,6 @@ if (provider === 'claude') {
     emit(claudeAssistant('useful claude work before timeout'));
     startGrandchild({ ignoreSigterm: true });
     setInterval(() => {}, 60_000);
-  } else if (scenario === 'hang-before-acceptance') {
-    setInterval(() => {}, 60_000);
   } else if (scenario === 'init-only-hang') {
     emit(claudeInit());
     setInterval(() => {}, 60_000);
@@ -222,11 +216,6 @@ if (provider === 'claude') {
   emitCodexStart();
   await sleep(Number(process.env.ENVOY_FAKE_DELAY_MS ?? 500));
   emitCodexResult();
-} else if (scenario === 'delayed-thread-start-ignore-sigterm') {
-  process.on('SIGTERM', () => {});
-  await sleep(Number(process.env.ENVOY_FAKE_START_DELAY_MS ?? 100));
-  emitCodexStart();
-  setInterval(() => {}, 60_000);
 } else if (scenario === 'success-with-stubborn-grandchild') {
   emitCodexStart();
   emitCodexResult();
@@ -239,16 +228,7 @@ if (provider === 'claude') {
   emitCodexStart();
   emitCodexResult();
   setInterval(() => {}, 60_000);
-} else if (scenario === 'hang-with-grandchild') {
-  emitCodexStart();
-  startGrandchild();
-  setInterval(() => {}, 60_000);
 } else if (scenario === 'hang-with-stubborn-grandchild-only') {
-  emitCodexStart();
-  startGrandchild({ ignoreSigterm: true });
-  setInterval(() => {}, 60_000);
-} else if (scenario === 'hang-with-stubborn-grandchild') {
-  process.on('SIGTERM', () => {});
   emitCodexStart();
   startGrandchild({ ignoreSigterm: true });
   setInterval(() => {}, 60_000);

@@ -2,6 +2,7 @@ package job
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"strings"
@@ -19,10 +20,14 @@ var progressSpace = regexp.MustCompile(`\s+`)
 
 // ProgressLog appends runner-owned semantic lines to progress.log. It is a
 // convenience view for a human or agent tailing the job, so a write failure
-// warns once on stderr and never disturbs the turn.
+// warns once on Warn and never disturbs the turn.
 type ProgressLog struct {
 	path   string
 	warned bool
+
+	// Warn receives the once-only write-failure warning. Callers embedding
+	// the engine set it to their error stream; nil falls back to os.Stderr.
+	Warn io.Writer
 }
 
 func (w Workspace) Progress() *ProgressLog {
@@ -53,7 +58,11 @@ func (p *ProgressLog) Append(state string, fields ...KV) {
 		}
 	}
 	if err != nil && !p.warned {
-		fmt.Fprintf(os.Stderr, "progress log warning: %s\n", err)
+		warn := p.Warn
+		if warn == nil {
+			warn = io.Writer(os.Stderr)
+		}
+		fmt.Fprintf(warn, "progress log warning: %s\n", err)
 		p.warned = true
 	}
 }

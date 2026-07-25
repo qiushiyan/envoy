@@ -119,6 +119,13 @@ func (r *run) maybeStreamsClosed() {
 	r.onChildDone(r.childExit)
 }
 
+func (r *run) providerTerminalType() string {
+	if r.meta.ProviderTerminalEventType == nil {
+		return ""
+	}
+	return *r.meta.ProviderTerminalEventType
+}
+
 // onChildDone classifies the ended turn and finishes. Branch order matters:
 // lock conflict, then requested termination, then unexpected signal, then the
 // provider's own conclusion.
@@ -134,12 +141,12 @@ func (r *run) onChildDone(exit exitResult) {
 	}
 	r.flushLineBuf()
 
-	if r.lockErr != "" {
+	if r.conflicted() {
 		ev, _ := r.driver.Recovery()
 		r.finish(finishArgs{
 			status: job.StatusInfra,
 			errorText: fmt.Sprintf("%s was stopped after reporting a session id that is already locked. %s",
-				capitalize(r.spec.Provider), r.lockErr),
+				capitalize(r.opts.Provider), *r.meta.SessionLockConflict),
 			nextAction:          "Inspect or collect the job named in the lock error. Do not resume or redispatch this session until that turn and any orphan provider are terminal.",
 			partial:             ev.Partial,
 			tokens:              ev.Tokens,
@@ -151,18 +158,18 @@ func (r *run) onChildDone(exit exitResult) {
 		return
 	}
 
-	if r.term != nil && r.providerTerminalAt == "" {
+	if r.term != nil && r.meta.ProviderTerminalAt == nil {
 		r.finishAfterStop(exit)
 		return
 	}
 
-	if exit.signal != nil && r.providerTerminalAt == "" {
+	if exit.signal != nil && r.meta.ProviderTerminalAt == nil {
 		ev, evs := r.driver.Recovery()
 		r.handleEvents(evs)
 		args := finishArgs{
 			status: job.StatusInfra,
 			errorText: fmt.Sprintf("%s ended unexpectedly after signal %s; the envoy runner itself was not asked to stop.",
-				r.spec.Provider, *exit.signal),
+				r.opts.Provider, *exit.signal),
 			partial:             ev.Partial,
 			tokens:              ev.Tokens,
 			costUSD:             ev.CostUSD,
@@ -171,7 +178,7 @@ func (r *run) onChildDone(exit exitResult) {
 			hasEvidence:         true,
 			exit:                exit,
 		}
-		if ev.Accepted && r.sessionID != "" {
+		if ev.Accepted && r.session() != "" {
 			args.promptState = job.PromptAccepted
 			args.nextAction = fmt.Sprintf(
 				"Inspect the recovered output, progress.log, stderr.log, and working tree, then continue with %s; do not redispatch the original prompt.",
@@ -187,13 +194,13 @@ func (r *run) onChildDone(exit exitResult) {
 		Code:         exit.code,
 		Signal:       exit.signal,
 		Terminated:   r.term != nil,
-		TerminalType: r.providerTerminalType,
+		TerminalType: r.providerTerminalType(),
 		StderrTail:   r.stderrTail,
 	})
 	if outcome.SessionID != "" {
-		r.sessionID = outcome.SessionID
+		r.setSession(outcome.SessionID)
 	}
-	args := finishArgs{
+	r.finish(finishArgs{
 		status:              outcome.Status,
 		text:                outcome.Text,
 		errorText:           outcome.ErrorText,
@@ -205,8 +212,7 @@ func (r *run) onChildDone(exit exitResult) {
 		promptStateEvidence: outcome.PromptStateEvidence,
 		hasEvidence:         outcome.HasEvidence,
 		exit:                exit,
-	}
-	r.finish(args)
+	})
 }
 
 // finishAfterStop publishes a requested stop (timeout or interruption) with
@@ -220,13 +226,13 @@ func (r *run) finishAfterStop(exit exitResult) {
 	if r.term.kind == "timeout" {
 		stopped = fmt.Sprintf(
 			"The %g-minute hard wall-clock cap ended this %s turn. Reaching the cap includes healthy active work and is not evidence that the provider hung.",
-			r.spec.TimeoutMin, r.spec.Provider)
+			r.opts.Turn.TimeoutMin, r.opts.Provider)
 	} else {
 		sig := r.term.signal
 		if sig == "" {
 			sig = "an external signal"
 		}
-		stopped = fmt.Sprintf("The envoy runtime stopped %s after receiving %s.", r.spec.Provider, sig)
+		stopped = fmt.Sprintf("The envoy runtime stopped %s after receiving %s.", r.opts.Provider, sig)
 	}
 
 	status := job.StatusInterrupted
@@ -240,7 +246,7 @@ func (r *run) finishAfterStop(exit exitResult) {
 		costUSD: ev.CostUSD,
 		exit:    exit,
 	}
-	if ev.Accepted && r.sessionID != "" {
+	if ev.Accepted && r.session() != "" {
 		args.promptState = job.PromptAccepted
 		args.promptStateEvidence = ptrIfNonEmpty(ev.Label)
 		args.hasEvidence = true
@@ -254,7 +260,7 @@ func (r *run) finishAfterStop(exit exitResult) {
 		args.hasEvidence = true
 		args.errorText = stopped + " Prompt acceptance is unconfirmed; absence of provider output is not proof that no work occurred."
 		tailHint := ""
-		if r.sessionID != "" {
+		if r.session() != "" {
 			tailHint = fmt.Sprintf("; otherwise continue the existing session with %s", r.driver.ResumeArgs())
 		}
 		args.nextAction = fmt.Sprintf(

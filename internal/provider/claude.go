@@ -18,7 +18,7 @@ import (
 // Partial token deltas stay off: event-boundary progress is useful without
 // multiplying log size with one record per generated chunk.
 type claude struct {
-	spec      Spec
+	opts      Options
 	startedAt time.Time
 	sessionID string
 	accepted  bool
@@ -26,41 +26,39 @@ type claude struct {
 	messages  []map[string]any
 }
 
-func newClaude(spec Spec, startedAt time.Time) *claude {
-	sessionID := spec.Resume
+func newClaude(opts Options, startedAt time.Time) *claude {
+	sessionID := opts.Resume
 	if sessionID == "" {
 		// Claude accepts a caller-minted session id, so the lock and the
 		// coordinates exist before spawn.
 		sessionID = job.UUID4()
 	}
-	return &claude{spec: spec, startedAt: startedAt, sessionID: sessionID}
+	return &claude{opts: opts, startedAt: startedAt, sessionID: sessionID}
 }
 
-func (c *claude) Name() string               { return "claude" }
-func (c *claude) Efforts() []string          { return efforts["claude"] }
 func (c *claude) PreflightSessionID() string { return c.sessionID }
 
-func (c *claude) Argv(job.Workspace) []string {
+func (c *claude) Argv() []string {
 	args := []string{"-p", "--output-format", "stream-json", "--verbose"}
-	if c.spec.Model != "" {
-		args = append(args, "--model", c.spec.Model)
+	if c.opts.Model != "" {
+		args = append(args, "--model", c.opts.Model)
 	}
-	if c.spec.Effort != "" {
-		args = append(args, "--effort", c.spec.Effort)
+	if c.opts.Effort != "" {
+		args = append(args, "--effort", c.opts.Effort)
 	}
-	if c.spec.Resume != "" {
-		args = append(args, "--resume", c.spec.Resume)
+	if c.opts.Resume != "" {
+		args = append(args, "--resume", c.opts.Resume)
 	} else {
 		args = append(args, "--session-id", c.sessionID)
 	}
 	// Write intent, not a sandbox: bypassPermissions lets the delegate edit and
 	// run unattended. Without it the turn stays effectively read-only
 	// (unpermitted tools fail; headless never prompts).
-	if c.spec.AllowWrite {
+	if c.opts.AllowWrite {
 		args = append(args, "--permission-mode", "bypassPermissions")
 	}
-	if c.spec.MaxBudgetUSD != nil {
-		args = append(args, "--max-budget-usd", fmt.Sprintf("%g", *c.spec.MaxBudgetUSD))
+	if c.opts.MaxBudgetUSD != nil {
+		args = append(args, "--max-budget-usd", fmt.Sprintf("%g", *c.opts.MaxBudgetUSD))
 	}
 	return args
 }
@@ -167,7 +165,7 @@ func (c *claude) Poll() []Event {
 }
 
 func (c *claude) Recovery() (Evidence, []Event) {
-	parsed := parseClaudeMessages(c.messages, c.spec)
+	parsed := parseClaudeMessages(c.messages)
 	exclude := ""
 	if parsed.kind == "failed" {
 		exclude = parsed.errorText
@@ -208,7 +206,7 @@ func (c *claude) Recovery() (Evidence, []Event) {
 }
 
 func (c *claude) Conclude(exit ExitInfo) Outcome {
-	parsed := parseClaudeMessages(c.messages, c.spec)
+	parsed := parseClaudeMessages(c.messages)
 	if parsed.kind == "unparseable" {
 		observed, _ := c.Recovery()
 		out := Outcome{
@@ -256,8 +254,8 @@ func (c *claude) Conclude(exit ExitInfo) Outcome {
 		}
 	case "budget":
 		budget := 0.0
-		if c.spec.MaxBudgetUSD != nil {
-			budget = *c.spec.MaxBudgetUSD
+		if c.opts.MaxBudgetUSD != nil {
+			budget = *c.opts.MaxBudgetUSD
 		}
 		return Outcome{
 			Status: job.StatusFailed,
@@ -296,7 +294,7 @@ func (c *claude) Conclude(exit ExitInfo) Outcome {
 	}
 }
 
-func (c *claude) ResumeArgs() string { return resumeArgs(c.sessionID, c.spec.TimeoutMin) }
+func (c *claude) ResumeArgs() string { return resumeArgs(c.sessionID, c.opts.TimeoutMin) }
 
 func (c *claude) Takeover() string {
 	if c.sessionID == "" {
@@ -317,7 +315,7 @@ type claudeParse struct {
 	partial   string
 }
 
-func parseClaudeMessages(messages []map[string]any, spec Spec) claudeParse {
+func parseClaudeMessages(messages []map[string]any) claudeParse {
 	var envelope map[string]any
 	for _, m := range messages {
 		if str(m, "type") == "result" {
@@ -459,17 +457,31 @@ func claudeTranscript(sessionID string, since time.Time) *transcriptResult {
 		return nil
 	}
 
+	// Positional tail read: transcripts of long conversations reach tens of
+	// MB, and this runs on every heartbeat while acceptance is unproven —
+	// never load the whole file.
 	const maxBytes = 1 << 20
-	data, err := os.ReadFile(transcript)
+	f, err := os.Open(transcript)
 	if err != nil {
 		return nil
 	}
-	truncated := false
-	if len(data) > maxBytes {
-		data = data[len(data)-maxBytes:]
-		truncated = true
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil
 	}
-	text := string(data)
+	start := info.Size() - maxBytes
+	truncated := start > 0
+	if start < 0 {
+		start = 0
+	}
+	buf := make([]byte, info.Size()-start)
+	if len(buf) > 0 {
+		if n, rerr := f.ReadAt(buf, start); rerr != nil && n != len(buf) {
+			return nil
+		}
+	}
+	text := string(buf)
 	if truncated {
 		if i := strings.IndexByte(text, '\n'); i >= 0 {
 			text = text[i+1:]

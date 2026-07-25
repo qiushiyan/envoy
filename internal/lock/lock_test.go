@@ -21,19 +21,20 @@ func TestAcquireConflictRelease(t *testing.T) {
 		t.Fatalf("first acquire: %v", err)
 	}
 
-	// A second acquire against a live owner (this test process) must report a
-	// live conflict, never a stale one.
+	// A second acquire against a live owner (this test process) must report
+	// the live-owner conflict, never the stale-refusal one. The message text
+	// is the contract: it is what the calling agent reads.
 	_, err = Acquire("session-a", "/tmp/job2", "instance-2")
 	conflict, ok := err.(*Conflict)
 	if !ok {
 		t.Fatalf("expected conflict, got %v", err)
 	}
-	if conflict.Stale {
-		t.Fatal("live owner must not be reported stale")
-	}
 	if !strings.Contains(conflict.Message, "already has a live turn") ||
 		!strings.Contains(conflict.Message, "/tmp/job1") {
 		t.Fatalf("conflict message = %q", conflict.Message)
+	}
+	if strings.Contains(conflict.Message, "Automatic takeover is refused") {
+		t.Fatal("live owner must not be reported as a stale refusal")
 	}
 
 	h.Release()
@@ -63,8 +64,8 @@ func TestStaleLockIsNeverReclaimed(t *testing.T) {
 
 	_, err := Acquire("session-b", "/tmp/job", "instance-1")
 	conflict, ok := err.(*Conflict)
-	if !ok || !conflict.Stale {
-		t.Fatalf("dead owner must be a stale conflict, got %v", err)
+	if !ok {
+		t.Fatalf("dead owner must be a conflict, got %v", err)
 	}
 	if !strings.Contains(conflict.Message, "Automatic takeover is refused") ||
 		!strings.Contains(conflict.Message, "envoy collect '/tmp/dead-job'") {

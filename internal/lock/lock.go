@@ -28,11 +28,11 @@ type payload struct {
 	StartedAt        string `json:"startedAt"`
 }
 
-// Conflict reports that a session lock is held. The message is agent-facing
-// prose; Stale distinguishes a provably live owner from a refusal to reclaim.
+// Conflict reports that a session lock is held — by a provably live owner or
+// by one that cannot be proven dead (never auto-reclaimed either way). The
+// message is agent-facing prose and carries the distinction.
 type Conflict struct {
 	SessionID string
-	Stale     bool
 	Message   string
 }
 
@@ -105,7 +105,6 @@ func Acquire(sessionID, outDir, runnerInstanceID string) (*Handle, error) {
 	}
 	return nil, &Conflict{
 		SessionID: sessionID,
-		Stale:     true,
 		Message: fmt.Sprintf(
 			"session %s has an existing lock whose runner is not provably live (%s). Automatic takeover is refused because its provider may still be running. %sOnly after the provider is gone and its work is accounted for, remove the stale lock and retry.",
 			sessionID, p, inspect),
@@ -113,37 +112,26 @@ func Acquire(sessionID, outDir, runnerInstanceID string) (*Handle, error) {
 }
 
 // Release removes the lock unless another runner acquired it after manual
-// cleanup or PID reuse — only the instance that took it may drop it.
-func (h *Handle) Release() {
+// cleanup or PID reuse — only the instance that took it may drop it. The
+// returned error is advisory: the turn is already terminal when this runs,
+// so callers report it and move on.
+func (h *Handle) Release() error {
 	if h == nil {
-		return
+		return nil
 	}
 	raw, err := os.ReadFile(h.path)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "lock cleanup warning: %s\n", err)
+		if os.IsNotExist(err) {
+			return nil
 		}
-		return
+		return err
 	}
 	var held payload
 	if json.Unmarshal(raw, &held) == nil && held.RunnerInstanceID != h.runnerInstanceID {
-		return
+		return nil // a foreign lock is not ours to drop
 	}
 	if err := os.Remove(h.path); err != nil && !os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "lock cleanup warning: %s\n", err)
+		return err
 	}
-}
-
-// OwnerPid reads the recorded runner pid of a session's lock file, for
-// collect's liveness checks. Returns 0 when unavailable.
-func OwnerPid(sessionID string) int {
-	raw, err := os.ReadFile(Path(sessionID))
-	if err != nil {
-		return 0
-	}
-	var held payload
-	if json.Unmarshal(raw, &held) != nil {
-		return 0
-	}
-	return held.Pid
+	return nil
 }

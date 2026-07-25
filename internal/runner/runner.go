@@ -4,7 +4,10 @@
 //
 // Everything runs on one event-loop goroutine; helper goroutines (readers,
 // process wait, timers) only send into its channels. That keeps the state
-// machine as race-free as the single-threaded original.
+// machine as race-free as the single-threaded original. The in-memory
+// job.Meta is the single copy of published state: the loop mutates it
+// directly and writeMeta snapshots it to disk — there is deliberately no
+// second, runner-private copy of anything meta records.
 package runner
 
 import (
@@ -47,10 +50,15 @@ func durationFromEnv(name string, fallback time.Duration) time.Duration {
 // Options is one validated turn request. The CLI owns flag parsing and usage
 // errors; the runner owns everything after.
 type Options struct {
-	Spec   provider.Spec
-	OutDir string // "" = derive from cwd/label
-	Stdout io.Writer
-	Stderr io.Writer
+	Provider   string
+	PromptFile string
+	Cwd        string
+	Baseline   string // "" = HEAD for write turns, else unset
+	Label      string
+	OutDir     string // "" = derive from cwd/label
+	Turn       provider.Options
+	Stdout     io.Writer
+	Stderr     io.Writer
 }
 
 type termination struct {
@@ -66,18 +74,16 @@ type exitResult struct {
 
 type run struct {
 	opts      Options
-	spec      provider.Spec
 	driver    provider.Driver
 	ws        job.Workspace
 	progress  *job.ProgressLog
-	meta      *job.Meta
+	meta      *job.Meta // single in-memory copy of published state
 	startedAt time.Time
-	deadline  time.Time // zero = no cap
+	deadline  time.Time // zero = no cap; wall clock, never monotonic
 	instance  string
+	argv      []string // provider argv, computed once: spawned and recorded
 
-	sessionID   string
 	sessionLock *lock.Handle
-	lockErr     string // agent-facing conflict message, "" = none
 
 	rawFile    *os.File
 	stderrFile *os.File
@@ -85,16 +91,6 @@ type run struct {
 	child      *childProcess
 	stderrTail string
 	lineBuf    []byte
-
-	// observation counters (meta + heartbeat)
-	outputBytes    int64
-	eventCount     int64
-	lastOutputAt   *string
-	lastActivityAt *string
-	lastEventType  *string
-
-	providerTerminalAt   string
-	providerTerminalType string
 
 	term               *termination
 	waitDone           bool
@@ -116,13 +112,26 @@ type run struct {
 	sigCh    chan os.Signal
 }
 
+// deadlineFrom computes the hard cap as a pure wall-clock instant. Round(0)
+// strips the monotonic reading: Go compares two monotonic-bearing times on
+// the monotonic clock, which freezes during laptop sleep — the cap must not
+// stretch across a suspend, so the first post-wake poll has to catch the
+// overrun on the wall clock.
+func deadlineFrom(startedAt time.Time, timeoutMin float64) time.Time {
+	if timeoutMin <= 0 {
+		return time.Time{}
+	}
+	return startedAt.Round(0).Add(time.Duration(timeoutMin * float64(time.Minute)))
+}
+
 // Run executes one turn and returns the process exit code.
 func Run(opts Options) int {
-	startedAt := time.Now()
+	// Round(0) keeps every derived duration and timestamp on the wall clock.
+	startedAt := time.Now().Round(0)
 	r := &run{
 		opts:      opts,
-		spec:      opts.Spec,
 		startedAt: startedAt,
+		deadline:  deadlineFrom(startedAt, opts.Turn.TimeoutMin),
 		instance:  job.UUID4(),
 		callCh:    make(chan func(), 32),
 		stdoutCh:  make(chan []byte, 32),
@@ -130,26 +139,24 @@ func Run(opts Options) int {
 		waitCh:    make(chan exitResult, 1),
 		sigCh:     make(chan os.Signal, 4),
 	}
-	if r.spec.TimeoutMin > 0 {
-		r.deadline = startedAt.Add(time.Duration(r.spec.TimeoutMin * float64(time.Minute)))
-	}
 
-	outDir, err := job.ResolveOutDir(opts.OutDir, r.spec.Cwd, r.spec.Label, r.spec.Provider, startedAt)
+	outDir, err := job.ResolveOutDir(opts.OutDir, opts.Cwd, opts.Label, opts.Provider, startedAt)
 	if err != nil {
 		fmt.Fprintf(opts.Stderr, "envoy: cannot create out-dir: %s\n", err)
 		return job.ExitInfra
 	}
 	r.ws = job.Workspace{Dir: outDir}
 	r.progress = r.ws.Progress()
+	r.progress.Warn = opts.Stderr
 
-	driver, err := provider.New(r.spec, r.ws, startedAt)
+	driver, err := provider.New(opts.Provider, opts.Turn, r.ws, startedAt)
 	if err != nil {
 		fmt.Fprintf(opts.Stderr, "usage error: %s\n", err)
 		return job.ExitUsage
 	}
 	r.driver = driver
 
-	promptText, err := os.ReadFile(r.spec.PromptFile)
+	promptText, err := os.ReadFile(opts.PromptFile)
 	if err != nil {
 		fmt.Fprintf(opts.Stderr, "envoy: cannot read prompt file: %s\n", err)
 		return job.ExitInfra
@@ -158,9 +165,8 @@ func Run(opts Options) int {
 	// A known session id (claude, or any --resume) locks before any job
 	// artifact is written, so a rejected racing resume cannot truncate the
 	// live job's files.
-	r.sessionID = driver.PreflightSessionID()
-	if r.sessionID != "" {
-		handle, err := lock.Acquire(r.sessionID, outDir, r.instance)
+	if sessionID := driver.PreflightSessionID(); sessionID != "" {
+		handle, err := lock.Acquire(sessionID, outDir, r.instance)
 		if err != nil {
 			fmt.Fprintf(opts.Stderr, "lock error: %s\n", err)
 			if _, ok := err.(*lock.Conflict); ok {
@@ -171,8 +177,8 @@ func Run(opts Options) int {
 		r.sessionLock = handle
 	}
 
-	if err := r.ws.Prepare(r.spec.PromptFile); err != nil {
-		r.sessionLock.Release()
+	if err := r.ws.Prepare(opts.PromptFile); err != nil {
+		r.releaseLock()
 		fmt.Fprintf(opts.Stderr, "envoy: cannot prepare job dir: %s\n", err)
 		return job.ExitInfra
 	}
@@ -183,28 +189,34 @@ func (r *run) execute(promptText string) int {
 	r.initMeta()
 	r.printStartupBlock()
 	r.progress.Append("starting",
-		job.KV{K: "provider", V: r.spec.Provider},
-		job.KV{K: "hard_cap", V: text.HardCap(r.spec.TimeoutMin)},
+		job.KV{K: "provider", V: r.opts.Provider},
+		job.KV{K: "hard_cap", V: text.HardCap(r.opts.Turn.TimeoutMin)},
 		job.KV{K: "prompt", V: job.PromptUnknown},
 	)
 	r.writeMeta(nil)
 
+	// raw.log and stderr.log are contract artifacts: failing to open one
+	// must be visible, even though the turn itself can proceed.
 	rawFile, err := os.OpenFile(r.ws.RawLogPath(), os.O_APPEND|os.O_WRONLY, 0o644)
-	if err == nil {
+	if err != nil {
+		fmt.Fprintf(r.opts.Stderr, "raw log warning: provider stdout will not be recorded: %s\n", err)
+	} else {
 		r.rawFile = rawFile
 		defer rawFile.Close()
 	}
 	stderrFile, err := os.OpenFile(r.ws.StderrLogPath(), os.O_APPEND|os.O_WRONLY, 0o644)
-	if err == nil {
+	if err != nil {
+		fmt.Fprintf(r.opts.Stderr, "stderr log warning: provider stderr will not be recorded: %s\n", err)
+	} else {
 		r.stderrFile = stderrFile
 		defer stderrFile.Close()
 	}
 
-	child, err := spawn(r.spec.Provider, r.driver.Argv(r.ws), r.spec.Cwd, r.driver.ExtraEnv())
+	child, err := spawn(r.opts.Provider, r.argv, r.opts.Cwd, r.driver.ExtraEnv())
 	if err != nil {
 		r.finish(finishArgs{
 			status:              job.StatusInfra,
-			errorText:           fmt.Sprintf("The envoy runtime could not start %s: %s", r.spec.Provider, err),
+			errorText:           fmt.Sprintf("The envoy runtime could not start %s: %s", r.opts.Provider, err),
 			nextAction:          "The prompt was not accepted. Retry the identical dispatch once; if startup fails again, check the provider executable and report the infrastructure failure.",
 			promptState:         job.PromptNotStarted,
 			promptStateEvidence: job.Ptr("provider spawn error"),
@@ -297,6 +309,48 @@ func (r *run) execute(promptText string) int {
 	return r.exitCode
 }
 
+// ---------- session state (the one owner of the coordinate invariant) ----------
+
+func (r *run) session() string {
+	if r.meta.SessionID == nil {
+		return ""
+	}
+	return *r.meta.SessionID
+}
+
+func (r *run) conflicted() bool { return r.meta.SessionLockConflict != nil }
+
+// setSession records the session id and refreshes its derived coordinates.
+// The invariant "resume/takeover present iff a session id exists and no lock
+// conflict was recorded" lives here and in markLockConflict — nowhere else.
+func (r *run) setSession(id string) {
+	r.meta.SessionID = ptrIfNonEmpty(id)
+	r.syncSessionCoords()
+}
+
+func (r *run) markLockConflict(msg string) {
+	r.meta.SessionLockConflict = job.Ptr(msg)
+	r.syncSessionCoords()
+}
+
+func (r *run) syncSessionCoords() {
+	if r.session() != "" && !r.conflicted() {
+		r.meta.ResumeFlag = job.Ptr("--resume " + r.session())
+		r.meta.ResumeArgs = ptrIfNonEmpty(r.driver.ResumeArgs())
+		r.meta.TakeoverCommand = ptrIfNonEmpty(r.driver.Takeover())
+		return
+	}
+	r.meta.ResumeFlag = nil
+	r.meta.ResumeArgs = nil
+	r.meta.TakeoverCommand = nil
+}
+
+func (r *run) releaseLock() {
+	if err := r.sessionLock.Release(); err != nil {
+		fmt.Fprintf(r.opts.Stderr, "lock cleanup warning: %s\n", err)
+	}
+}
+
 // ---------- stream handling ----------
 
 func (r *run) onStdout(chunk []byte) {
@@ -338,8 +392,8 @@ func (r *run) onStderr(chunk []byte) {
 }
 
 func (r *run) noteOutput(n int) {
-	r.outputBytes += int64(n)
-	r.lastOutputAt = job.Ptr(job.ISO(time.Now()))
+	r.meta.ProviderOutputBytes += int64(n)
+	r.meta.LastProviderOutputAt = job.Ptr(job.ISO(time.Now()))
 }
 
 // handleEvents applies a driver's semantic events. A session-lock conflict
@@ -350,9 +404,9 @@ func (r *run) handleEvents(events []provider.Event) {
 	for i, ev := range events {
 		switch ev.Kind {
 		case provider.KindActivity:
-			r.eventCount++
-			r.lastActivityAt = job.Ptr(job.ISO(time.Now()))
-			r.lastEventType = job.Ptr(ev.Type)
+			r.meta.ProviderEventCount++
+			r.meta.LastProviderActivityAt = job.Ptr(job.ISO(time.Now()))
+			r.meta.LastProviderEventType = job.Ptr(ev.Type)
 		case provider.KindNote:
 			r.progress.Append(ev.State, ev.Fields...)
 		case provider.KindAccepted:
@@ -371,13 +425,15 @@ func (r *run) handleEvents(events []provider.Event) {
 // thread). A collision with an existing lock is improbable, but once observed
 // this turn must stop rather than continue unlocked.
 func (r *run) onSessionStarted(ev provider.Event, rest []provider.Event) (abort bool) {
-	r.sessionID = ev.SessionID
-	fmt.Fprintf(r.opts.Stdout, "session: %s\n", r.sessionID)
+	r.setSession(ev.SessionID)
+	fmt.Fprintf(r.opts.Stdout, "session: %s\n", ev.SessionID)
 	if r.sessionLock == nil {
-		handle, err := lock.Acquire(r.sessionID, r.ws.Dir, r.instance)
-		if conflict, ok := err.(*lock.Conflict); ok {
-			r.lockErr = conflict.Message
-			evidence := r.spec.Provider + " session started"
+		handle, err := lock.Acquire(ev.SessionID, r.ws.Dir, r.instance)
+		if err != nil {
+			// A non-conflict lock failure is treated the same way: never
+			// continue an unlocked session.
+			r.markLockConflict(err.Error())
+			evidence := r.opts.Provider + " session started"
 			for _, e := range rest {
 				if e.Kind == provider.KindAccepted {
 					evidence = e.Evidence
@@ -385,18 +441,11 @@ func (r *run) onSessionStarted(ev provider.Event, rest []provider.Event) (abort 
 				}
 			}
 			r.markPromptAccepted(evidence + " with conflicting session lock")
-			fmt.Fprintf(r.opts.Stderr, "lock error: %s\n", r.lockErr)
+			fmt.Fprintf(r.opts.Stderr, "lock error: %s\n", err)
 			r.progress.Append("lock-conflict",
-				job.KV{K: "session", V: r.sessionID},
+				job.KV{K: "session", V: ev.SessionID},
 				job.KV{K: "action", V: "stopping"},
 			)
-			r.requestTermination("lock_conflict", "SIGTERM")
-			return true
-		}
-		if err != nil {
-			// Treat unexpected lock infrastructure failure like a conflict:
-			// never continue an unlocked session.
-			r.lockErr = err.Error()
 			r.requestTermination("lock_conflict", "SIGTERM")
 			return true
 		}
@@ -416,7 +465,7 @@ func (r *run) markPromptAccepted(evidence string) {
 		m.PromptStateEvidence = job.Ptr(evidence)
 		m.PromptAcceptedAt = job.Ptr(acceptedAt)
 	})
-	session := r.sessionID
+	session := r.session()
 	if session == "" {
 		session = "pending"
 	}
@@ -428,13 +477,11 @@ func (r *run) markPromptAccepted(evidence string) {
 }
 
 func (r *run) markProviderTerminal(label string) {
-	if r.providerTerminalAt != "" {
+	if r.meta.ProviderTerminalAt != nil {
 		return
 	}
-	r.providerTerminalAt = job.ISO(time.Now())
-	r.providerTerminalType = label
 	r.writeMeta(func(m *job.Meta) {
-		m.ProviderTerminalAt = job.Ptr(r.providerTerminalAt)
+		m.ProviderTerminalAt = job.Ptr(job.ISO(time.Now()))
 		m.ProviderTerminalEventType = job.Ptr(label)
 	})
 	r.progress.Append("provider-terminal",
@@ -447,8 +494,8 @@ func (r *run) heartbeat() {
 	r.handleEvents(r.driver.Poll())
 	now := time.Now()
 	activityAge := "none"
-	if r.lastActivityAt != nil {
-		if t, err := time.Parse(time.RFC3339, *r.lastActivityAt); err == nil {
+	if r.meta.LastProviderActivityAt != nil {
+		if t, err := time.Parse(time.RFC3339, *r.meta.LastProviderActivityAt); err == nil {
 			activityAge = text.FormatDuration(now.Sub(t)) + "_ago"
 		}
 	}
@@ -464,7 +511,7 @@ func (r *run) heartbeat() {
 		job.KV{K: "provider_process", V: providerAlive},
 		job.KV{K: "last_provider_activity", V: activityAge},
 		job.KV{K: "prompt", V: r.meta.PromptState},
-		job.KV{K: "events", V: r.eventCount},
+		job.KV{K: "events", V: r.meta.ProviderEventCount},
 	)
 }
 

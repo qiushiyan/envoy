@@ -15,7 +15,7 @@ import (
 // No sandbox/permission flag EVER: ~/.codex/config.toml governs. A derived
 // read-only sandbox breaks the session's own tooling.
 type codex struct {
-	spec          Spec
+	opts          Options
 	ws            job.Workspace
 	sessionID     string // learned from thread.started on a fresh thread
 	threadStarted bool
@@ -24,32 +24,30 @@ type codex struct {
 	tokens        *job.Tokens
 }
 
-func newCodex(spec Spec, ws job.Workspace) *codex {
-	return &codex{spec: spec, ws: ws, sessionID: spec.Resume}
+func newCodex(opts Options, ws job.Workspace) *codex {
+	return &codex{opts: opts, ws: ws, sessionID: opts.Resume}
 }
 
-func (c *codex) Name() string               { return "codex" }
-func (c *codex) Efforts() []string          { return efforts["codex"] }
 func (c *codex) PreflightSessionID() string { return c.sessionID }
 
 // Argv: `resume` takes the session id then `-` (prompt via stdin) and has no
 // --cd; cwd is set on the child process instead.
-func (c *codex) Argv(ws job.Workspace) []string {
+func (c *codex) Argv() []string {
 	var args []string
-	if c.spec.Resume != "" {
+	if c.opts.Resume != "" {
 		args = []string{"exec", "resume", "--json"}
 	} else {
 		args = []string{"exec", "--json"}
 	}
-	if c.spec.Model != "" {
-		args = append(args, "-m", c.spec.Model)
+	if c.opts.Model != "" {
+		args = append(args, "-m", c.opts.Model)
 	}
-	if c.spec.Effort != "" {
-		args = append(args, "-c", "model_reasoning_effort="+c.spec.Effort)
+	if c.opts.Effort != "" {
+		args = append(args, "-c", "model_reasoning_effort="+c.opts.Effort)
 	}
-	args = append(args, "-o", ws.LastMessagePath())
-	if c.spec.Resume != "" {
-		args = append(args, c.spec.Resume)
+	args = append(args, "-o", c.ws.LastMessagePath())
+	if c.opts.Resume != "" {
+		args = append(args, c.opts.Resume)
 	}
 	return append(args, "-")
 }
@@ -224,7 +222,7 @@ func (c *codex) Conclude(exit ExitInfo) Outcome {
 	return out
 }
 
-func (c *codex) ResumeArgs() string { return resumeArgs(c.sessionID, c.spec.TimeoutMin) }
+func (c *codex) ResumeArgs() string { return resumeArgs(c.sessionID, c.opts.TimeoutMin) }
 
 func (c *codex) Takeover() string {
 	if c.sessionID == "" {

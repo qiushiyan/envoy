@@ -7,6 +7,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -77,6 +78,21 @@ func newFlagSet(name string, stderr io.Writer) *flag.FlagSet {
 	return fs
 }
 
+// parseFlags runs fs over args. An explicit help request prints usage to
+// stdout and reports success — an agent reading exit codes must not see a
+// "usage error" for asking for help.
+func parseFlags(fs *flag.FlagSet, args []string, stdout io.Writer) (proceed bool, code int) {
+	err := fs.Parse(args)
+	if err == nil {
+		return true, 0
+	}
+	if errors.Is(err, flag.ErrHelp) {
+		fmt.Fprint(stdout, usageText)
+		return false, 0
+	}
+	return false, envoy.ExitUsage
+}
+
 func cmdTurn(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("turn", stderr)
 	var req envoy.TurnRequest
@@ -89,15 +105,22 @@ func cmdTurn(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&req.AllowWrite, "allow-write", false, "")
 	fs.StringVar(&req.Cwd, "cwd", "", "")
 	fs.StringVar(&req.OutDir, "out-dir", "", "")
-	fs.Float64Var(&req.TimeoutMin, "timeout-min", 30, "")
+	timeoutMin := fs.Float64("timeout-min", 30, "")
 	budget := fs.Float64("max-budget-usd", math.NaN(), "")
 	fs.StringVar(&req.Label, "label", "", "")
-	if err := fs.Parse(args); err != nil {
-		return envoy.ExitUsage
+	if proceed, code := parseFlags(fs, args, stdout); !proceed {
+		return code
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintf(stderr, "usage error: unexpected argument %q\n", fs.Arg(0))
 		return envoy.ExitUsage
+	}
+	// The CLI contract keeps `--timeout-min 0` = no cap; the library spells
+	// that NoTimeout so the dangerous state is never a zero value.
+	if *timeoutMin == 0 {
+		req.NoTimeout = true
+	} else {
+		req.TimeoutMin = *timeoutMin
 	}
 	if !math.IsNaN(*budget) {
 		req.MaxBudgetUSD = budget
@@ -109,8 +132,8 @@ func cmdTurn(args []string, stdout, stderr io.Writer) int {
 
 func cmdCollect(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("collect", stderr)
-	if err := fs.Parse(args); err != nil {
-		return envoy.ExitUsage
+	if proceed, code := parseFlags(fs, args, stdout); !proceed {
+		return code
 	}
 	if fs.NArg() > 1 {
 		fmt.Fprintln(stderr, "collect error: pass at most one out-dir")
@@ -122,8 +145,8 @@ func cmdCollect(args []string, stdout, stderr io.Writer) int {
 func cmdPending(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("pending", stderr)
 	base := fs.String("base", "", "")
-	if err := fs.Parse(args); err != nil {
-		return envoy.ExitUsage
+	if proceed, code := parseFlags(fs, args, stdout); !proceed {
+		return code
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintln(stderr, "collect error: pending does not take an out-dir; use --base to choose the job root")

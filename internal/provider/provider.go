@@ -13,19 +13,16 @@ import (
 	"github.com/qiushiyan/envoy/internal/job"
 )
 
-// Spec is one turn as requested by the caller, provider-agnostic.
-type Spec struct {
-	Provider     string
-	PromptFile   string
+// Options is the provider-facing slice of a turn request: exactly the fields
+// a driver reads. Runner-only concerns (prompt file, cwd, baseline, label)
+// deliberately do not ride through this seam.
+type Options struct {
 	Model        string // "" = the provider's own configured default
 	Effort       string // "" = the provider's own configured default
 	Resume       string // session id to continue, "" = fresh session
 	AllowWrite   bool
-	Cwd          string
-	TimeoutMin   float64
+	TimeoutMin   float64  // recorded into resume fragments
 	MaxBudgetUSD *float64 // claude only
-	Baseline     string
-	Label        string
 }
 
 // EventKind classifies the semantic events a driver emits from raw stream
@@ -92,12 +89,10 @@ type Outcome struct {
 // accumulates the stream, and Recovery/Conclude read that accumulation.
 // All methods are called from the runner's single event loop.
 type Driver interface {
-	Name() string
-	Efforts() []string
 	// PreflightSessionID is the session id known before spawn ("" when the
 	// provider only reveals it mid-stream, like a fresh codex thread).
 	PreflightSessionID() string
-	Argv(ws job.Workspace) []string
+	Argv() []string
 	ExtraEnv() []string
 	Feed(line string) []Event
 	// Poll runs on each heartbeat for out-of-band evidence gathering.
@@ -112,15 +107,15 @@ type Driver interface {
 	Takeover() string
 }
 
-// New constructs the driver for spec.Provider.
-func New(spec Spec, ws job.Workspace, startedAt time.Time) (Driver, error) {
-	switch spec.Provider {
+// New constructs the named provider's driver.
+func New(name string, opts Options, ws job.Workspace, startedAt time.Time) (Driver, error) {
+	switch name {
 	case "claude":
-		return newClaude(spec, startedAt), nil
+		return newClaude(opts, startedAt), nil
 	case "codex":
-		return newCodex(spec, ws), nil
+		return newCodex(opts, ws), nil
 	default:
-		return nil, fmt.Errorf("--provider must be claude or codex, got '%s'", spec.Provider)
+		return nil, fmt.Errorf("--provider must be claude or codex, got '%s'", name)
 	}
 }
 

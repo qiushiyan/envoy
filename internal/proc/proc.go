@@ -52,13 +52,3 @@ func GroupLiveness(pgid int) Liveness {
 func Alive(pid int) bool {
 	return PidLiveness(pid) == Live
 }
-
-// SignalGroup sends sig to the whole process group. A vanished group (ESRCH)
-// is success: the goal was for it to be gone.
-func SignalGroup(pgid int, sig syscall.Signal) error {
-	err := syscall.Kill(-pgid, sig)
-	if errors.Is(err, syscall.ESRCH) {
-		return nil
-	}
-	return err
-}

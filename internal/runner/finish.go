@@ -13,74 +13,58 @@ import (
 )
 
 func (r *run) initMeta() {
-	baseline := r.spec.Baseline
-	if baseline == "" && r.spec.AllowWrite {
+	baseline := r.opts.Baseline
+	if baseline == "" && r.opts.Turn.AllowWrite {
 		// The review anchor: a write turn defaults to HEAD so collect can
 		// always diff the delegate's work.
-		baseline = gitx.Head(r.spec.Cwd)
+		baseline = gitx.Head(r.opts.Cwd)
 	}
-	promptFile, err := filepath.Abs(r.spec.PromptFile)
+	promptFile, err := filepath.Abs(r.opts.PromptFile)
 	if err != nil {
-		promptFile = r.spec.PromptFile
+		promptFile = r.opts.PromptFile
 	}
 	var deadlineAt *string
 	if !r.deadline.IsZero() {
 		deadlineAt = job.Ptr(job.ISO(r.deadline))
 	}
+	// The argv is computed exactly once: what meta records is what spawns.
+	r.argv = r.driver.Argv()
 	r.meta = &job.Meta{
 		SchemaVersion:    job.MetaSchemaVersion,
 		Status:           job.StatusRunning,
-		Provider:         r.spec.Provider,
-		Model:            ptrIfNonEmpty(r.spec.Model),
-		Effort:           ptrIfNonEmpty(r.spec.Effort),
-		Cwd:              r.spec.Cwd,
-		AllowWrite:       r.spec.AllowWrite,
+		Provider:         r.opts.Provider,
+		Model:            ptrIfNonEmpty(r.opts.Turn.Model),
+		Effort:           ptrIfNonEmpty(r.opts.Turn.Effort),
+		Cwd:              r.opts.Cwd,
+		AllowWrite:       r.opts.Turn.AllowWrite,
 		GitBaseline:      ptrIfNonEmpty(baseline),
 		StartedAt:        job.ISO(r.startedAt),
-		TimeoutMin:       r.spec.TimeoutMin,
+		TimeoutMin:       r.opts.Turn.TimeoutMin,
 		DeadlineAt:       deadlineAt,
-		Label:            ptrIfNonEmpty(r.spec.Label),
+		Label:            ptrIfNonEmpty(r.opts.Label),
 		PromptFile:       promptFile,
 		OutDir:           r.ws.Dir,
 		RawPath:          r.ws.RawLogPath(),
 		StderrPath:       r.ws.StderrLogPath(),
 		ProgressPath:     r.ws.ProgressLogPath(),
 		WatchCommand:     r.ws.WatchCommand(),
-		ProviderArgv:     append([]string{r.spec.Provider}, r.driver.Argv(r.ws)...),
+		ProviderArgv:     append([]string{r.opts.Provider}, r.argv...),
 		RunnerPid:        os.Getpid(),
 		RunnerInstanceID: r.instance,
 		PromptState:      job.PromptUnknown,
 		ResultKind:       job.ResultNone,
 		NextAction:       "Return now and wait for Claude Code's native background-task notification. Use the watch command only for live observation; it is not a completion signal.",
 	}
+	r.setSession(r.driver.PreflightSessionID())
 }
 
-// writeMeta atomically replaces meta.json with the current state plus the
-// caller's mutation. Session coordinates and observation counters are always
-// refreshed so every snapshot is internally consistent.
+// writeMeta applies the caller's mutation to the in-memory meta — the single
+// source of truth — and atomically replaces meta.json with the snapshot.
 func (r *run) writeMeta(mutate func(*job.Meta)) {
-	m := r.meta
-	sessionAvailable := r.sessionID != "" && r.lockErr == ""
-	m.SessionID = ptrIfNonEmpty(r.sessionID)
-	if sessionAvailable {
-		m.ResumeFlag = job.Ptr("--resume " + r.sessionID)
-		m.ResumeArgs = ptrIfNonEmpty(r.driver.ResumeArgs())
-		m.TakeoverCommand = ptrIfNonEmpty(r.driver.Takeover())
-	} else {
-		m.ResumeFlag = nil
-		m.ResumeArgs = nil
-		m.TakeoverCommand = nil
-	}
-	m.SessionLockConflict = ptrIfNonEmpty(r.lockErr)
-	m.ProviderOutputBytes = r.outputBytes
-	m.ProviderEventCount = r.eventCount
-	m.LastProviderOutputAt = r.lastOutputAt
-	m.LastProviderActivityAt = r.lastActivityAt
-	m.LastProviderEventType = r.lastEventType
 	if mutate != nil {
-		mutate(m)
+		mutate(r.meta)
 	}
-	if err := m.WriteFile(r.ws.MetaPath()); err != nil {
+	if err := r.meta.WriteFile(r.ws.MetaPath()); err != nil {
 		fmt.Fprintf(r.opts.Stderr, "meta write warning: %s\n", err)
 	}
 }
@@ -95,15 +79,15 @@ func (r *run) printStartupBlock() {
 	}
 	fmt.Fprintf(w, "out-dir: %s\n", r.ws.Dir)
 	fmt.Fprintf(w, "provider: %s · model %s · effort %s · hard cap %s\n",
-		r.spec.Provider, display(r.spec.Model), display(r.spec.Effort), text.HardCap(r.spec.TimeoutMin))
+		r.opts.Provider, display(r.opts.Turn.Model), display(r.opts.Turn.Effort), text.HardCap(r.opts.Turn.TimeoutMin))
 	fmt.Fprintf(w, "watch: %s\n", r.ws.WatchCommand())
 	fmt.Fprintf(w, "raw: %s\n", r.ws.RawLogPath())
 	fmt.Fprintf(w, "stderr: %s\n", r.ws.StderrLogPath())
 	if r.meta.GitBaseline != nil {
 		fmt.Fprintf(w, "baseline: %s\n", *r.meta.GitBaseline)
 	}
-	if r.sessionID != "" {
-		fmt.Fprintf(w, "session: %s\n", r.sessionID)
+	if r.session() != "" {
+		fmt.Fprintf(w, "session: %s\n", r.session())
 		fmt.Fprintf(w, "takeover-after-terminal: %s\n", r.driver.Takeover())
 	}
 	fmt.Fprintln(w, "next: return now; wait for the native background-task notification, then collect this job")
@@ -194,19 +178,19 @@ func (r *run) finish(f finishArgs) {
 		job.KV{K: "result", V: resultKind},
 		job.KV{K: "prompt", V: r.meta.PromptState},
 	)
-	r.sessionLock.Release()
+	r.releaseLock()
 
 	w := r.opts.Stdout
 	fmt.Fprintln(w, "")
 	fmt.Fprintf(w, "status: %s\n", f.status)
 	fmt.Fprintf(w, "result: %s\n", r.ws.ResultPath())
 	fmt.Fprintf(w, "meta: %s\n", r.ws.MetaPath())
-	session := r.sessionID
+	session := r.session()
 	if session == "" {
 		session = "(none)"
 	}
 	fmt.Fprintf(w, "session: %s\n", session)
-	if r.sessionID != "" && r.lockErr == "" {
+	if r.session() != "" && !r.conflicted() {
 		fmt.Fprintf(w, "takeover: %s\n", r.driver.Takeover())
 	}
 	fmt.Fprintf(w, "next: %s\n", collectAction)

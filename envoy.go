@@ -37,7 +37,9 @@ const (
 
 // TurnRequest describes one turn. Zero values mean "provider default" for
 // Model/Effort, a fresh session for Resume, the current directory for Cwd,
-// and a derived job dir for OutDir.
+// a derived job dir for OutDir — and the engine's 30-minute safety cap for
+// TimeoutMin. Running uncapped requires saying so with NoTimeout: the
+// dangerous state must not be the zero value.
 type TurnRequest struct {
 	Provider     string
 	PromptFile   string
@@ -48,12 +50,34 @@ type TurnRequest struct {
 	AllowWrite   bool
 	Cwd          string
 	OutDir       string
-	TimeoutMin   float64 // hard wall-clock cap; 0 disables it
+	TimeoutMin   float64 // hard wall-clock cap in minutes; 0 = the 30-minute default
+	NoTimeout    bool    // explicitly disable the cap (leave TimeoutMin zero)
 	MaxBudgetUSD *float64
 	Label        string
 
 	Stdout io.Writer // coordinate blocks; defaults to os.Stdout
 	Stderr io.Writer // errors and warnings; defaults to os.Stderr
+}
+
+// defaultTimeoutMin is the engine's safety cap when the caller sets none.
+const defaultTimeoutMin = 30
+
+// resolveTimeout maps the request's (TimeoutMin, NoTimeout) pair onto the
+// runner's single value, where 0 means "no cap".
+func resolveTimeout(req TurnRequest) (float64, error) {
+	if math.IsNaN(req.TimeoutMin) || math.IsInf(req.TimeoutMin, 0) || req.TimeoutMin < 0 {
+		return 0, fmt.Errorf("--timeout-min must be a number >= 0 (0 = no cap)")
+	}
+	if req.NoTimeout {
+		if req.TimeoutMin != 0 {
+			return 0, fmt.Errorf("NoTimeout and a non-zero TimeoutMin are mutually exclusive")
+		}
+		return 0, nil
+	}
+	if req.TimeoutMin == 0 {
+		return defaultTimeoutMin, nil
+	}
+	return req.TimeoutMin, nil
 }
 
 func usageError(w io.Writer, format string, args ...any) int {
@@ -89,8 +113,9 @@ func Turn(req TurnRequest) int {
 	if info, err := os.Stat(cwd); err != nil || !info.IsDir() {
 		return usageError(stderr, "cwd not found: %s", cwd)
 	}
-	if math.IsNaN(req.TimeoutMin) || math.IsInf(req.TimeoutMin, 0) || req.TimeoutMin < 0 {
-		return usageError(stderr, "--timeout-min must be a number >= 0 (0 = no cap)")
+	timeoutMin, err := resolveTimeout(req)
+	if err != nil {
+		return usageError(stderr, "%s", err)
 	}
 	if err := provider.ValidateEffort(req.Provider, req.Effort); err != nil {
 		return usageError(stderr, "%s", err)
@@ -109,20 +134,20 @@ func Turn(req TurnRequest) int {
 		outDir = absOrSelf(outDir)
 	}
 	return runner.Run(runner.Options{
-		Spec: provider.Spec{
-			Provider:     req.Provider,
-			PromptFile:   req.PromptFile,
+		Provider:   req.Provider,
+		PromptFile: req.PromptFile,
+		Cwd:        cwd,
+		Baseline:   req.Baseline,
+		Label:      req.Label,
+		OutDir:     outDir,
+		Turn: provider.Options{
 			Model:        req.Model,
 			Effort:       req.Effort,
 			Resume:       req.Resume,
 			AllowWrite:   req.AllowWrite,
-			Cwd:          cwd,
-			TimeoutMin:   req.TimeoutMin,
+			TimeoutMin:   timeoutMin,
 			MaxBudgetUSD: req.MaxBudgetUSD,
-			Baseline:     req.Baseline,
-			Label:        req.Label,
 		},
-		OutDir: outDir,
 		Stdout: stdout,
 		Stderr: stderr,
 	})

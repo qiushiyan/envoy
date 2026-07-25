@@ -37,6 +37,7 @@ terminal block. The durable files in the job dir are authoritative:
 | `progress.log` | runner-owned semantic progress + 30s heartbeat |
 | `raw.log` | verbatim provider stdout (stream-json / JSONL) |
 | `stderr.log` | provider stderr |
+| `last-message.txt` | codex's `-o` recovery surface (codex turns only) |
 
 All jobs live in one central store — nothing is ever written inside the
 project tree: `~/.local/state/envoy/jobs/<project-slug>/<stamp>-<label>/`,
@@ -70,7 +71,9 @@ Exit codes: `0` ok · `1` provider failure · `2` infra · `3` usage · `4` time
 The root package is an embeddable facade over the same engine:
 
 ```go
-envoy.Turn(envoy.TurnRequest{Provider: "codex", PromptFile: "brief.md", TimeoutMin: 30})
+// TimeoutMin's zero value is the 30-minute safety cap, not "uncapped";
+// running without a cap takes an explicit NoTimeout: true.
+envoy.Turn(envoy.TurnRequest{Provider: "codex", PromptFile: "brief.md"})
 envoy.Collect(outDir, os.Stdout, os.Stderr)
 envoy.Pending(base, os.Stdout, os.Stderr)
 ```

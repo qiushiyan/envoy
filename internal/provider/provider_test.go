@@ -30,10 +30,8 @@ func TestValidateEffort(t *testing.T) {
 }
 
 func TestClaudeArgv(t *testing.T) {
-	ws := job.Workspace{Dir: "/tmp/x"}
-
-	fresh := newClaude(Spec{Provider: "claude"}, time.Now())
-	argv := fresh.Argv(ws)
+	fresh := newClaude(Options{}, time.Now())
+	argv := fresh.Argv()
 	want := []string{"-p", "--output-format", "stream-json", "--verbose", "--session-id", fresh.sessionID}
 	if !reflect.DeepEqual(argv, want) {
 		t.Fatalf("fresh argv = %v, want %v", argv, want)
@@ -43,11 +41,11 @@ func TestClaudeArgv(t *testing.T) {
 	}
 
 	budget := 0.5
-	full := newClaude(Spec{
-		Provider: "claude", Model: "opus", Effort: "xhigh",
+	full := newClaude(Options{
+		Model: "opus", Effort: "xhigh",
 		Resume: "abc", AllowWrite: true, MaxBudgetUSD: &budget,
 	}, time.Now())
-	argv = full.Argv(ws)
+	argv = full.Argv()
 	want = []string{
 		"-p", "--output-format", "stream-json", "--verbose",
 		"--model", "opus", "--effort", "xhigh", "--resume", "abc",
@@ -67,8 +65,8 @@ func TestClaudeArgv(t *testing.T) {
 func TestCodexArgv(t *testing.T) {
 	ws := job.Workspace{Dir: "/tmp/x"}
 
-	fresh := newCodex(Spec{Provider: "codex"}, ws)
-	argv := fresh.Argv(ws)
+	fresh := newCodex(Options{}, ws)
+	argv := fresh.Argv()
 	want := []string{"exec", "--json", "-o", ws.LastMessagePath(), "-"}
 	if !reflect.DeepEqual(argv, want) {
 		t.Fatalf("fresh argv = %v, want %v", argv, want)
@@ -77,8 +75,8 @@ func TestCodexArgv(t *testing.T) {
 		t.Fatal("fresh codex must not know a session id before spawn")
 	}
 
-	resumed := newCodex(Spec{Provider: "codex", Model: "gpt-5.3", Effort: "xhigh", Resume: "tid"}, ws)
-	argv = resumed.Argv(ws)
+	resumed := newCodex(Options{Model: "gpt-5.3", Effort: "xhigh", Resume: "tid"}, ws)
+	argv = resumed.Argv()
 	want = []string{
 		"exec", "resume", "--json", "-m", "gpt-5.3",
 		"-c", "model_reasoning_effort=xhigh", "-o", ws.LastMessagePath(), "tid", "-",
@@ -89,7 +87,7 @@ func TestCodexArgv(t *testing.T) {
 }
 
 func TestClaudeStreamParsing(t *testing.T) {
-	c := newClaude(Spec{Provider: "claude", TimeoutMin: 30}, time.Now())
+	c := newClaude(Options{TimeoutMin: 30}, time.Now())
 
 	events := c.Feed(`{"type":"system","subtype":"init","session_id":"s1"}`)
 	if len(events) != 2 || events[1].Kind != KindNote || events[1].State != "provider-initialized" {
@@ -134,7 +132,7 @@ func TestClaudeStreamParsing(t *testing.T) {
 }
 
 func TestClaudeFailureExcludesErrorEcho(t *testing.T) {
-	c := newClaude(Spec{Provider: "claude", TimeoutMin: 30}, time.Now())
+	c := newClaude(Options{TimeoutMin: 30}, time.Now())
 	c.Feed(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"real partial work"}]}}`)
 	c.Feed(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"boom"}]}}`)
 	c.Feed(`{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s1","errors":["boom"]}`)
@@ -153,7 +151,7 @@ func TestClaudeFailureExcludesErrorEcho(t *testing.T) {
 
 func TestClaudeBudgetStop(t *testing.T) {
 	budget := 0.25
-	c := newClaude(Spec{Provider: "claude", TimeoutMin: 30, MaxBudgetUSD: &budget}, time.Now())
+	c := newClaude(Options{TimeoutMin: 30, MaxBudgetUSD: &budget}, time.Now())
 	c.Feed(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"partial"}]}}`)
 	c.Feed(`{"type":"result","subtype":"error_max_budget_usd","session_id":"s1","usage":{"input_tokens":1}}`)
 
@@ -167,7 +165,7 @@ func TestClaudeBudgetStop(t *testing.T) {
 }
 
 func TestClaudeArrayAndNoiseTolerance(t *testing.T) {
-	c := newClaude(Spec{Provider: "claude"}, time.Now())
+	c := newClaude(Options{}, time.Now())
 	if events := c.Feed("not json at all"); events != nil {
 		t.Fatalf("noise must yield no events, got %+v", events)
 	}
@@ -185,7 +183,7 @@ func TestClaudeArrayAndNoiseTolerance(t *testing.T) {
 
 func TestCodexLifecycle(t *testing.T) {
 	ws := job.Workspace{Dir: t.TempDir()}
-	c := newCodex(Spec{Provider: "codex", TimeoutMin: 180}, ws)
+	c := newCodex(Options{TimeoutMin: 180}, ws)
 
 	events := c.Feed(`{"type":"thread.started","thread_id":"tid-1"}`)
 	var kinds []EventKind
@@ -216,7 +214,7 @@ func TestCodexLifecycle(t *testing.T) {
 
 func TestCodexTerminalEnvelopeWinsOverKill(t *testing.T) {
 	ws := job.Workspace{Dir: t.TempDir()}
-	c := newCodex(Spec{Provider: "codex", TimeoutMin: 1}, ws)
+	c := newCodex(Options{TimeoutMin: 1}, ws)
 	c.Feed(`{"type":"thread.started","thread_id":"tid-2"}`)
 	c.Feed(`{"type":"item.completed","item":{"type":"agent_message","text":"finished work"}}`)
 	c.Feed(`{"type":"turn.completed","usage":{"input_tokens":1}}`)
@@ -230,7 +228,7 @@ func TestCodexTerminalEnvelopeWinsOverKill(t *testing.T) {
 
 func TestCodexFailureAndRecovery(t *testing.T) {
 	ws := job.Workspace{Dir: t.TempDir()}
-	c := newCodex(Spec{Provider: "codex", TimeoutMin: 30}, ws)
+	c := newCodex(Options{TimeoutMin: 30}, ws)
 	c.Feed(`{"type":"thread.started","thread_id":"tid-3"}`)
 	c.Feed(`{"type":"turn.failed","error":{"message":"model exploded"}}`)
 
@@ -250,7 +248,7 @@ func TestCodexFailureAndRecovery(t *testing.T) {
 
 func TestCodexNoResultUsesStderrTail(t *testing.T) {
 	ws := job.Workspace{Dir: t.TempDir()}
-	c := newCodex(Spec{Provider: "codex"}, ws)
+	c := newCodex(Options{}, ws)
 	out := c.Conclude(ExitInfo{Code: job.Ptr(23), StderrTail: "a\n\nb\nc\nd\n"})
 	if out.Status != job.StatusInfra {
 		t.Fatalf("status = %s", out.Status)

@@ -149,7 +149,10 @@ func turnArgs(prompt, outDir string, extra ...string) []string {
 }
 
 func TestCodexSuccess(t *testing.T) {
-	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	receivedPrompt := filepath.Join(t.TempDir(), "received-prompt.txt")
+	e := newEnv(t).
+		set("ENVOY_FAKE_SCENARIO", "success").
+		set("ENVOY_FAKE_PROMPT_FILE", receivedPrompt)
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
@@ -173,6 +176,12 @@ func TestCodexSuccess(t *testing.T) {
 	}
 	if got := readFile(t, filepath.Join(outDir, "prompt.md")); got != "fake prompt body\n" {
 		t.Fatalf("prompt.md = %q", got)
+	}
+	// prompt.md only proves the file copy; the provider must have received the
+	// same bytes on stdin — a truncated or early-closed write would otherwise
+	// dispatch an empty prompt while every other assertion stays green.
+	if got := readFile(t, receivedPrompt); got != "fake prompt body\n" {
+		t.Fatalf("provider received prompt %q on stdin, want the dispatched bytes", got)
 	}
 
 	meta := readMeta(t, outDir)
@@ -589,6 +598,116 @@ func TestDefaultStorageIsCentralAndHidden(t *testing.T) {
 	// And pending resolves the same project store from cwd alone.
 	pending := runEnvoyIn(t, e, project, "pending")
 	mustContain(t, "pending stdout", pending.stdout, "pending jobs: 0")
+}
+
+// The r.term == nil residual-cleanup chain: the provider exits cleanly while
+// a SIGTERM-ignoring grandchild keeps the pipes open. This chain — exit
+// fallback → group probe → TERM → KILL → finalize — is the entire reason the
+// runner passes raw pipe fds instead of exec's managed pipes; if the fallback
+// timer were dropped, this test would hang instead of finishing ok.
+func TestStubbornGrandchildAfterSuccessIsReaped(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
+	readyFile := filepath.Join(t.TempDir(), "grandchild.ready")
+	e := newEnv(t).
+		set("ENVOY_FAKE_SCENARIO", "success-with-stubborn-grandchild").
+		set("ENVOY_FAKE_GRANDCHILD_PID_FILE", pidFile).
+		set("ENVOY_FAKE_GRANDCHILD_READY_FILE", readyFile)
+	outDir := filepath.Join(t.TempDir(), "job")
+	prompt := writePrompt(t, t.TempDir())
+
+	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "5")...)
+	if res.code != 0 {
+		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	meta := readMeta(t, outDir)
+	if meta["status"] != "ok" {
+		t.Fatalf("status = %v", meta["status"])
+	}
+	if got := readFile(t, filepath.Join(outDir, "result.md")); got != "fake provider result" {
+		t.Fatalf("result.md = %q", got)
+	}
+	var pid int
+	fmt.Sscanf(readFile(t, pidFile), "%d", &pid)
+	if pid <= 0 {
+		t.Fatalf("grandchild pid file unreadable: %q", readFile(t, pidFile))
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for syscall.Kill(pid, 0) != syscall.ESRCH {
+		if time.Now().After(deadline) {
+			t.Fatalf("grandchild %d must be dead after residual cleanup", pid)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// Split multi-byte UTF-8 and a result envelope split across writes must
+// reassemble; guards the byte-level line buffer against a rewrite onto a
+// line scanner that decodes or caps mid-chunk.
+func TestClaudeFragmentedStreamAssembles(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "fragmented-success")
+	outDir := filepath.Join(t.TempDir(), "job")
+	prompt := writePrompt(t, t.TempDir())
+
+	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "claude", "--timeout-min", "5")...)
+	if res.code != 0 {
+		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	if got := readFile(t, filepath.Join(outDir, "result.md")); got != "fake provider result" {
+		t.Fatalf("result.md = %q", got)
+	}
+	if raw := readFile(t, filepath.Join(outDir, "raw.log")); !strings.Contains(raw, "🧭") {
+		t.Fatal("raw.log must carry the split multi-byte rune verbatim")
+	}
+}
+
+// A codex CLI that produced a full response but exited non-zero is a failed
+// turn with a recovered partial — not ok (the exit code is real) and not
+// infra (the response exists).
+func TestCodexNonzeroExitAfterResponse(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "nonzero-final")
+	outDir := filepath.Join(t.TempDir(), "job")
+	prompt := writePrompt(t, t.TempDir())
+
+	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "5")...)
+	if res.code != 1 {
+		t.Fatalf("exit = %d, want 1\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	meta := readMeta(t, outDir)
+	if meta["status"] != "failed" || meta["resultKind"] != "partial" || meta["promptState"] != "accepted" {
+		t.Fatalf("meta = status %v kind %v prompt %v", meta["status"], meta["resultKind"], meta["promptState"])
+	}
+	mustContain(t, "error", meta["error"].(string), "exited with code 7 after producing a response")
+	mustContain(t, "result.md", readFile(t, filepath.Join(outDir, "result.md")), "fake provider result")
+}
+
+// system/init proves only that the process launched — it must never count as
+// prompt acceptance, or a turn that died before model work would be steered
+// to "resume, never redispatch" for work that never began.
+func TestClaudeInitOnlyIsNotAcceptance(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "init-only-hang")
+	outDir := filepath.Join(t.TempDir(), "job")
+	prompt := writePrompt(t, t.TempDir())
+
+	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "claude", "--timeout-min", "0.02")...)
+	if res.code != 4 {
+		t.Fatalf("exit = %d, want 4\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	meta := readMeta(t, outDir)
+	if meta["promptState"] != "unknown" {
+		t.Fatalf("init alone must not prove acceptance, got %v (evidence %v)",
+			meta["promptState"], meta["promptStateEvidence"])
+	}
+	mustContain(t, "recoveryAction", meta["recoveryAction"].(string),
+		"Redispatch only if you can positively establish")
+}
+
+// An explicit help request is not a usage error: agents read exit codes.
+func TestSubcommandHelpExitsZero(t *testing.T) {
+	res := runEnvoy(t, newEnv(t), "collect", "--help")
+	if res.code != 0 {
+		t.Fatalf("collect --help exit = %d, want 0\nstderr:\n%s", res.code, res.stderr)
+	}
+	mustContain(t, "stdout", res.stdout, "usage:")
 }
 
 func TestUsageErrors(t *testing.T) {
