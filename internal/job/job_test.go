@@ -36,25 +36,34 @@ func TestWriteFileAtomic(t *testing.T) {
 	}
 }
 
-func TestResolveOutDirInRepo(t *testing.T) {
+func TestResolveOutDirIsAlwaysCentral(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	repo := t.TempDir()
 	run(t, repo, "git", "init", "-q")
+	subdir := filepath.Join(repo, "pkg", "inner")
+	os.MkdirAll(subdir, 0o755)
 	now := time.Date(2026, 7, 25, 11, 0, 0, 0, time.Local)
 
 	dir, err := ResolveOutDir("", repo, "My Label!", "codex", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := filepath.Join(realPath(t, repo), ".envoy")
-	if filepath.Dir(realPath(t, dir)) != base {
-		t.Fatalf("dir = %q, want under %q", dir, base)
+	jobsRoot := filepath.Join(home, ".local", "state", "envoy", "jobs")
+	if filepath.Dir(filepath.Dir(dir)) != jobsRoot {
+		t.Fatalf("dir = %q, want under %q/<slug>", dir, jobsRoot)
 	}
-	if !strings.HasSuffix(dir, "20260725-110000-my-label-") && !strings.HasSuffix(dir, "20260725-110000-my-label") {
+	if !strings.HasPrefix(filepath.Base(dir), "20260725-110000-my-label") {
 		t.Fatalf("dir name = %q", filepath.Base(dir))
 	}
-	ignore, err := os.ReadFile(filepath.Join(base, ".gitignore"))
-	if err != nil || string(ignore) != "*\n" {
-		t.Fatalf("self-gitignore missing: %v %q", err, ignore)
+	// Nothing may be written inside the project tree.
+	if _, err := os.Stat(filepath.Join(repo, ".envoy")); !os.IsNotExist(err) {
+		t.Fatal("central storage must not create dirs inside the repo")
+	}
+
+	// A subdirectory dispatch belongs to the same project store.
+	if DefaultBase(subdir) != DefaultBase(repo) {
+		t.Fatalf("subdir base %q must equal repo base %q", DefaultBase(subdir), DefaultBase(repo))
 	}
 
 	// A same-second collision must uniquify, not reuse.
@@ -67,20 +76,24 @@ func TestResolveOutDirInRepo(t *testing.T) {
 	}
 }
 
-func TestResolveOutDirOutsideRepo(t *testing.T) {
+func TestProjectSlugDistinguishesSameName(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	cwd := t.TempDir()
-	dir, err := ResolveOutDir("", cwd, "", "claude", time.Now())
-	if err != nil {
-		t.Fatal(err)
+	parentA, parentB := t.TempDir(), t.TempDir()
+	a := filepath.Join(parentA, "myproj")
+	b := filepath.Join(parentB, "myproj")
+	os.MkdirAll(a, 0o755)
+	os.MkdirAll(b, 0o755)
+
+	slugA, slugB := ProjectSlug(a), ProjectSlug(b)
+	if !strings.HasPrefix(slugA, "myproj-") || !strings.HasPrefix(slugB, "myproj-") {
+		t.Fatalf("slugs must lead with the basename: %q %q", slugA, slugB)
 	}
-	wantBase := filepath.Join(home, ".local", "state", "envoy", filepath.Base(cwd))
-	if filepath.Dir(dir) != wantBase {
-		t.Fatalf("dir = %q, want under %q", dir, wantBase)
+	if slugA == slugB {
+		t.Fatal("same-named projects at different paths must not share a store")
 	}
-	if !strings.Contains(filepath.Base(dir), "-claude") {
-		t.Fatalf("label must default to provider: %q", dir)
+	if ProjectSlug(a) != slugA {
+		t.Fatal("slug must be stable across calls")
 	}
 }
 
@@ -139,13 +152,4 @@ func run(t *testing.T, dir string, name string, args ...string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%s %v: %v\n%s", name, args, err, out)
 	}
-}
-
-func realPath(t *testing.T, p string) string {
-	t.Helper()
-	r, err := filepath.EvalSymlinks(p)
-	if err != nil {
-		return p
-	}
-	return r
 }

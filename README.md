@@ -38,8 +38,12 @@ terminal block. The durable files in the job dir are authoritative:
 | `raw.log` | verbatim provider stdout (stream-json / JSONL) |
 | `stderr.log` | provider stderr |
 
-Job dirs default to `<repo>/.envoy/<stamp>-<label>/` (self-gitignored), or
-`~/.local/state/envoy/<dir>/` outside a repo. Session locks live in
+All jobs live in one central store — nothing is ever written inside the
+project tree: `~/.local/state/envoy/jobs/<project-slug>/<stamp>-<label>/`,
+where the slug identifies the project (git root when in a repo, cwd
+otherwise). Callers never construct that path: dispatch prints the `out-dir:`
+coordinate, and `envoy collect` / `envoy pending` re-derive the project's
+store from the current directory alone. Session locks live in
 `~/.local/state/envoy/locks/` — one live turn per session, never auto-reclaimed.
 
 Exit codes: `0` ok · `1` provider failure · `2` infra · `3` usage · `4` timeout

@@ -5,6 +5,7 @@ package job
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -120,16 +121,40 @@ func StateDir() string {
 	return filepath.Join(home, ".local", "state", "envoy")
 }
 
-// DefaultBase is where jobs land when --out-dir is not given: a self-ignored
-// .envoy/ dir at the repo root, or a per-directory dir under the state root.
-func DefaultBase(cwd string) string {
-	if root := gitx.Root(cwd); root != "" {
-		return filepath.Join(root, ".envoy")
+var slugUnsafe = regexp.MustCompile(`[^a-z0-9._-]+`)
+
+// ProjectSlug names a project's slice of the central job store: the anchor's
+// basename for a human, a short hash of its real path for uniqueness. The
+// anchor is the git root when cwd is inside a repo — a turn dispatched from a
+// subdirectory belongs to the same project.
+func ProjectSlug(cwd string) string {
+	anchor := gitx.Root(cwd)
+	if anchor == "" {
+		anchor = cwd
 	}
-	return filepath.Join(StateDir(), filepath.Base(cwd))
+	// Normalize symlinked spellings (/tmp vs /private/tmp) so the slug does
+	// not depend on how the caller spelled the path.
+	if real, err := filepath.EvalSymlinks(anchor); err == nil {
+		anchor = real
+	}
+	base := slugUnsafe.ReplaceAllString(strings.ToLower(filepath.Base(anchor)), "-")
+	if base == "" || base == "-" {
+		base = "root"
+	}
+	if len(base) > 40 {
+		base = base[:40]
+	}
+	sum := sha256.Sum256([]byte(anchor))
+	return base + "-" + hex.EncodeToString(sum[:4])
 }
 
-var slugUnsafe = regexp.MustCompile(`[^a-z0-9._-]+`)
+// DefaultBase is where a project's jobs land when --out-dir is not given.
+// Storage is always central — never inside the project tree — and callers
+// are not expected to construct this path: the dispatch coordinate block
+// carries the out-dir, and collect/pending re-derive the base from cwd.
+func DefaultBase(cwd string) string {
+	return filepath.Join(StateDir(), "jobs", ProjectSlug(cwd))
+}
 
 // ResolveOutDir creates and returns the job directory for a new turn.
 func ResolveOutDir(explicit, cwd, label, provider string, now time.Time) (string, error) {
@@ -139,13 +164,6 @@ func ResolveOutDir(explicit, cwd, label, provider string, now time.Time) (string
 	base := DefaultBase(cwd)
 	if err := os.MkdirAll(base, 0o755); err != nil {
 		return "", err
-	}
-	if gitx.Root(cwd) != "" {
-		// Self-ignore; never touch the repo's own .gitignore.
-		ignore := filepath.Join(base, ".gitignore")
-		if _, err := os.Stat(ignore); os.IsNotExist(err) {
-			os.WriteFile(ignore, []byte("*\n"), 0o644)
-		}
 	}
 	stamp := now.Format("20060102-150405")
 	slugSrc := label

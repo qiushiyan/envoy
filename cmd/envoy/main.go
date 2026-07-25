@@ -33,7 +33,7 @@ turn flags:
   --allow-write     claude: bypassPermissions; codex: ~/.codex/config.toml governs
   --baseline SHA    review anchor; write turns default to HEAD
   --cwd DIR         provider working directory (default: current dir)
-  --out-dir DIR     job directory (default: <repo>/.envoy/<stamp>-<label>)
+  --out-dir DIR     job directory (default: the central store, ~/.local/state/envoy/jobs/<project>/)
   --timeout-min N   hard wall-clock cap, 0 = off (default 30)
   --max-budget-usd  claude-only per-turn cost cap
   --label TEXT      job-dir label (default: provider name)

@@ -80,7 +80,13 @@ type runResult struct {
 
 func runEnvoy(t *testing.T, e *env, args ...string) runResult {
 	t.Helper()
+	return runEnvoyIn(t, e, "", args...)
+}
+
+func runEnvoyIn(t *testing.T, e *env, dir string, args ...string) runResult {
+	t.Helper()
 	cmd := exec.Command(binPath, args...)
+	cmd.Dir = dir
 	cmd.Env = e.build()
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
@@ -542,6 +548,47 @@ func TestExitBeforeStdinDoesNotCrash(t *testing.T) {
 		t.Fatalf("meta = status %v exit %v", meta["status"], meta["childExitCode"])
 	}
 	mustContain(t, "error", meta["error"].(string), "fake provider exited before reading its prompt")
+}
+
+func TestDefaultStorageIsCentralAndHidden(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	project := t.TempDir()
+	prompt := writePrompt(t, t.TempDir())
+
+	// Dispatch without --out-dir: the job must land in the central store,
+	// never inside the project tree.
+	res := runEnvoyIn(t, e, project, "turn", "--prompt-file", prompt,
+		"--provider", "codex", "--timeout-min", "5", "--label", "consult")
+	if res.code != 0 {
+		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	var outDir string
+	for _, line := range strings.Split(res.stdout, "\n") {
+		if after, ok := strings.CutPrefix(line, "out-dir: "); ok {
+			outDir = after
+			break
+		}
+	}
+	jobsRoot := filepath.Join(e.home, ".local", "state", "envoy", "jobs")
+	if !strings.HasPrefix(outDir, jobsRoot+string(filepath.Separator)) {
+		t.Fatalf("out-dir %q must live under the central store %q", outDir, jobsRoot)
+	}
+	entries, _ := os.ReadDir(project)
+	if len(entries) != 0 {
+		t.Fatalf("the project tree must stay untouched, found %v", entries)
+	}
+
+	// A caller collecting from the project needs no path at all.
+	collected := runEnvoyIn(t, e, project, "collect")
+	if collected.code != 0 {
+		t.Fatalf("collect = %d\n%s", collected.code, collected.stderr)
+	}
+	mustContain(t, "collect stdout", collected.stdout,
+		"job: "+outDir, "status: ok", "fake provider result")
+
+	// And pending resolves the same project store from cwd alone.
+	pending := runEnvoyIn(t, e, project, "pending")
+	mustContain(t, "pending stdout", pending.stdout, "pending jobs: 0")
 }
 
 func TestUsageErrors(t *testing.T) {

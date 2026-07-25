@@ -1,5 +1,2 @@
 # local build artifact (make install builds elsewhere)
 /envoy
-
-# job dirs if the engine is ever run inside this repo
-.envoy/
