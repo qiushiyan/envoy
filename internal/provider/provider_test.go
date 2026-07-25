@@ -89,9 +89,18 @@ func TestCodexArgv(t *testing.T) {
 func TestClaudeStreamParsing(t *testing.T) {
 	c := newClaude(Options{TimeoutMin: 30}, time.Now())
 
-	events := c.Feed(`{"type":"system","subtype":"init","session_id":"s1"}`)
-	if len(events) != 2 || events[1].Kind != KindNote || events[1].State != "provider-initialized" {
+	events := c.Feed(`{"type":"system","subtype":"init","session_id":"s1","model":"claude-opus-5"}`)
+	if len(events) != 3 || events[1].Kind != KindModelReported || events[1].Model != "claude-opus-5" ||
+		events[2].Kind != KindNote || events[2].State != "provider-initialized" {
 		t.Fatalf("init events = %+v", events)
+	}
+
+	// An init without a model field must not fabricate a report.
+	quiet := newClaude(Options{}, time.Now())
+	for _, e := range quiet.Feed(`{"type":"system","subtype":"init","session_id":"s1"}`) {
+		if e.Kind == KindModelReported {
+			t.Fatal("no model in init must mean no KindModelReported event")
+		}
 	}
 
 	events = c.Feed(`{"type":"assistant","session_id":"s1","message":{"role":"assistant","content":[{"type":"text","text":"working"}]}}`)

@@ -1,2 +1,5 @@
 # local build artifact (make install builds elsewhere)
 /envoy
+
+# session worktrees and local claude state
+.claude/

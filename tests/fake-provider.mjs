@@ -36,6 +36,7 @@ function claudeInit() {
     type: 'system',
     subtype: 'init',
     session_id: sessionId,
+    model: 'fake-claude-model',
     claude_code_version: 'fake-2.1.207',
   };
 }

@@ -85,6 +85,7 @@ type Meta struct {
 	LastProviderOutputAt      *string  `json:"lastProviderOutputAt"`
 	LastProviderActivityAt    *string  `json:"lastProviderActivityAt"`
 	LastProviderEventType     *string  `json:"lastProviderEventType"`
+	ProviderReportedModel     *string  `json:"providerReportedModel"` // the provider's own announcement; never inferred
 	Tokens                    *Tokens  `json:"tokens"`
 	CostUSD                   *float64 `json:"costUsd"`
 	Error                     *string  `json:"error"`

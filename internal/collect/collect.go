@@ -243,7 +243,19 @@ func Collect(outDir string, w, errW io.Writer) int {
 	if meta.Label != nil {
 		labelSuffix = " · label " + *meta.Label
 	}
-	fmt.Fprintf(w, "provider: %s · model %s · effort %s%s\n", meta.Provider, display(meta.Model), display(meta.Effort), labelSuffix)
+	// The model column shows the request; when the provider announced what it
+	// actually resolved, show that observation too.
+	modelDisplay := display(meta.Model)
+	if meta.ProviderReportedModel != nil {
+		reported := *meta.ProviderReportedModel
+		switch {
+		case meta.Model == nil:
+			modelDisplay = fmt.Sprintf("(provider default, ran %s)", reported)
+		case *meta.Model != reported:
+			modelDisplay = fmt.Sprintf("%s (ran %s)", *meta.Model, reported)
+		}
+	}
+	fmt.Fprintf(w, "provider: %s · model %s · effort %s%s\n", meta.Provider, modelDisplay, display(meta.Effort), labelSuffix)
 	if meta.DurationMs != nil {
 		costSuffix := ""
 		if meta.CostUSD != nil {

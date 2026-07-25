@@ -201,6 +201,9 @@ func TestCodexSuccess(t *testing.T) {
 	if v, ok := meta["collectedAt"]; !ok || v != nil {
 		t.Fatalf("collectedAt must be explicit null before collection, got %v (present=%v)", v, ok)
 	}
+	if meta["providerReportedModel"] != nil {
+		t.Fatalf("codex reports no model; the field must stay null, got %v", meta["providerReportedModel"])
+	}
 
 	progress := readFile(t, filepath.Join(outDir, "progress.log"))
 	mustContain(t, "progress.log", progress, "state=starting", "state=accepted", "state=provider-terminal", "state=terminal status=ok")
@@ -242,6 +245,17 @@ func TestClaudeSuccessWithUnterminatedFinalLine(t *testing.T) {
 		t.Fatalf("tokens = %v", tokens)
 	}
 	mustContain(t, "terminal stdout", res.stdout, "session: fake-session-id", "takeover: claude --resume fake-session-id")
+
+	// The provider announced its resolved model; the engine records the
+	// observation without inferring anything from the (absent) request.
+	if meta["providerReportedModel"] != "fake-claude-model" {
+		t.Fatalf("providerReportedModel = %v", meta["providerReportedModel"])
+	}
+	mustContain(t, "progress.log", readFile(t, filepath.Join(outDir, "progress.log")),
+		"state=provider-initialized session=fake-session-id model=fake-claude-model")
+	collected := runEnvoy(t, e, "collect", outDir)
+	mustContain(t, "collect stdout", collected.stdout,
+		"provider: claude · model (provider default, ran fake-claude-model) · effort (provider default)")
 }
 
 func TestClaudePartialFailure(t *testing.T) {

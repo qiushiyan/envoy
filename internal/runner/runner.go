@@ -409,6 +409,11 @@ func (r *run) handleEvents(events []provider.Event) {
 			r.meta.LastProviderEventType = job.Ptr(ev.Type)
 		case provider.KindNote:
 			r.progress.Append(ev.State, ev.Fields...)
+		case provider.KindModelReported:
+			// The provider's own statement of what it resolved — recorded as
+			// an observation, never inferred.
+			model := ev.Model
+			r.writeMeta(func(m *job.Meta) { m.ProviderReportedModel = job.Ptr(model) })
 		case provider.KindAccepted:
 			r.markPromptAccepted(ev.Evidence)
 		case provider.KindTerminal:
