@@ -31,15 +31,15 @@ terminal block. Its stdout is written for the agent driving it: every status
 carries what it rules out, and every failure ends in one runnable next
 command. The durable files in the job dir are authoritative:
 
-| File | Meaning |
-|---|---|
-| `prompt.md` | the exact dispatched prompt |
-| `result.md` | final provider text, or failure + recovered partial output |
-| `meta.json` | machine-readable lifecycle/recovery truth (atomically replaced) |
-| `progress.log` | runner-owned semantic progress + 30s heartbeat |
-| `raw.log` | verbatim provider stdout (stream-json / JSONL) |
-| `stderr.log` | provider stderr |
-| `last-message.txt` | codex's `-o` recovery surface (codex turns only) |
+| File               | Meaning                                                         |
+| ------------------ | --------------------------------------------------------------- |
+| `prompt.md`        | the exact dispatched prompt                                     |
+| `result.md`        | final provider text, or failure + recovered partial output      |
+| `meta.json`        | machine-readable lifecycle/recovery truth (atomically replaced) |
+| `progress.log`     | runner-owned semantic progress + 30s heartbeat                  |
+| `raw.log`          | verbatim provider stdout (stream-json / JSONL)                  |
+| `stderr.log`       | provider stderr                                                 |
+| `last-message.txt` | codex's `-o` recovery surface (codex turns only)                |
 
 All jobs live in one central store — nothing is ever written inside the
 project tree: `~/.local/state/envoy/jobs/<project-slug>/<stamp>-<label>/`,
@@ -52,7 +52,7 @@ store from the current directory alone. Session locks live in
 Exit codes: `0` ok · `1` provider failure · `2` infra · `3` usage · `4` timeout
 · `5` interrupted.
 
-## Design invariants (inherited from sidekick-runtime)
+## Design invariants
 
 - **A screen is not an API.** Providers run headless; results are parsed from
   their JSON event streams, never scraped.
