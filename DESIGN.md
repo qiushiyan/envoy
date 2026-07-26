@@ -83,6 +83,49 @@ sandbox once broke the calling session's own tooling).
   with a plain lock file — so the engine only ever says no and points at the
   job to inspect. Correctness of a shared conversation outranks convenience.
 
+## Fan-out: several turns, one job
+
+`envoy fan` sends one prompt to several turns at once. The design rule that
+keeps it from becoming a second engine: **a fan-out is a supervisor over
+unchanged turns, not a new kind of turn.** Members are ordinary turns — own
+session, own lock, own job dir, own prompt state, own `result.md`, one level
+down in the group dir — so every lifecycle invariant above holds unmodified
+and `envoy collect <member-dir>` still works. What the group adds is only what
+the caller was otherwise doing by hand: one process to wait on, one completion,
+one collect, one exit code.
+
+Consequences that are load-bearing, not incidental:
+
+- **`group.json` is a roster of coordinates, never a mirror of member state.**
+  A member's status lives in that member's `meta.json` and nowhere else, so the
+  two cannot drift. Collect re-reads the members; the manifest records only
+  what the supervisor itself knows (who was dispatched, where, when).
+- **Recovery stays per member,** because prompt state is per member: one
+  `accepted` member licenses only a resume while its `not_started` sibling
+  licenses an identical retry. No group-level resume exists, and every
+  fan-out sentence points back at per-member actions.
+- **Exit code 6 (`partial`) earned a new code** rather than overloading an
+  existing one. A fan-out where one member answered and one timed out is not a
+  failure (results exist) and not a success (a member needs a decision);
+  reporting it as `4 timeout` invites re-dispatching the whole fan and
+  duplicating work already accepted. Where no member returned a result, the
+  most dispatch-side cause wins, since that is the one fixed by changing the
+  command instead of waiting.
+- **Read-only by refusal.** `--allow-write` is rejected on a fan-out: members
+  share one working tree and concurrent write turns overwrite each other.
+  Parallel write work means a worktree per turn, dispatched as separate turns.
+- **Members run in one process, on N event loops.** The runner was already
+  parameterized by its writers and out-dir, which is what made this free; the
+  alternative — spawning `envoy turn` subprocesses — was rejected because the
+  supervisor would become a second, drifting copy of the CLI's argv and
+  validation surface. The cost accepted in exchange is blast radius, so a
+  member panic is contained per member rather than taking its siblings down.
+- **Member stdout is dropped, not interleaved.** N single-turn blocks on one
+  stdout would be unreadable for the agent those blocks are written for, and
+  nothing is lost: every coordinate they carry is in the member's `meta.json`.
+  Member stderr is labelled and passed through, because warnings there are rare
+  and load-bearing.
+
 ## Storage
 
 Jobs live in one central store, `~/.local/state/envoy/jobs/<slug>/`, never in
@@ -150,3 +193,11 @@ Engine-relevant history, distilled from the predecessor and continued here.
   owns every sentence: drivers report causes, steer prescribes. The rule
   that generalizes — **a recovery line may prescribe only what the engine
   observed, and must hand over a runnable command, not a fragment.**
+- **2026-07-26 — fan-out.** Real use wanted one prompt on two models ~10% of
+  the time, and doing it with two dispatches made the caller hold a two-job
+  ledger and answer a question the engine should have absorbed ("one voice is
+  back, synthesize now or wait?"). `envoy fan` collapses it to one dispatch,
+  one completion, one collect. It cost no lifecycle change — the runner was
+  already instance-clean — which is exactly the test of whether a feature
+  belongs in this engine: *supervision and presentation, yes; new turn
+  semantics, no.*

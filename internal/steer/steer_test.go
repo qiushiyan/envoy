@@ -89,3 +89,56 @@ func TestStatusLineGlossesNonOK(t *testing.T) {
 		}
 	}
 }
+
+// A fan-out's aggregate word has to carry how many results exist, because the
+// caller acts on it before reading any member: "partial" that read like a
+// failure would send it re-dispatching turns that already returned answers.
+func TestFanStatusLineSaysHowManyResultsExist(t *testing.T) {
+	cases := []struct {
+		statuses []string
+		status   string
+		wants    []string
+	}{
+		{[]string{job.StatusOK, job.StatusOK}, FanOK, []string{"ok — all 2 turns returned a result"}},
+		{[]string{job.StatusOK, job.StatusTimeout}, FanPartial,
+			[]string{"partial — 1 of 2 turns returned a result", "their own status and next action below"}},
+		{[]string{job.StatusTimeout, job.StatusFailed}, FanNoResult,
+			[]string{"none of the 2 turns returned a result"}},
+		{[]string{job.StatusRunning, job.StatusOK}, FanRunning,
+			[]string{"1 of 2 turns have not finished", "nothing here is final yet"}},
+		// A member that never published a status counts as one with no result;
+		// claiming otherwise would license reading a result that is not there.
+		{[]string{job.StatusOK, ""}, FanPartial, []string{"partial — 1 of 2 turns returned a result"}},
+	}
+	for _, c := range cases {
+		if got := FanStatus(c.statuses); got != c.status {
+			t.Errorf("FanStatus(%v) = %q, want %q", c.statuses, got, c.status)
+		}
+		line := FanStatusLine(c.statuses)
+		for _, want := range c.wants {
+			if !strings.Contains(line, want) {
+				t.Errorf("FanStatusLine(%v) = %q, missing %q", c.statuses, line, want)
+			}
+		}
+	}
+}
+
+// Members are independent turns, so the one thing a fan-out's closing line must
+// never license is a group-wide re-dispatch: that would re-send a prompt other
+// members already accepted.
+func TestFanNextPrescribesPerMemberRecovery(t *testing.T) {
+	mixed := FanNext("/jobs/g", []string{job.StatusOK, job.StatusTimeout})
+	for _, want := range []string{
+		"envoy collect '/jobs/g'",
+		"licenses nothing about another",
+		"re-dispatch or resume per member, never the whole fan-out",
+	} {
+		if !strings.Contains(mixed, want) {
+			t.Errorf("FanNext for a partial fan-out %q is missing %q", mixed, want)
+		}
+	}
+	none := FanNext("/jobs/g", []string{job.StatusTimeout, job.StatusInfra})
+	if !strings.Contains(none, "prompt was accepted is what decides") {
+		t.Errorf("FanNext with no results must name the prompt state as the discriminator, got %q", none)
+	}
+}

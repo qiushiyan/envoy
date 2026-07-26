@@ -125,8 +125,18 @@ func deadlineFrom(startedAt time.Time, timeoutMin float64) time.Time {
 	return startedAt.Round(0).Add(time.Duration(timeoutMin * float64(time.Minute)))
 }
 
-// Run executes one turn and returns the process exit code.
-func Run(opts Options) int {
+// Result is one turn's outcome for whoever started it. Status is empty when
+// the turn ended before meta.json existed — a rejected flag, a locked session,
+// an unreadable prompt — which a supervisor must be able to tell apart from a
+// turn that ran and published a terminal status.
+type Result struct {
+	ExitCode int
+	OutDir   string
+	Status   string
+}
+
+// Run executes one turn and returns its outcome.
+func Run(opts Options) Result {
 	// Round(0) keeps every derived duration and timestamp on the wall clock.
 	startedAt := time.Now().Round(0)
 	r := &run{
@@ -144,7 +154,7 @@ func Run(opts Options) int {
 	outDir, err := job.ResolveOutDir(opts.OutDir, opts.Cwd, opts.Label, opts.Provider, startedAt)
 	if err != nil {
 		fmt.Fprintf(opts.Stderr, "envoy: cannot create out-dir: %s\n", err)
-		return job.ExitInfra
+		return Result{ExitCode: job.ExitInfra, OutDir: opts.OutDir}
 	}
 	r.ws = job.Workspace{Dir: outDir}
 	r.progress = r.ws.Progress()
@@ -153,14 +163,14 @@ func Run(opts Options) int {
 	driver, err := provider.New(opts.Provider, opts.Turn, r.ws, startedAt)
 	if err != nil {
 		fmt.Fprintf(opts.Stderr, "usage error: %s\n", err)
-		return job.ExitUsage
+		return Result{ExitCode: job.ExitUsage, OutDir: outDir}
 	}
 	r.driver = driver
 
 	promptText, err := os.ReadFile(opts.PromptFile)
 	if err != nil {
 		fmt.Fprintf(opts.Stderr, "envoy: cannot read prompt file: %s\n", err)
-		return job.ExitInfra
+		return Result{ExitCode: job.ExitInfra, OutDir: outDir}
 	}
 
 	// A known session id (claude, or any --resume) locks before any job
@@ -171,9 +181,9 @@ func Run(opts Options) int {
 		if err != nil {
 			fmt.Fprintf(opts.Stderr, "lock error: %s\n", err)
 			if _, ok := err.(*lock.Conflict); ok {
-				return job.ExitUsage
+				return Result{ExitCode: job.ExitUsage, OutDir: outDir}
 			}
-			return job.ExitInfra
+			return Result{ExitCode: job.ExitInfra, OutDir: outDir}
 		}
 		r.sessionLock = handle
 	}
@@ -181,12 +191,12 @@ func Run(opts Options) int {
 	if err := r.ws.Prepare(opts.PromptFile); err != nil {
 		r.releaseLock()
 		fmt.Fprintf(opts.Stderr, "envoy: cannot prepare job dir: %s\n", err)
-		return job.ExitInfra
+		return Result{ExitCode: job.ExitInfra, OutDir: outDir}
 	}
 	return r.execute(string(promptText))
 }
 
-func (r *run) execute(promptText string) int {
+func (r *run) execute(promptText string) Result {
 	r.initMeta()
 	r.printStartupBlock()
 	r.progress.Append("starting",
@@ -223,7 +233,7 @@ func (r *run) execute(promptText string) int {
 			promptStateEvidence: job.Ptr("provider spawn error"),
 			hasEvidence:         true,
 		})
-		return r.exitCode
+		return r.result()
 	}
 	r.child = child
 	r.writeMeta(func(m *job.Meta) {
@@ -307,7 +317,13 @@ func (r *run) execute(promptText string) int {
 			}
 		}
 	}
-	return r.exitCode
+	return r.result()
+}
+
+// result reports the turn as its caller sees it, reading the same in-memory
+// meta that was published to disk.
+func (r *run) result() Result {
+	return Result{ExitCode: r.exitCode, OutDir: r.ws.Dir, Status: r.meta.Status}
 }
 
 // ---------- session state (the one owner of the coordinate invariant) ----------

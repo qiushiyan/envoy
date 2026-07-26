@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 envoy runs **one headless AI-session turn** (the `claude` or `codex` CLI) as a supervised job and returns it as durable data: `result.md` is the return value, `meta.json` the machine-readable lifecycle/recovery truth, `progress.log` the live view, `raw.log`/`stderr.log` the verbatim provider streams. It is deliberately judgment-free mechanism — no retries, no review loops, no provider auto-selection. Callers (humans, agents, or scripts) own all judgment; do not grow the engine past that line.
 
-It ships as a library (root package `envoy` — `Turn`, `Collect`, `Pending`) and a thin CLI (`cmd/envoy`). **Zero third-party dependencies is a deliberate constraint** — the Go stdlib covers this domain; keep `go.mod` empty.
+`envoy fan` dispatches one prompt to several turns at once, but it is **a supervisor over unchanged turns, not a second engine**: each member is an ordinary turn in its own subdirectory, and the group adds only supervision and presentation (one process to wait on, one collect, one exit code). Anything that would give a fan-out its own turn semantics belongs in a caller.
+
+It ships as a library (root package `envoy` — `Turn`, `Fan`, `Collect`, `Pending`) and a thin CLI (`cmd/envoy`). **Zero third-party dependencies is a deliberate constraint** — the Go stdlib covers this domain; keep `go.mod` empty.
 
 [DESIGN.md](DESIGN.md) records the why — rejected alternatives, settled non-goals, and the evidence log of paid-for lessons. Read it before proposing a behavior change; update its log when an incident teaches something new.
 
@@ -25,17 +27,18 @@ Integration tests need `node` on PATH: `tests/TestMain` builds a **race-instrume
 
 ## Architecture
 
-Flow: `cmd/envoy` (flags only) → `envoy.go` facade (validation, usage errors) → `internal/runner` (lifecycle) ↔ `internal/provider` (drivers) → `internal/job` (artifacts). `internal/collect` reads what the runner wrote; `internal/steer` words everything either of them says to the caller.
+Flow: `cmd/envoy` (flags only) → `envoy.go` facade (validation, usage errors) → `internal/runner` (lifecycle) ↔ `internal/provider` (drivers) → `internal/job` (artifacts). `internal/collect` reads what the runner wrote; `internal/steer` words everything either of them says to the caller. `internal/fan` sits beside the runner rather than under it: it starts N runs and reports them as a set, and knows nothing about the turn lifecycle.
 
 - **`internal/steer` owns every sentence addressed to the caller.** Recovery prescriptions, status glosses, and the resume/collect commands live there, so one situation has one wording and the whole agent-facing vocabulary is reviewable in one file. Callers contribute observations, never prose: a driver reports the cause (`Outcome.ErrorText`) plus any cause-specific fix (`Outcome.Remedy`), and `steer.Recovery` turns the observed prompt state into the prescription. Add wording here, not at the call site.
 - **`internal/provider` is the extensibility seam.** A `Driver` is stateful per turn: it owns argv/env construction, accumulates the provider's stream, and translates raw JSON lines into six semantic event kinds (`Activity`, `SessionStarted`, `Accepted`, `Terminal`, `Note`, `ModelReported`). The runner consumes only those events and **never branches on provider name**. Adding a provider = one driver file + a case in `provider.New` + an entry in the `efforts` map.
 - **`internal/runner` is a single-threaded state machine.** One event-loop goroutine owns all `run` state, unsynchronized on purpose; helper goroutines (stream pumps, process wait, timers via `afterFunc`) only send into its channels. Never mutate `run` fields from a new goroutine — route through `callCh`.
 - **Process exit and stream EOF are separate observations, by design.** `spawn` passes raw `os.Pipe` fds (not exec's managed pipes) so `wait()` sees pure process exit while pumps see EOF only when every pipe writer is gone. The exit → close-grace → residual-cleanup → SIGKILL escalation in `terminate.go` exists because a provider grandchild can outlive the CLI and hold the pipes open; the whole tree runs in its own process group so it can be stopped.
-- **`internal/job` owns the meta.json schema for both writer and reader.** The runner and collect share `job.Meta`, so they cannot drift. `collect` distinguishes an absent field from an explicit `null` (see `ReadMetaFile`'s raw map — `collectedAt: null` means "not yet collected", missing means legacy).
+- **`internal/job` owns the meta.json schema for both writer and reader.** The runner and collect share `job.Meta`, so they cannot drift. `collect` distinguishes an absent field from an explicit `null` (see `ReadMetaFile`'s raw map — `collectedAt: null` means "not yet collected", missing means legacy). `job.Group` (group.json) is a **sibling** schema, not a field of `Meta`: a fan-out is not a turn, and the manifest records the member roster and shared settings only — never a member's status, which would be a second copy of what that member's `meta.json` owns.
+- **Several runs share a process safely because the runner is instance-clean.** `runner.Options` injects `Stdout`/`Stderr`/`OutDir`, `*run` holds every piece of state, and the only package-level values are the read-only env tunables. Keep it that way: a package-level variable in `runner` would silently couple a fan-out's members. Members get `io.Discard` for stdout (N interleaved coordinate blocks are unreadable, and everything in them is in `meta.json`) and a name-prefixed writer for stderr.
 
 ## The Output Contract
 
-Stdout blocks, progress vocabulary, recovery prose, exit codes (0 ok · 1 failed · 2 infra · 3 usage · 4 timeout · 5 interrupted), and the job-dir file set are a **caller interface, frequently consumed by an AI agent** — the prose is a prompt surface, and integration tests assert exact strings. Changing wording is a contract change, not cosmetics; update tests and think about the agent reading it.
+Stdout blocks, progress vocabulary, recovery prose, exit codes (0 ok · 1 failed · 2 infra · 3 usage · 4 timeout · 5 interrupted · 6 partial, fan-out only), and the job-dir file set are a **caller interface, frequently consumed by an AI agent** — the prose is a prompt surface, and integration tests assert exact strings. Changing wording is a contract change, not cosmetics; update tests and think about the agent reading it.
 
 Three rules govern that prose, all enforced in `internal/steer`:
 
@@ -53,6 +56,7 @@ Behavioral invariants the code encodes deliberately (each has a test):
 - **The timeout is a wall-clock deadline comparison, not a monotonic timer** (laptop sleep must not stretch the cap), and it is a safety cap, not a stall detector.
 - **Prompt-state recovery**: `accepted` → resume, never redispatch; `not_started` → one identical retry; `unknown` → absence of output is not proof of no work.
 - **Claude's result envelope session id overrides the preflight id** (a resumed conversation continues under a fresh id).
+- **One member's outcome licenses nothing about another.** A fan-out's aggregate code exists to keep that true: `6 partial` says results landed *and* a member needs a decision, so no caller reads a mixed fan-out as a whole-fan retry. Recovery, resume, and takeover are per member; there is deliberately no group resume, and `--allow-write` is refused on a fan-out because members share one tree.
 
 ## Provider CLI Drift
 

@@ -203,20 +203,7 @@ func (w Workspace) WatchCommand() string {
 // Prepare copies the dispatched prompt in and truncates the log files, so a
 // crashed job still leaves a complete, self-describing directory.
 func (w Workspace) Prepare(promptFile string) error {
-	src, err := os.Open(promptFile)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-	dst, err := os.Create(w.PromptPath())
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(dst, src); err != nil {
-		dst.Close()
-		return err
-	}
-	if err := dst.Close(); err != nil {
+	if err := copyFile(promptFile, w.PromptPath()); err != nil {
 		return err
 	}
 	for _, p := range []string{w.RawLogPath(), w.StderrLogPath(), w.ProgressLogPath()} {
@@ -225,4 +212,21 @@ func (w Workspace) Prepare(promptFile string) error {
 		}
 	}
 	return nil
+}
+
+func copyFile(from, to string) error {
+	src, err := os.Open(from)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	dst, err := os.Create(to)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		dst.Close()
+		return err
+	}
+	return dst.Close()
 }

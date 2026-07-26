@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/qiushiyan/envoy"
+	"github.com/qiushiyan/envoy/internal/steer"
 )
 
 // usageText is the tool description an agent reads before driving envoy, so
@@ -24,10 +25,12 @@ import (
 // A caller that reads this page should not need any other instructions to use
 // envoy correctly. Effort values render from the provider package so the help
 // and the validation cannot disagree.
-var usageText = fmt.Sprintf(`envoy — run one headless AI-session turn (claude or codex) and return it as data
+var usageText = fmt.Sprintf(`envoy — run headless AI-session turns (claude or codex) and return them as data
 
 USAGE
   envoy turn --provider <claude|codex> --prompt-file <F> [flags]
+  envoy fan --prompt-file <F> --with <spec> --with <spec> [flags]
+                              one prompt, several models, one job
   envoy collect [job-dir]     print one job: status, coordinates, result.md
   envoy pending [--base DIR]  jobs still needing attention, after a missed completion
   envoy version
@@ -57,6 +60,27 @@ WHAT A TURN LEAVES BEHIND
     raw.log       the provider's own event stream, verbatim
     stderr.log    the provider's stderr
 
+ONE PROMPT, SEVERAL MODELS
+  envoy fan --prompt-file brief.md --with codex --with claude:opus --label consult
+
+  Sends the same prompt to several turns at once and supervises them as one
+  job: one command to run in the background, one completion, one collect that
+  prints every member's result. Reach for it when you want independent takes on
+  the same question — a second opinion from another model family, say. When the
+  prompts differ, dispatch separate turns instead.
+
+  A member is provider[:model[:effort]]:
+    --with codex --with claude:opus               two families, one brief
+    --with claude:opus:high --with claude:sonnet  one family, two models
+    --with codex --with codex                     the same model twice
+
+  Each member is an ordinary turn with its own session and job dir, in a
+  subdirectory named after it, so recovery stays per member: resume the one
+  that needs resuming. A fan-out is read-only — its members share one working
+  tree, and concurrent write turns overwrite each other.
+
+    envoy collect <fan-out-dir>   every member's status and result, in one block
+
 TURN FLAGS
   --provider        claude or codex (required)
   --prompt-file     the full prompt (required); copied into the job dir
@@ -70,6 +94,10 @@ TURN FLAGS
   --timeout-min N   wall-clock safety cap in minutes, 0 = off (default 30)
   --max-budget-usd  per-turn cost cap (claude only)
   --label TEXT      names the job dir (default: provider name)
+
+  envoy fan takes --prompt-file, --baseline, --cwd, --out-dir, --timeout-min
+  and --label with the same meaning, plus --with once per member. The cap
+  applies to each member separately.
 
 BEFORE YOU DISPATCH
   Model and effort. Leaving --model or --effort off puts the provider's own
@@ -101,6 +129,9 @@ EXIT CODES, AND WHAT EACH ONE LICENSES
   3 usage        flags were rejected, or the session is locked; nothing ran
   4 timeout      the cap elapsed — not evidence the provider hung
   5 interrupted  a signal stopped the turn
+  6 partial      fan-out only: some members returned a result and others did
+                 not — the results that landed are usable, and only the members
+                 that failed need a decision
 
   For any non-zero exit, collect the job and follow its `+"`next:`"+` line instead of
   re-dispatching. Whether the provider accepted the prompt is what decides
@@ -123,6 +154,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "turn":
 		return cmdTurn(args[1:], stdout, stderr)
+	case "fan":
+		return cmdFan(args[1:], stdout, stderr)
 	case "collect":
 		return cmdCollect(args[1:], stdout, stderr)
 	case "pending":
@@ -197,6 +230,68 @@ func cmdTurn(args []string, stdout, stderr io.Writer) int {
 	req.Stdout = stdout
 	req.Stderr = stderr
 	return envoy.Turn(req)
+}
+
+// stringList collects a repeatable flag in the order it was given, which is
+// the order --with members are dispatched and listed.
+type stringList []string
+
+func (s *stringList) String() string     { return strings.Join(*s, " ") }
+func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
+
+func cmdFan(args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("fan", stderr)
+	var req envoy.FanRequest
+	var with stringList
+	fs.Var(&with, "with", "")
+	fs.StringVar(&req.PromptFile, "prompt-file", "", "")
+	fs.StringVar(&req.Baseline, "baseline", "", "")
+	fs.StringVar(&req.Cwd, "cwd", "", "")
+	fs.StringVar(&req.OutDir, "out-dir", "", "")
+	fs.StringVar(&req.Label, "label", "", "")
+	timeoutMin := fs.Float64("timeout-min", 30, "")
+	// The turn-only flags are accepted here just to be refused in the fan-out's
+	// own terms: a caller that reaches for --model on a fan-out should be taught
+	// the member spec, not handed "flag provided but not defined".
+	allowWrite := fs.Bool("allow-write", false, "")
+	resume := fs.String("resume", "", "")
+	model := fs.String("model", "", "")
+	effort := fs.String("effort", "", "")
+	providerFlag := fs.String("provider", "", "")
+	if proceed, code := parseFlags(fs, args, stdout); !proceed {
+		return code
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(stderr, "usage error: unexpected argument %q; each member is passed as --with %s\n",
+			fs.Arg(0), "provider[:model[:effort]]")
+		return envoy.ExitUsage
+	}
+	refusal := ""
+	switch {
+	case *allowWrite:
+		refusal = steer.FanAllowWriteRefused()
+	case *resume != "":
+		refusal = steer.FanResumeRefused()
+	case *model != "":
+		refusal = steer.FanMemberFlagRefused("--model")
+	case *effort != "":
+		refusal = steer.FanMemberFlagRefused("--effort")
+	case *providerFlag != "":
+		refusal = steer.FanMemberFlagRefused("--provider")
+	}
+	if refusal != "" {
+		fmt.Fprintf(stderr, "usage error: %s\n", refusal)
+		return envoy.ExitUsage
+	}
+	if *timeoutMin == 0 {
+		req.NoTimeout = true
+	} else {
+		req.TimeoutMin = *timeoutMin
+	}
+	req.With = with
+	req.Stdout = stdout
+	req.Stderr = stderr
+	return envoy.Fan(req)
 }
 
 func cmdCollect(args []string, stdout, stderr io.Writer) int {

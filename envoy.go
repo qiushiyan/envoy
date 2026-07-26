@@ -14,8 +14,10 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/qiushiyan/envoy/internal/collect"
+	"github.com/qiushiyan/envoy/internal/fan"
 	"github.com/qiushiyan/envoy/internal/job"
 	"github.com/qiushiyan/envoy/internal/provider"
 	"github.com/qiushiyan/envoy/internal/runner"
@@ -25,7 +27,7 @@ import (
 const Version = "0.1.0"
 
 // Exit codes: 0 ok · 1 provider failure · 2 infra · 3 usage · 4 timeout ·
-// 5 interrupted.
+// 5 interrupted · 6 partial (fan-out only).
 const (
 	ExitOK          = job.ExitOK
 	ExitFailed      = job.ExitFailed
@@ -33,6 +35,7 @@ const (
 	ExitUsage       = job.ExitUsage
 	ExitTimeout     = job.ExitTimeout
 	ExitInterrupted = job.ExitInterrupted
+	ExitPartial     = job.ExitPartial
 )
 
 // TurnRequest describes one turn. Zero values mean "provider default" for
@@ -154,7 +157,112 @@ func Turn(req TurnRequest) int {
 		},
 		Stdout: stdout,
 		Stderr: stderr,
+	}).ExitCode
+}
+
+// FanRequest describes one fan-out: the same prompt dispatched to several
+// turns, supervised as a single job. With holds one member spec per turn,
+// spelled provider[:model[:effort]] — the same form a caller types — so the
+// CLI and an embedding program get identical parsing and identical errors.
+//
+// Everything else is shared by every member. There is deliberately no write
+// intent and no resume: members share one working tree and start separate
+// conversations. TimeoutMin follows TurnRequest — zero means the 30-minute cap.
+type FanRequest struct {
+	With       []string
+	PromptFile string
+	Baseline   string
+	Cwd        string
+	OutDir     string
+	TimeoutMin float64
+	NoTimeout  bool
+	Label      string
+
+	Stdout io.Writer
+	Stderr io.Writer
+}
+
+// Fan validates the request and runs every member to terminal state. It returns
+// when the last one is done: 0 when all of them returned a result, ExitPartial
+// when some did, otherwise the most dispatch-side of their failures.
+func Fan(req FanRequest) int {
+	stdout, stderr := defaultWriters(req.Stdout, req.Stderr)
+
+	if len(req.With) < 2 {
+		return usageError(stderr,
+			"a fan-out needs at least two members: --with provider[:model[:effort]] --with provider[:model[:effort]]. "+
+				"For one turn, use envoy turn")
+	}
+	members := make([]fan.Member, 0, len(req.With))
+	for _, spec := range req.With {
+		m, err := parseMember(spec)
+		if err != nil {
+			return usageError(stderr, "%s", err)
+		}
+		members = append(members, m)
+	}
+	if req.PromptFile == "" {
+		return usageError(stderr, "--prompt-file <path> is required")
+	}
+	if _, err := os.Stat(req.PromptFile); err != nil {
+		return usageError(stderr, "prompt file not found: %s", req.PromptFile)
+	}
+	cwd := req.Cwd
+	if cwd == "" {
+		var err error
+		if cwd, err = os.Getwd(); err != nil {
+			fmt.Fprintf(stderr, "envoy: cannot determine cwd: %s\n", err)
+			return ExitInfra
+		}
+	}
+	cwd = absOrSelf(cwd)
+	if info, err := os.Stat(cwd); err != nil || !info.IsDir() {
+		return usageError(stderr, "cwd not found: %s", cwd)
+	}
+	timeoutMin, err := resolveTimeout(TurnRequest{TimeoutMin: req.TimeoutMin, NoTimeout: req.NoTimeout})
+	if err != nil {
+		return usageError(stderr, "%s", err)
+	}
+	outDir := req.OutDir
+	if outDir != "" {
+		outDir = absOrSelf(outDir)
+	}
+	return fan.Run(fan.Options{
+		Members:    members,
+		PromptFile: req.PromptFile,
+		Cwd:        cwd,
+		Baseline:   req.Baseline,
+		Label:      req.Label,
+		OutDir:     outDir,
+		TimeoutMin: timeoutMin,
+		Stdout:     stdout,
+		Stderr:     stderr,
 	})
+}
+
+// parseMember reads one member spec. The colon form keeps a member's settings
+// unambiguously attached to that member — no provider name, model name or
+// effort value contains a colon — where repeated --model/--effort flags could
+// not say which member they belonged to.
+func parseMember(spec string) (fan.Member, error) {
+	parts := strings.Split(spec, ":")
+	if len(parts) > 3 {
+		return fan.Member{}, fmt.Errorf("--with '%s' has too many fields; the form is provider[:model[:effort]], for example claude:opus:high", spec)
+	}
+	m := fan.Member{Provider: parts[0]}
+	if len(parts) > 1 {
+		m.Model = parts[1]
+	}
+	if len(parts) > 2 {
+		m.Effort = parts[2]
+	}
+	if m.Provider != "claude" && m.Provider != "codex" {
+		return fan.Member{}, fmt.Errorf("--with '%s' must name provider claude or codex, got '%s'", spec, m.Provider)
+	}
+	if err := provider.ValidateEffort(m.Provider, m.Effort); err != nil {
+		return fan.Member{}, fmt.Errorf("--with '%s': %s", spec, err)
+	}
+	return m, nil
 }
 
 // Collect prints one job (or the latest job for the current directory when

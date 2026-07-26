@@ -7,8 +7,12 @@ import process from 'node:process';
 
 const provider = process.argv[2];
 const providerArgs = process.argv.slice(3);
-const scenario = process.env.ENVOY_FAKE_SCENARIO ?? 'success';
-const sessionId = process.env.ENVOY_FAKE_SESSION_ID ?? 'fake-session-id';
+// A fan-out runs both providers from one process, so each needs its own
+// scenario and session id to produce mixed outcomes without colliding locks.
+const perProvider = (name, fallback) =>
+  process.env[`${name}_${provider.toUpperCase()}`] ?? process.env[name] ?? fallback;
+const scenario = perProvider('ENVOY_FAKE_SCENARIO', 'success');
+const sessionId = perProvider('ENVOY_FAKE_SESSION_ID', 'fake-session-id');
 const finalText = process.env.ENVOY_FAKE_FINAL_TEXT ?? 'fake provider result';
 
 if (!['codex', 'claude'].includes(provider)) {

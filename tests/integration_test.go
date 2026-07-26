@@ -723,6 +723,281 @@ func TestClaudeInitOnlyIsNotAcceptance(t *testing.T) {
 		"silence is not proof", "only once they show it never began")
 }
 
+func fanArgs(prompt, outDir string, extra ...string) []string {
+	args := []string{"fan", "--prompt-file", prompt, "--out-dir", outDir}
+	return append(args, extra...)
+}
+
+// The fan-out contract: one command, one completion, one directory — and
+// underneath it, members that are ordinary turns in every respect.
+func TestFanDispatchesEveryMemberAsAnOrdinaryTurn(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	outDir := filepath.Join(t.TempDir(), "group")
+	prompt := writePrompt(t, t.TempDir())
+
+	res := runEnvoy(t, e, fanArgs(prompt, outDir, "--with", "codex", "--with", "claude:opus",
+		"--timeout-min", "5", "--label", "consult")...)
+	if res.code != 0 {
+		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	mustContain(t, "stdout", res.stdout,
+		"out-dir: "+outDir,
+		"fan-out: 2 turns · one prompt · hard cap 5m each",
+		"member codex: model (provider default) · effort (provider default) · out-dir "+filepath.Join(outDir, "codex"),
+		"member claude-opus: model opus · effort (provider default) · out-dir "+filepath.Join(outDir, "claude-opus"),
+		"watch: tail -f",
+		"next: let this command run to completion — it exits once every member is done",
+		"nothing to track per member",
+		"status: ok — all 2 turns returned a result",
+		"member codex: ok · result ",
+		"member claude-opus: ok · result ",
+		"next: Collect the fan-out: envoy collect ",
+	)
+	// A member's stdout block would interleave with its siblings', so the
+	// single-turn coordinates stay in each member's own meta.json.
+	if strings.Contains(res.stdout, "takeover-after-terminal:") {
+		t.Fatalf("member turn blocks must not reach the fan-out's stdout:\n%s", res.stdout)
+	}
+
+	for name, wantProvider := range map[string]string{"codex": "codex", "claude-opus": "claude"} {
+		memberDir := filepath.Join(outDir, name)
+		meta := readMeta(t, memberDir)
+		if meta["status"] != "ok" || meta["provider"] != wantProvider || meta["promptState"] != "accepted" {
+			t.Fatalf("%s meta = status %v provider %v prompt %v", name, meta["status"], meta["provider"], meta["promptState"])
+		}
+		if meta["allowWrite"] != false {
+			t.Fatalf("%s: a fan-out member must be read-only", name)
+		}
+		// Recovery is per member: each carries its own complete follow-up.
+		resume, _ := meta["resumeCommand"].(string)
+		mustContain(t, name+" resumeCommand", resume, "envoy turn", "--provider "+wantProvider, "--resume ")
+		if got := readFile(t, filepath.Join(memberDir, "result.md")); got != "fake provider result" {
+			t.Fatalf("%s result.md = %q", name, got)
+		}
+		if got := readFile(t, filepath.Join(memberDir, "prompt.md")); got != "fake prompt body\n" {
+			t.Fatalf("%s prompt.md = %q", name, got)
+		}
+	}
+	// The shared prompt is recorded once at the fan-out level too, so the
+	// group is self-describing even if a member dir is lost.
+	if got := readFile(t, filepath.Join(outDir, "prompt.md")); got != "fake prompt body\n" {
+		t.Fatalf("group prompt.md = %q", got)
+	}
+
+	var group map[string]any
+	if err := json.Unmarshal([]byte(readFile(t, filepath.Join(outDir, "group.json"))), &group); err != nil {
+		t.Fatalf("group.json: %v", err)
+	}
+	if group["endedAt"] == nil {
+		t.Fatal("group.json must record when the fan-out finished")
+	}
+	members := group["members"].([]any)
+	if len(members) != 2 {
+		t.Fatalf("group.json members = %v", members)
+	}
+	first := members[0].(map[string]any)
+	if first["name"] != "codex" || first["outDir"] != filepath.Join(outDir, "codex") {
+		t.Fatalf("member roster = %v", first)
+	}
+	// The manifest is coordinates only. A member status here would be a second
+	// copy of what meta.json owns, free to drift from the turn it describes.
+	for _, forbidden := range []string{"status", "resultKind", "sessionId"} {
+		if _, ok := first[forbidden]; ok {
+			t.Fatalf("group.json must not mirror member state, found %q in %v", forbidden, first)
+		}
+	}
+
+	locks, _ := os.ReadDir(filepath.Join(e.home, ".local", "state", "envoy", "locks"))
+	if len(locks) != 0 {
+		t.Fatalf("every member's session lock must be released, found %d", len(locks))
+	}
+}
+
+// The case the whole feature exists for: one member answers, the other does
+// not. Exit 6 says both things are true at once, and collection prescribes per
+// member — never a group-wide retry that would re-send an accepted prompt.
+func TestFanPartialOutcomeCollectsPerMember(t *testing.T) {
+	e := newEnv(t).
+		set("ENVOY_FAKE_SCENARIO_CODEX", "success").
+		set("ENVOY_FAKE_SCENARIO_CLAUDE", "init-only-hang")
+	base := t.TempDir()
+	outDir := filepath.Join(base, "20260726-120000-consult")
+	prompt := writePrompt(t, t.TempDir())
+
+	res := runEnvoy(t, e, fanArgs(prompt, outDir, "--with", "codex", "--with", "claude", "--timeout-min", "0.02")...)
+	if res.code != 6 {
+		t.Fatalf("exit = %d, want 6 (partial)\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	mustContain(t, "stdout", res.stdout,
+		"status: partial — 1 of 2 turns returned a result",
+		"member codex: ok · result ",
+		"member claude: timeout — the wall-clock cap elapsed, which is not evidence the provider hung",
+		"licenses nothing about another",
+		"never the whole fan-out",
+	)
+
+	// Discovery finds the fan-out as one entry to act on, not two loose jobs.
+	pending := runEnvoy(t, e, "pending", "--base", base)
+	mustContain(t, "pending stdout", pending.stdout,
+		"pending jobs: 1",
+		"[group] "+outDir,
+		"2 of 2 members still need attention",
+		"codex: terminal status ok has not been collected",
+		"claude: terminal status timeout has not been collected",
+		"next: envoy collect")
+
+	collected := runEnvoy(t, e, "collect", outDir)
+	if collected.code != 0 {
+		t.Fatalf("collect = %d\n%s", collected.code, collected.stderr)
+	}
+	mustContain(t, "collect stdout", collected.stdout,
+		"fan-out: "+outDir,
+		"status: partial — 1 of 2 turns returned a result",
+		"members: codex ok · claude timeout",
+		"prompt: "+filepath.Join(outDir, "prompt.md"),
+		"=== member codex ===",
+		"job: "+filepath.Join(outDir, "codex"),
+		"fake provider result",
+		"=== member claude ===",
+		"status: timeout — the wall-clock cap elapsed",
+		// the timed-out member's own recovery, not the group's
+		"silence is not proof that nothing ran",
+		"envoy turn --provider claude --resume ",
+		"next: the member results above are usable as they are",
+	)
+	// The ok member keeps its own single-turn closing line inside its section.
+	mustContain(t, "collect stdout", collected.stdout, "result.md above is this turn's return value")
+
+	for _, name := range []string{"codex", "claude"} {
+		if readMeta(t, filepath.Join(outDir, name))["collectedAt"] == nil {
+			t.Fatalf("collecting the fan-out must stamp member %s", name)
+		}
+	}
+	pending = runEnvoy(t, e, "pending", "--base", base)
+	mustContain(t, "pending after collect", pending.stdout, "pending jobs: 0")
+}
+
+// One signal stops every member: the fan-out is one job to interrupt, and no
+// member is left running behind a process the caller thinks it stopped.
+func TestFanInterruptStopsEveryMember(t *testing.T) {
+	e := newEnv(t).
+		set("ENVOY_FAKE_SCENARIO", "delayed-success").
+		set("ENVOY_FAKE_START_DELAY_MS", "0").
+		set("ENVOY_FAKE_DELAY_MS", "60000")
+	outDir := filepath.Join(t.TempDir(), "group")
+	prompt := writePrompt(t, t.TempDir())
+
+	cmd := exec.Command(binPath, fanArgs(prompt, outDir, "--with", "codex", "--with", "claude", "--timeout-min", "5")...)
+	cmd.Env = e.build()
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	// Interrupt once both members have provably accepted their prompt.
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if time.Now().After(deadline) {
+			cmd.Process.Kill()
+			t.Fatalf("members never accepted; stdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
+		}
+		accepted := 0
+		for _, name := range []string{"codex", "claude"} {
+			if data, err := os.ReadFile(filepath.Join(outDir, name, "meta.json")); err == nil &&
+				strings.Contains(string(data), `"promptState": "accepted"`) {
+				accepted++
+			}
+		}
+		if accepted == 2 {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	cmd.Process.Signal(syscall.SIGINT)
+	code := 0
+	if ee, ok := cmd.Wait().(*exec.ExitError); ok {
+		code = ee.ExitCode()
+	}
+	if code != 5 {
+		t.Fatalf("exit = %d, want 5\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	mustContain(t, "stdout", stdout.String(),
+		"received SIGINT: stopping all 2 turns",
+		"status: no-result — none of the 2 turns returned a result")
+	for _, name := range []string{"codex", "claude"} {
+		meta := readMeta(t, filepath.Join(outDir, name))
+		if meta["status"] != "interrupted" || meta["interruptionSignal"] != "SIGINT" {
+			t.Fatalf("%s meta = status %v signal %v", name, meta["status"], meta["interruptionSignal"])
+		}
+	}
+}
+
+// The same model dispatched twice is a legitimate fan-out, so members are named
+// for what distinguishes them and a repeat is numbered rather than merged.
+func TestFanDuplicateMembersGetDistinctJobDirs(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	outDir := filepath.Join(t.TempDir(), "group")
+	prompt := writePrompt(t, t.TempDir())
+
+	res := runEnvoy(t, e, fanArgs(prompt, outDir, "--with", "claude:opus", "--with", "claude:opus", "--timeout-min", "5")...)
+	if res.code != 0 {
+		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	mustContain(t, "stdout", res.stdout, "member claude-opus: ok", "member claude-opus-2: ok")
+	for _, name := range []string{"claude-opus", "claude-opus-2"} {
+		if readMeta(t, filepath.Join(outDir, name))["status"] != "ok" {
+			t.Fatalf("%s did not run as its own turn", name)
+		}
+	}
+}
+
+// A turn flag aimed at a fan-out is refused in the fan-out's own terms: each
+// refusal names the alternative, because the caller's next move is a different
+// command, not a different prompt.
+func TestFanRefusesTurnOnlyFlags(t *testing.T) {
+	e := newEnv(t)
+	prompt := writePrompt(t, t.TempDir())
+	both := []string{"--with", "codex", "--with", "claude"}
+	cases := []struct {
+		extra []string
+		want  string
+	}{
+		{[]string{"--allow-write"}, "its members share one working tree"},
+		{[]string{"--resume", "sess-1"}, "a session id names one conversation"},
+		{[]string{"--model", "opus"}, "--model is not available on a fan-out"},
+		{[]string{"--effort", "high"}, "Put it in the member spec instead"},
+		{[]string{"--provider", "codex"}, "--provider is not available on a fan-out"},
+	}
+	for _, c := range cases {
+		args := append([]string{"fan", "--prompt-file", prompt}, both...)
+		res := runEnvoy(t, e, append(args, c.extra...)...)
+		if res.code != 3 {
+			t.Fatalf("%v: exit = %d, want 3\nstderr:\n%s", c.extra, res.code, res.stderr)
+		}
+		mustContain(t, fmt.Sprintf("stderr of %v", c.extra), res.stderr, c.want)
+	}
+
+	specCases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"fan", "--prompt-file", prompt, "--with", "codex"}, "a fan-out needs at least two members"},
+		{[]string{"fan", "--prompt-file", prompt, "--with", "codex", "--with", "gemini"}, "must name provider claude or codex"},
+		{[]string{"fan", "--prompt-file", prompt, "--with", "codex", "--with", "claude:opus:minimal"}, "claude has no 'minimal'"},
+		{[]string{"fan", "--prompt-file", prompt, "--with", "codex", "--with", "claude:opus:high:extra"}, "has too many fields"},
+		{[]string{"fan", "--prompt-file", prompt, "--with", "codex", "--with", "claude", "codex"}, "each member is passed as --with"},
+		{[]string{"fan", "--with", "codex", "--with", "claude"}, "--prompt-file <path> is required"},
+	}
+	for _, c := range specCases {
+		res := runEnvoy(t, e, c.args...)
+		if res.code != 3 {
+			t.Fatalf("%v: exit = %d, want 3\nstderr:\n%s", c.args, res.code, res.stderr)
+		}
+		mustContain(t, fmt.Sprintf("stderr of %v", c.args), res.stderr, c.want)
+	}
+}
+
 // An explicit help request is not a usage error: agents read exit codes.
 //
 // The page is also the tool description a caller reads before driving envoy,
@@ -748,6 +1023,14 @@ func TestHelpIsSelfSufficient(t *testing.T) {
 		"counts healthy work",              // cap semantics
 		"EXIT CODES, AND WHAT EACH ONE LICENSES",
 		"claude: low medium high xhigh max", // rendered from the provider map
+		// the fan-out: what it is for, how a member is spelled, and the two
+		// facts a caller cannot discover from the flags
+		"ONE PROMPT, SEVERAL MODELS",
+		"envoy fan --prompt-file",
+		"--with codex --with claude:opus",
+		"recovery stays per member",
+		"A fan-out is read-only",
+		"6 partial",
 	)
 }
 

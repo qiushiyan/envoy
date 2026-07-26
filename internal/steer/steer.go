@@ -187,3 +187,158 @@ func Stopping() string {
 func SpawnFailed(provider string, err error) string {
 	return fmt.Sprintf("envoy could not start %s: %s", provider, err)
 }
+
+// ---------- fan-out ----------
+//
+// A fan-out is several turns on one prompt, supervised as a single job. Its
+// wording answers one extra question a single turn never raises: what one
+// member's outcome licenses about another. The answer is nothing — members are
+// independent turns, and each carries its own recovery — so every sentence
+// here points the caller back to per-member actions instead of a group-wide
+// retry.
+
+// Fan-out aggregate statuses. Only "ok" is shared with a single turn; the
+// others describe a set, and none of them replaces a member's own status.
+const (
+	FanRunning  = "running"
+	FanOK       = "ok"
+	FanPartial  = "partial"
+	FanNoResult = "no-result"
+)
+
+// fanTally counts what a set of member statuses contains. A member that never
+// reached a terminal status counts as one that returned no result.
+func fanTally(statuses []string) (ok, running, total int) {
+	for _, s := range statuses {
+		switch s {
+		case job.StatusOK:
+			ok++
+		case job.StatusRunning:
+			running++
+		}
+	}
+	return ok, running, len(statuses)
+}
+
+// FanStatus is the aggregate word for a set of member statuses.
+func FanStatus(statuses []string) string {
+	ok, running, total := fanTally(statuses)
+	switch {
+	case running > 0:
+		return FanRunning
+	case total > 0 && ok == total:
+		return FanOK
+	case ok > 0:
+		return FanPartial
+	default:
+		return FanNoResult
+	}
+}
+
+// FanStatusLine renders the aggregate with its gloss, so a caller acting on one
+// word knows how many results exist and where the rest of the truth is.
+func FanStatusLine(statuses []string) string {
+	ok, running, total := fanTally(statuses)
+	switch FanStatus(statuses) {
+	case FanRunning:
+		return fmt.Sprintf("running — %d of %s have not finished, so nothing here is final yet",
+			running, turnCount(total))
+	case FanOK:
+		return fmt.Sprintf("ok — all %s returned a result", turnCount(total))
+	case FanPartial:
+		return fmt.Sprintf("partial — %d of %s returned a result; the rest each carry their own status and next action below",
+			ok, turnCount(total))
+	default:
+		return fmt.Sprintf("no-result — none of the %s returned a result; each carries its own status and next action below",
+			turnCount(total))
+	}
+}
+
+func turnCount(n int) string {
+	if n == 1 {
+		return "1 turn"
+	}
+	return fmt.Sprintf("%d turns", n)
+}
+
+// FanUndispatched glosses a member that never reached a turn of its own: the
+// one fan-out outcome where nothing ran and nothing was changed.
+func FanUndispatched() string {
+	return "never dispatched — envoy rejected or could not start this member, so nothing ran for it"
+}
+
+// FanDispatchNext is the nudge printed the moment a fan-out starts, when the
+// caller is deciding how many things it now has to keep track of. The answer
+// is one.
+func FanDispatchNext(groupDir string) string {
+	return "let this command run to completion — it exits once every member is done — then collect the fan-out once: " +
+		CollectCommand(groupDir) +
+		" · that single command returns every member's result, so there is nothing to track per member"
+}
+
+// FanStopping is what to do while a stop is in flight across every member.
+func FanStopping(signalName string, total int) string {
+	return fmt.Sprintf("received %s: stopping all %s. Wait for this process to exit, then collect the fan-out — "+
+		"a member that had already finished still publishes its result.", signalName, turnCount(total))
+}
+
+// FanNext closes a finished fan-out. It prescribes collection and nothing
+// else: what each member licenses depends on that member's prompt state, which
+// its own section prints.
+func FanNext(groupDir string, statuses []string) string {
+	collect := "Collect the fan-out: " + CollectCommand(groupDir)
+	switch FanStatus(statuses) {
+	case FanRunning:
+		return "This fan-out is still running. Wait for its process to exit, then collect it: " + CollectCommand(groupDir) + "."
+	case FanOK:
+		return collect + " — it prints every member's result in one block."
+	case FanPartial:
+		return collect + " — the members that returned a result are usable as they are, and each member that did not " +
+			"carries its own next action in its section. One member's outcome licenses nothing about another: " +
+			"re-dispatch or resume per member, never the whole fan-out."
+	default:
+		return collect + " — no member returned a result, and each member's section carries the one action to take for it. " +
+			"Whether that member's prompt was accepted is what decides between a safe retry and duplicating work, " +
+			"and the members can differ."
+	}
+}
+
+// FanCollected closes a collection of the whole fan-out, pointing at the
+// payload the way CollectedOK does for a single turn.
+func FanCollected(groupDir string, statuses []string) string {
+	switch FanStatus(statuses) {
+	case FanRunning:
+		return "This fan-out has members still running, so the sections above are not final. Wait for its process to exit, " +
+			"then collect it again: " + CollectCommand(groupDir) + "."
+	case FanOK:
+		return "the member results above are this fan-out's return value — use them in the step that dispatched it."
+	case FanPartial:
+		return "the member results above are usable as they are. Each member that returned none carries its own next " +
+			"action in its section — act on it per member; the members that succeeded need nothing."
+	default:
+		return "no member returned a result. Each section above carries the one action to take for that member, " +
+			"and they can differ — a member whose prompt was never accepted is safe to re-run, one that was accepted is not."
+	}
+}
+
+// FanAllowWriteRefused explains why a fan-out is read-only. Several turns
+// editing one tree race each other, and the engine cannot make that safe.
+func FanAllowWriteRefused() string {
+	return "--allow-write is not available on a fan-out: its members share one working tree, and turns editing the " +
+		"same files concurrently overwrite each other's work. For parallel write work, give each turn its own tree — " +
+		"a git worktree per turn — and dispatch them as separate `envoy turn --allow-write --cwd <tree>` commands."
+}
+
+// FanResumeRefused explains why continuing a conversation is a single-turn
+// operation.
+func FanResumeRefused() string {
+	return "--resume is not available on a fan-out: a session id names one conversation, and a fan-out starts several. " +
+		"Resume the member you mean with `envoy turn --resume <session>` — `envoy collect` prints each member's own resume command."
+}
+
+// FanMemberFlagRefused catches a turn flag aimed at a fan-out, where it would
+// have to mean something different for each member.
+func FanMemberFlagRefused(flag string) string {
+	return fmt.Sprintf("%s is not available on a fan-out, where each member has its own. Put it in the member spec instead: "+
+		"--with provider[:model[:effort]], for example --with codex --with claude:opus:high.", flag)
+}

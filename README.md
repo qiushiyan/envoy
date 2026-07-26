@@ -20,6 +20,7 @@ make install                  # builds to ~/.local/bin/envoy
 
 ```sh
 envoy turn --provider codex --prompt-file brief.md --timeout-min 30 --label consult
+envoy fan --prompt-file brief.md --with codex --with claude:opus   # one prompt, N models
 envoy collect <out-dir>       # print + stamp one job (default: latest for this repo)
 envoy pending [--base DIR]    # discovery-only recovery index after a missed notification
 envoy version
@@ -41,6 +42,15 @@ command. The durable files in the job dir are authoritative:
 | `stderr.log`       | provider stderr                                                 |
 | `last-message.txt` | codex's `-o` recovery surface (codex turns only)                |
 
+`envoy fan` sends one prompt to several turns at once and supervises them as a
+single job — one background command, one completion, one collect. A member is
+`provider[:model[:effort]]`, and each one is an ordinary turn with its own
+session and job dir in a subdirectory named after it, so recovery stays per
+member. The fan-out dir adds `group.json` (the member roster and shared
+settings) and the shared `prompt.md`; `envoy collect <fan-out-dir>` prints every
+member's status and result in one block, split by member name. Fan-outs are
+read-only: `--allow-write` is refused because members share one working tree.
+
 All jobs live in one central store — nothing is ever written inside the
 project tree: `~/.local/state/envoy/jobs/<project-slug>/<stamp>-<label>/`,
 where the slug identifies the project (git root when in a repo, cwd
@@ -50,7 +60,8 @@ store from the current directory alone. Session locks live in
 `~/.local/state/envoy/locks/` — one live turn per session, never auto-reclaimed.
 
 Exit codes: `0` ok · `1` provider failure · `2` infra · `3` usage · `4` timeout
-· `5` interrupted.
+· `5` interrupted · `6` partial (fan-out only: some members returned a result
+and others did not).
 
 ## Design invariants
 
@@ -72,6 +83,10 @@ Exit codes: `0` ok · `1` provider failure · `2` infra · `3` usage · `4` time
   turn was dispatched with.
 - **Process-group lifecycle.** Providers run in their own group; stop
   escalates SIGTERM → SIGKILL and survives grandchildren holding the pipes.
+- **A fan-out supervises unchanged turns.** Members keep every single-turn
+  invariant; the group adds only supervision and presentation. `group.json` is
+  a roster of coordinates, never a copy of member state, and one member's
+  outcome licenses nothing about another.
 
 ## Library
 
@@ -81,6 +96,7 @@ The root package is an embeddable facade over the same engine:
 // TimeoutMin's zero value is the 30-minute safety cap, not "uncapped";
 // running without a cap takes an explicit NoTimeout: true.
 envoy.Turn(envoy.TurnRequest{Provider: "codex", PromptFile: "brief.md"})
+envoy.Fan(envoy.FanRequest{With: []string{"codex", "claude:opus"}, PromptFile: "brief.md"})
 envoy.Collect(outDir, os.Stdout, os.Stderr)
 envoy.Pending(base, os.Stdout, os.Stderr)
 ```

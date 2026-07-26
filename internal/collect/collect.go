@@ -5,6 +5,7 @@
 package collect
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -178,9 +179,19 @@ func groupThousands(n int64) string {
 	return b.String()
 }
 
-// Collect prints one job's block and stamps first terminal collection.
-// Returns a process exit code.
+// Collect prints one job — a single turn, or a whole fan-out with a section per
+// member — and stamps first terminal collection. Returns a process exit code.
 func Collect(outDir string, w, errW io.Writer) int {
+	if job.IsGroupDir(outDir) {
+		return collectGroup(outDir, w, errW)
+	}
+	_, code := collectJob(outDir, w, errW)
+	return code
+}
+
+// collectJob prints one turn and reports the status it published, so a fan-out
+// can aggregate its members without a second reader of meta.json.
+func collectJob(outDir string, w, errW io.Writer) (status string, code int) {
 	metaPath := filepath.Join(outDir, "meta.json")
 	resultPath := filepath.Join(outDir, "result.md")
 	if _, err := os.Stat(metaPath); err != nil {
@@ -190,7 +201,7 @@ func Collect(outDir string, w, errW io.Writer) int {
 			filepath.Join(outDir, "progress.log"),
 			filepath.Join(outDir, "raw.log"),
 			filepath.Join(outDir, "stderr.log"))
-		return job.ExitUsage
+		return "", job.ExitUsage
 	}
 	meta, _, err := job.ReadMetaFile(metaPath)
 	if err != nil {
@@ -200,7 +211,7 @@ func Collect(outDir string, w, errW io.Writer) int {
 			filepath.Join(outDir, "progress.log"),
 			filepath.Join(outDir, "raw.log"),
 			filepath.Join(outDir, "stderr.log"))
-		return job.ExitUsage
+		return "", job.ExitUsage
 	}
 	state := classifyRunning(meta)
 	meta = reconcileAbandoned(outDir, meta, state)
@@ -310,7 +321,7 @@ func Collect(outDir string, w, errW io.Writer) int {
 		} else {
 			fmt.Fprintf(w, "\nnext: %s\n", recoveryForStale(meta, state))
 		}
-		return 0
+		return meta.Status, 0
 	}
 
 	postCollectionAction := ""
@@ -327,6 +338,53 @@ func Collect(outDir string, w, errW io.Writer) int {
 		meta.WriteFile(metaPath)
 	}
 	fmt.Fprintf(w, "\nnext: %s\n", postCollectionAction)
+	return meta.Status, 0
+}
+
+// collectGroup prints a whole fan-out: the aggregate first, then one section
+// per member, split by member name. The member sections are rendered before
+// the header is written because collecting a member can change its status —
+// reconciling an abandoned turn — and an aggregate that disagreed with the
+// sections below it would be worse than no aggregate at all.
+func collectGroup(dir string, w, errW io.Writer) int {
+	gw := job.GroupWorkspace{Dir: dir}
+	group, err := job.ReadGroupFile(gw.GroupPath())
+	if err != nil {
+		fmt.Fprintf(errW,
+			"collect error: %s is unreadable (%s). Each member's job dir under %s is self-contained — collect one directly to see its result.\n",
+			gw.GroupPath(), err, dir)
+		return job.ExitUsage
+	}
+
+	var body bytes.Buffer
+	statuses := make([]string, 0, len(group.Members))
+	labels := make([]string, 0, len(group.Members))
+	for _, m := range group.Members {
+		fmt.Fprintf(&body, "\n=== member %s ===\n", m.Name)
+		status, code := collectJob(m.OutDir, &body, errW)
+		if code != 0 {
+			// The member dir carries no readable meta: the turn never got far
+			// enough to publish one. collectJob has already said so on stderr.
+			status = ""
+			fmt.Fprintf(&body, "status: %s\n", steer.FanUndispatched())
+		}
+		statuses = append(statuses, status)
+		label := status
+		if label == "" {
+			label = "no status"
+		}
+		labels = append(labels, m.Name+" "+label)
+	}
+
+	fmt.Fprintf(w, "fan-out: %s\n", dir)
+	fmt.Fprintf(w, "status: %s\n", steer.FanStatusLine(statuses))
+	fmt.Fprintf(w, "members: %s\n", strings.Join(labels, " · "))
+	fmt.Fprintf(w, "prompt: %s\n", gw.PromptPath())
+	if group.EndedAt == nil {
+		fmt.Fprintf(w, "watch: %s\n", group.WatchCommand)
+	}
+	w.Write(body.Bytes())
+	fmt.Fprintf(w, "\nnext: %s\n", steer.FanCollected(dir, statuses))
 	return 0
 }
 
@@ -349,33 +407,74 @@ type pendingItem struct {
 func pendingJobs(base string) []pendingItem {
 	var pending []pendingItem
 	for _, dir := range JobDirs(base) {
-		metaPath := filepath.Join(dir, "meta.json")
-		if _, err := os.Stat(metaPath); err != nil {
-			continue
-		}
-		meta, raw, err := job.ReadMetaFile(metaPath)
-		if err != nil {
-			pending = append(pending, pendingItem{
-				kind: "corrupt", dir: dir,
-				detail: fmt.Sprintf("meta.json is unreadable: %s", err),
-			})
-			continue
-		}
-		if meta.Status == job.StatusRunning {
-			state := classifyRunning(meta)
-			if state.kind != "live" {
-				pending = append(pending, pendingItem{kind: state.kind, dir: dir, detail: state.detail, meta: meta})
+		if job.IsGroupDir(dir) {
+			if item, ok := pendingGroup(dir); ok {
+				pending = append(pending, item)
 			}
 			continue
 		}
-		if hasNullCollectedAt(raw) {
-			pending = append(pending, pendingItem{
-				kind: "terminal", dir: dir, meta: meta,
-				detail: fmt.Sprintf("terminal status %s has not been collected", meta.Status),
-			})
+		if item, ok := pendingJob(dir); ok {
+			pending = append(pending, item)
 		}
 	}
 	return pending
+}
+
+// pendingJob classifies one turn: still needing attention, or not.
+func pendingJob(dir string) (pendingItem, bool) {
+	metaPath := filepath.Join(dir, "meta.json")
+	if _, err := os.Stat(metaPath); err != nil {
+		return pendingItem{}, false
+	}
+	meta, raw, err := job.ReadMetaFile(metaPath)
+	if err != nil {
+		return pendingItem{
+			kind: "corrupt", dir: dir,
+			detail: fmt.Sprintf("meta.json is unreadable: %s", err),
+		}, true
+	}
+	if meta.Status == job.StatusRunning {
+		state := classifyRunning(meta)
+		if state.kind == "live" {
+			return pendingItem{}, false
+		}
+		return pendingItem{kind: state.kind, dir: dir, detail: state.detail, meta: meta}, true
+	}
+	if hasNullCollectedAt(raw) {
+		return pendingItem{
+			kind: "terminal", dir: dir, meta: meta,
+			detail: fmt.Sprintf("terminal status %s has not been collected", meta.Status),
+		}, true
+	}
+	return pendingItem{}, false
+}
+
+// pendingGroup rolls a fan-out up as the single entry a caller acts on: one
+// collect covers every member. Discovery names which members need attention and
+// why; the prescription for each of them is per member, and printing it is
+// collect's job, not the index's.
+func pendingGroup(dir string) (pendingItem, bool) {
+	group, err := job.ReadGroupFile(job.GroupWorkspace{Dir: dir}.GroupPath())
+	if err != nil {
+		return pendingItem{
+			kind: "corrupt", dir: dir,
+			detail: fmt.Sprintf("group.json is unreadable: %s", err),
+		}, true
+	}
+	var reasons []string
+	for _, m := range group.Members {
+		if item, ok := pendingJob(m.OutDir); ok {
+			reasons = append(reasons, fmt.Sprintf("%s: %s", m.Name, item.detail))
+		}
+	}
+	if len(reasons) == 0 {
+		return pendingItem{}, false
+	}
+	return pendingItem{
+		kind: "group", dir: dir,
+		detail: fmt.Sprintf("%d of %d members still need attention — %s",
+			len(reasons), len(group.Members), strings.Join(reasons, " · ")),
+	}, true
 }
 
 func hasNullCollectedAt(raw map[string]json.RawMessage) bool {
@@ -400,7 +499,7 @@ func Pending(base string, w io.Writer) int {
 		fmt.Fprintf(w, "\n[%s] %s\n", head, item.dir)
 		fmt.Fprintf(w, "why: %s\n", item.detail)
 		switch item.kind {
-		case "terminal":
+		case "terminal", "group":
 			fmt.Fprintf(w, "next: %s\n", steer.CollectCommand(item.dir))
 		case "corrupt":
 			fmt.Fprintf(w, "next: inspect %s, %s, %s, and the working tree; do not infer completion from the damaged metadata\n",
