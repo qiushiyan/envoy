@@ -185,13 +185,15 @@ func Collect(outDir string, w, errW io.Writer) int {
 	if job.IsGroupDir(outDir) {
 		return collectGroup(outDir, w, errW)
 	}
-	_, code := collectJob(outDir, w, errW)
+	_, code := collectJob(outDir, w, errW, true)
 	return code
 }
 
 // collectJob prints one turn and reports the status it published, so a fan-out
-// can aggregate its members without a second reader of meta.json.
-func collectJob(outDir string, w, errW io.Writer) (status string, code int) {
+// can aggregate its members without a second reader of meta.json. showGit is
+// false for a member of a fan-out, where the reviewed range belongs to the
+// whole fan-out and is printed once above the members rather than per member.
+func collectJob(outDir string, w, errW io.Writer, showGit bool) (status string, code int) {
 	metaPath := filepath.Join(outDir, "meta.json")
 	resultPath := filepath.Join(outDir, "result.md")
 	if _, err := os.Stat(metaPath); err != nil {
@@ -296,16 +298,8 @@ func collectJob(outDir string, w, errW io.Writer) (status string, code int) {
 		fmt.Fprintf(w, "collected: %s\n", *meta.CollectedAt)
 	}
 
-	if meta.GitBaseline != nil {
-		baseline := *meta.GitBaseline
-		fmt.Fprintf(w, "\n--- git since baseline %s (in %s) ---\n", baseline, meta.Cwd)
-		fmt.Fprintln(w, orDefault(gitx.Run(meta.Cwd, "log", baseline+"..HEAD", "--oneline"), "(no commits)"))
-		fmt.Fprintln(w, orDefault(gitx.Run(meta.Cwd, "diff", baseline, "--stat"), "(no diff)"))
-		if dirty := gitx.Run(meta.Cwd, "status", "--short"); dirty != "" {
-			fmt.Fprintf(w, "dirty:\n%s\n", dirty)
-		} else {
-			fmt.Fprintln(w, "tree clean")
-		}
+	if meta.GitBaseline != nil && showGit {
+		printGitSinceBaseline(w, meta.Cwd, *meta.GitBaseline)
 	}
 
 	fmt.Fprintln(w, "\n--- result.md ---")
@@ -361,7 +355,7 @@ func collectGroup(dir string, w, errW io.Writer) int {
 	labels := make([]string, 0, len(group.Members))
 	for _, m := range group.Members {
 		fmt.Fprintf(&body, "\n=== member %s ===\n", m.Name)
-		status, code := collectJob(m.OutDir, &body, errW)
+		status, code := collectJob(m.OutDir, &body, errW, false)
 		if code != 0 {
 			// The member dir carries no readable meta: the turn never got far
 			// enough to publish one. collectJob has already said so on stderr.
@@ -383,9 +377,27 @@ func collectGroup(dir string, w, errW io.Writer) int {
 	if group.EndedAt == nil {
 		fmt.Fprintf(w, "watch: %s\n", group.WatchCommand)
 	}
+	// Every member reviewed the same range, so it is reported once here rather
+	// than repeated under each of them.
+	if group.GitBaseline != nil {
+		printGitSinceBaseline(w, group.Cwd, *group.GitBaseline)
+	}
 	w.Write(body.Bytes())
 	fmt.Fprintf(w, "\nnext: %s\n", steer.FanCollected(dir, statuses))
 	return 0
+}
+
+// printGitSinceBaseline shows what changed in the tree since a turn's anchor:
+// the commits, the diffstat, and whether anything is still uncommitted.
+func printGitSinceBaseline(w io.Writer, cwd, baseline string) {
+	fmt.Fprintf(w, "\n--- git since baseline %s (in %s) ---\n", baseline, cwd)
+	fmt.Fprintln(w, orDefault(gitx.Run(cwd, "log", baseline+"..HEAD", "--oneline"), "(no commits)"))
+	fmt.Fprintln(w, orDefault(gitx.Run(cwd, "diff", baseline, "--stat"), "(no diff)"))
+	if dirty := gitx.Run(cwd, "status", "--short"); dirty != "" {
+		fmt.Fprintf(w, "dirty:\n%s\n", dirty)
+	} else {
+		fmt.Fprintln(w, "tree clean")
+	}
 }
 
 func orDefault(v, fallback string) string {

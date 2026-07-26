@@ -824,7 +824,8 @@ func TestFanPartialOutcomeCollectsPerMember(t *testing.T) {
 	outDir := filepath.Join(base, "20260726-120000-consult")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, fanArgs(prompt, outDir, "--with", "codex", "--with", "claude", "--timeout-min", "0.02")...)
+	res := runEnvoy(t, e, fanArgs(prompt, outDir, "--with", "codex", "--with", "claude",
+		"--baseline", "deadbeef", "--timeout-min", "0.02")...)
 	if res.code != 6 {
 		t.Fatalf("exit = %d, want 6 (partial)\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
@@ -867,6 +868,11 @@ func TestFanPartialOutcomeCollectsPerMember(t *testing.T) {
 	)
 	// The ok member keeps its own single-turn closing line inside its section.
 	mustContain(t, "collect stdout", collected.stdout, "result.md above is this turn's return value")
+	// Every member reviewed the same range, so the diff is reported once for the
+	// fan-out — repeating it per member would bury the findings in duplicates.
+	if n := strings.Count(collected.stdout, "git since baseline deadbeef"); n != 1 {
+		t.Fatalf("the reviewed range must print once per fan-out, got %d", n)
+	}
 
 	for _, name := range []string{"codex", "claude"} {
 		if readMeta(t, filepath.Join(outDir, name))["collectedAt"] == nil {
