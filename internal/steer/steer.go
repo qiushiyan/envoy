@@ -418,6 +418,35 @@ func FanResumeSessionHeld(member, conflict string) string {
 		member, strings.TrimRight(conflict, ". \t\n")+".")
 }
 
+// FanResumeFromNoGroup rejects a --resume-from path that holds no fan-out.
+func FanResumeFromNoGroup(dir string) string {
+	return fmt.Sprintf("--resume-from %s: no fan-out found there (no group.json). Pass the fan-out's out-dir printed at dispatch", dir)
+}
+
+// FanResumeFromUnreadableManifest rejects a fan-out whose manifest cannot be
+// parsed — nothing about its roster can be trusted, so nothing is dispatched.
+func FanResumeFromUnreadableManifest(dir string, err error) string {
+	return fmt.Sprintf("--resume-from %s: group.json is unreadable (%s)", dir, err)
+}
+
+// FanResumeFromEmptyManifest rejects a manifest that names no members.
+func FanResumeFromEmptyManifest(dir string) string {
+	return fmt.Sprintf("--resume-from %s: the manifest lists no members", dir)
+}
+
+// FanUndeliveredResults closes a group collection in which a member finished
+// ok but its result body never reached the caller — the group must not claim
+// every result above is usable when one of them was never printed.
+func FanUndeliveredResults(members []string) string {
+	noun := "member"
+	if len(members) > 1 {
+		noun = "members"
+	}
+	return fmt.Sprintf("not every result above was delivered: %s %s finished ok but the result body could not be read, "+
+		"and that section carries the recovery. Delivered results are usable as they are; act on the rest per member.",
+		noun, strings.Join(members, ", "))
+}
+
 // FanResumeCommand is the complete command that continues every member of this
 // fan-out, mirroring Turn.ResumeCommand: settings carried, prompt file left as
 // the placeholder a follow-up must fill.

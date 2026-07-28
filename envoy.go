@@ -280,14 +280,14 @@ func resumableMembers(dir string) ([]fan.Member, *job.Group, string) {
 		if cmd, isTurn := collect.TurnResume(dir); isTurn {
 			return nil, nil, steer.FanResumeFromNotAFanOut(dir, cmd)
 		}
-		return nil, nil, fmt.Sprintf("--resume-from %s: no fan-out found there (no group.json). Pass the fan-out's out-dir printed at dispatch", dir)
+		return nil, nil, steer.FanResumeFromNoGroup(dir)
 	}
 	state, err := collect.InspectFanResume(dir)
 	if err != nil {
-		return nil, nil, fmt.Sprintf("--resume-from %s: group.json is unreadable (%s)", dir, err)
+		return nil, nil, steer.FanResumeFromUnreadableManifest(dir, err)
 	}
 	if len(state.Members) == 0 && len(state.Blockers) == 0 {
-		return nil, nil, fmt.Sprintf("--resume-from %s: the manifest lists no members", dir)
+		return nil, nil, steer.FanResumeFromEmptyManifest(dir)
 	}
 	if len(state.Blockers) > 0 {
 		reasons := make([]string, len(state.Blockers))

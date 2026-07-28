@@ -203,15 +203,17 @@ func Collect(outDir string, mode Mode, w, errW io.Writer) int {
 	if job.IsGroupDir(outDir) {
 		return collectGroup(outDir, mode, w, errW)
 	}
-	_, code := collectJob(outDir, mode, w, errW, true)
+	_, _, code := collectJob(outDir, mode, w, errW, true)
 	return code
 }
 
-// collectJob prints one turn and reports the meta it published, so a fan-out
-// can aggregate its members without a second reader of meta.json. showGit is
-// false for a member of a fan-out, where the reviewed range belongs to the
-// whole fan-out and is printed once above the members rather than per member.
-func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (collected *job.Meta, code int) {
+// collectJob prints one turn and reports the meta it published plus whether
+// an ok payload failed to reach the output, so a fan-out can aggregate its
+// members — status and delivery both — without a second reader of meta.json.
+// showGit is false for a member of a fan-out, where the reviewed range
+// belongs to the whole fan-out and is printed once above the members rather
+// than per member.
+func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (collected *job.Meta, okUndelivered bool, code int) {
 	metaPath := filepath.Join(outDir, "meta.json")
 	resultPath := filepath.Join(outDir, "result.md")
 	if _, err := os.Stat(metaPath); err != nil {
@@ -221,7 +223,7 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 			filepath.Join(outDir, "progress.log"),
 			filepath.Join(outDir, "raw.log"),
 			filepath.Join(outDir, "stderr.log"))
-		return nil, job.ExitUsage
+		return nil, false, job.ExitUsage
 	}
 	meta, _, err := job.ReadMetaFile(metaPath)
 	if err != nil {
@@ -231,7 +233,7 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 			filepath.Join(outDir, "progress.log"),
 			filepath.Join(outDir, "raw.log"),
 			filepath.Join(outDir, "stderr.log"))
-		return nil, job.ExitUsage
+		return nil, false, job.ExitUsage
 	}
 	state := classifyRunning(meta)
 	meta = reconcileAbandoned(outDir, meta, state)
@@ -244,7 +246,7 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 		if data, err := os.ReadFile(resultPath); err == nil {
 			fmt.Fprintln(w, string(data))
 			stampCollected(metaPath, meta, steer.CollectedOK())
-			return meta, 0
+			return meta, false, 0
 		}
 	}
 
@@ -348,12 +350,12 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 		} else {
 			fmt.Fprintf(w, "\nnext: %s\n", recoveryForStale(meta, state))
 		}
-		return meta, 0
+		return meta, false, 0
 	}
 
 	if mode == ModeStatusOnly {
 		fmt.Fprintf(w, "\nnext: %s\n", steer.StatusOnlyNext(outDir))
-		return meta, 0
+		return meta, false, 0
 	}
 
 	// An ok turn's deliverable is its payload; a non-ok turn's is the status
@@ -361,7 +363,7 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 	// an ok turn whose result.md cannot be read stays owed.
 	if meta.Status == job.StatusOK && !resultDelivered {
 		fmt.Fprintf(w, "\nnext: %s\n", steer.OkResultUnreadable(outDir))
-		return meta, 0
+		return meta, true, 0
 	}
 
 	postCollectionAction := ""
@@ -374,7 +376,7 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 	}
 	stampCollected(metaPath, meta, postCollectionAction)
 	fmt.Fprintf(w, "\nnext: %s\n", postCollectionAction)
-	return meta, 0
+	return meta, false, 0
 }
 
 // stampCollected marks first terminal collection: the result body has actually
@@ -406,10 +408,11 @@ func collectGroup(dir string, mode Mode, w, errW io.Writer) int {
 	var body bytes.Buffer
 	statuses := make([]string, 0, len(group.Members))
 	labels := make([]string, 0, len(group.Members))
+	var undelivered []string
 	resumable := len(group.Members) > 0
 	for _, m := range group.Members {
 		fmt.Fprintf(&body, "\n=== member %s ===\n", m.Name)
-		meta, code := collectJob(m.OutDir, mode, &body, errW, false)
+		meta, okUndelivered, code := collectJob(m.OutDir, mode, &body, errW, false)
 		status := ""
 		if code != 0 {
 			// The member dir carries no readable meta: the turn never got far
@@ -417,6 +420,9 @@ func collectGroup(dir string, mode Mode, w, errW io.Writer) int {
 			fmt.Fprintf(&body, "status: %s\n", steer.FanUndispatched())
 		} else {
 			status = meta.Status
+		}
+		if okUndelivered {
+			undelivered = append(undelivered, m.Name)
 		}
 		if _, blocked := memberResumeBlocker(meta); blocked {
 			resumable = false
@@ -429,13 +435,23 @@ func collectGroup(dir string, mode Mode, w, errW io.Writer) int {
 		labels = append(labels, m.Name+" "+label)
 	}
 
+	// The group's closing aggregates delivery alongside status: a member that
+	// reports ok while its payload never printed must not be folded into
+	// "every result above is usable".
+	closing := func() string {
+		if len(undelivered) > 0 {
+			return steer.FanUndeliveredResults(undelivered)
+		}
+		return steer.FanCollected(dir, statuses)
+	}
+
 	// Result-only keeps the aggregate line and the member split — attribution
 	// is the point of a fan-out — and drops the coordinate preamble.
 	if mode == ModeResultOnly {
 		fmt.Fprintf(w, "status: %s\n", steer.FanStatusLine(statuses))
 		w.Write(body.Bytes())
-		if steer.FanStatus(statuses) != steer.FanOK {
-			fmt.Fprintf(w, "\nnext: %s\n", steer.FanCollected(dir, statuses))
+		if len(undelivered) > 0 || steer.FanStatus(statuses) != steer.FanOK {
+			fmt.Fprintf(w, "\nnext: %s\n", closing())
 		}
 		return 0
 	}
@@ -464,7 +480,7 @@ func collectGroup(dir string, mode Mode, w, errW io.Writer) int {
 	if mode == ModeStatusOnly {
 		fmt.Fprintf(w, "\nnext: %s\n", steer.StatusOnlyNext(dir))
 	} else {
-		fmt.Fprintf(w, "\nnext: %s\n", steer.FanCollected(dir, statuses))
+		fmt.Fprintf(w, "\nnext: %s\n", closing())
 	}
 	return 0
 }

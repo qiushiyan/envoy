@@ -1416,3 +1416,44 @@ func TestCollectDoesNotStampAnOkTurnWithoutItsResult(t *testing.T) {
 		}
 	}
 }
+
+// A fan-out's closing line may not claim every result is usable while an ok
+// member's payload never reached the caller: delivery, not status, is what
+// the group's own next action must aggregate.
+func TestFanCollectFlagsUndeliveredOkResult(t *testing.T) {
+	e := newEnv(t)
+	dir := filepath.Join(t.TempDir(), "group")
+	codexDir := filepath.Join(dir, "codex")
+	opusDir := filepath.Join(dir, "claude-opus")
+	for _, d := range []string{codexDir, opusDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cwd := t.TempDir()
+	group := fmt.Sprintf(`{"schemaVersion":1,"startedAt":"2026-07-28T00:00:00.000Z","endedAt":"2026-07-28T00:05:00.000Z","cwd":%q,"promptFile":%q,"label":null,"timeoutMin":5,"gitBaseline":null,"outDir":%q,"watchCommand":"","supervisorPid":1,"members":[{"name":"codex","provider":"codex","model":null,"effort":null,"outDir":%q},{"name":"claude-opus","provider":"claude","model":"opus","effort":null,"outDir":%q}]}`,
+		cwd, filepath.Join(dir, "prompt.md"), dir, codexDir, opusDir)
+	if err := os.WriteFile(filepath.Join(dir, "group.json"), []byte(group), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	okMeta := `{"schemaVersion":4,"status":"ok","provider":"%s","sessionId":"sess-%s","promptState":"accepted","timeoutMin":5,"collectedAt":null}`
+	os.WriteFile(filepath.Join(codexDir, "meta.json"), []byte(fmt.Sprintf(okMeta, "codex", "a")), 0o644)
+	os.WriteFile(filepath.Join(opusDir, "meta.json"), []byte(fmt.Sprintf(okMeta, "claude", "b")), 0o644)
+	// codex delivered; claude-opus reports ok but its payload is gone.
+	os.WriteFile(filepath.Join(codexDir, "result.md"), []byte("codex answer"), 0o644)
+
+	res := runEnvoy(t, e, "collect", dir)
+	if res.code != 0 {
+		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	if strings.Contains(res.stdout, "the member results above are this fan-out") {
+		t.Fatalf("group closing claims usable results over an undelivered payload:\n%s", res.stdout)
+	}
+	mustContain(t, "stdout", res.stdout, "could not be read")
+	if readMeta(t, opusDir)["collectedAt"] != nil {
+		t.Fatal("the undelivered member must stay uncollected")
+	}
+	if readMeta(t, codexDir)["collectedAt"] == nil {
+		t.Fatal("the delivered member must stamp as usual")
+	}
+}
