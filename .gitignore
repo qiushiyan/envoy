@@ -1,5 +1,6 @@
 # local build artifact (make install builds elsewhere)
 /envoy
 
-# session worktrees and local claude state
-.claude/
+# session worktrees and local claude state — but project skills are tracked
+.claude/*
+!.claude/skills/
