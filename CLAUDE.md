@@ -8,6 +8,8 @@ envoy runs **one headless AI-session turn** (the `claude` or `codex` CLI) as a s
 
 `envoy fan` runs one prompt on several turns as a single job, and `fan --resume-from` continues a finished fan-out as a new round. Either way it is **a supervisor over unchanged turns, not a second engine**: each member is an ordinary turn in its own subdirectory, and the group adds only supervision and presentation. Anything that would give a fan-out its own turn semantics belongs in a caller.
 
+`envoy steer` routes a supplemental prompt ("forgot to mention X") for a dispatched job. It never delivers into a live turn — no provider accepts input into one: claude's streaming input queues it as a separate turn, codex exec reads stdin once at dispatch (both verified live, see DESIGN.md 2026-07-28) — so its whole contract is the honest report: "not delivered", why, and the runnable follow-up command with the supplement file already filled into the prompt slot. It reads without mutating anything.
+
 It ships as a library (root package `envoy`) and a thin CLI (`cmd/envoy`). **Zero third-party dependencies is a deliberate constraint** — the Go stdlib covers this domain; keep `go.mod` empty.
 
 [DESIGN.md](DESIGN.md) records the why — rejected alternatives, settled non-goals, and the evidence log of paid-for lessons. Read it before proposing a behavior change; update its log when an incident teaches something new. The `/usage-lab` skill mines real usage for the next improvements.
@@ -27,9 +29,9 @@ Integration tests need `node`: `tests/` builds a **race-instrumented** binary an
 
 ## Architecture
 
-Flow: `cmd/envoy` (flags only) → `envoy.go` facade (validation, usage errors) → `internal/runner` (lifecycle) ↔ `internal/provider` (drivers) → `internal/job` (artifacts). `internal/collect` reads what the runner wrote; `internal/steer` words everything either of them says to the caller; `internal/fan` sits beside the runner — it starts N runs and reports them as a set, knowing nothing about the turn lifecycle.
+Flow: `cmd/envoy` (flags only) → `envoy.go` facade (validation, usage errors) → `internal/runner` (lifecycle) ↔ `internal/provider` (drivers) → `internal/job` (artifacts). `internal/collect` reads what the runner wrote (collect, pending, steer); `internal/prose` words everything either of them says to the caller; `internal/fan` sits beside the runner — it starts N runs and reports them as a set, knowing nothing about the turn lifecycle.
 
-- **`internal/steer` owns every sentence addressed to the caller** — one situation, one wording, the whole agent-facing vocabulary reviewable in one file. Everyone else contributes observations (typed fields, cause strings), never prose.
+- **`internal/prose` owns every sentence addressed to the caller** — one situation, one wording, the whole agent-facing vocabulary reviewable in one file. Everyone else contributes observations (typed fields, cause strings), never prose. (The package was `internal/steer` until the steer command took the name.)
 - **`internal/provider` is the extensibility seam.** A driver owns argv/env and translates the provider's raw stream into a small set of semantic events; the runner consumes only those and **never branches on provider name**. Adding a provider = one driver file + registration.
 - **`internal/runner` is a single-threaded state machine.** One event-loop goroutine owns all `run` state; helper goroutines only send into its channels — never mutate `run` from another goroutine; route through `callCh`. The runner is also instance-clean (no package-level state), which is what lets a fan-out run N of them in one process.
 - **Process exit and stream EOF are separate observations, by design.** A provider grandchild can outlive the CLI and hold the pipes open, so the whole tree runs in its own process group with an exit → grace → SIGKILL escalation.
@@ -39,11 +41,11 @@ Flow: `cmd/envoy` (flags only) → `envoy.go` facade (validation, usage errors) 
 
 Stdout blocks, progress vocabulary, recovery prose, exit codes (0 ok · 1 failed · 2 infra · 3 usage · 4 timeout · 5 interrupted · 6 partial, fan-out only), and the job-dir file set are a **caller interface, frequently consumed by an AI agent** — the prose is a prompt surface, and integration tests assert exact strings. Changing wording is a contract change, not cosmetics.
 
-Three rules govern that prose, all enforced in `internal/steer`:
+Three rules govern that prose, all enforced in `internal/prose`:
 
 - **Say what happened, what it rules out, and the one action to take next** — every non-ok status carries its gloss.
 - **Prescribe only what the engine observed.** Recovery follows from prompt state, the only thing the engine can prove: `accepted` → resume, never redispatch; `not_started` → one identical retry; `unknown` → absence of output is not proof of no work.
-- **Hand over runnable commands, not fragments**, carrying the settings the turn was dispatched with — with the prompt file left as a placeholder, because a resumed turn needs a NEW prompt. The engine names no particular caller harness.
+- **Hand over runnable commands, not fragments**, carrying the settings the turn was dispatched with — with the prompt file left as a placeholder, because a resumed turn needs a NEW prompt. The one closer of that slot is `envoy steer`, whose supplement file already exists and is filled in. The engine names no particular caller harness.
 
 Behavioral invariants the code encodes deliberately (each has a test):
 
@@ -52,6 +54,7 @@ Behavioral invariants the code encodes deliberately (each has a test):
 - **Session locks are never auto-reclaimed** — a dead runner can leave a live orphan provider, so recovery inspects first. One live turn per session id, including ids that only arrive mid-stream.
 - **The timeout is a wall-clock deadline, not a monotonic timer** (laptop sleep must not stretch the cap) — a safety cap, not a stall detector.
 - **`collectedAt` means the result reached a caller.** `--status-only` and `pending` never stamp; an ok turn whose `result.md` will not read stays owed.
+- **Steer answers, never delivers.** Every steer report opens "not delivered"; a non-ok terminal job is routed to collect, not handed a resume its recovery has not licensed; a fan-out gets per-member steer lines. Steer stamps nothing, reconciles nothing, and rewrites nothing.
 - **One member's outcome licenses nothing about another.** `6 partial` says results landed *and* a member needs a decision; recovery is per member — no group-wide retry — and `--allow-write` is refused on a fan-out because members share one tree. A round is not recovery: `fan --resume-from` continues every member on one NEW prompt as a new fan-out, whole or refused, reserving every member's session before any turn spawns.
 
 ## Provider CLI Drift

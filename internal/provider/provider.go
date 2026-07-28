@@ -78,7 +78,7 @@ type ExitInfo struct {
 // Outcome is a driver's normal-path conclusion after process end. A driver
 // reports what it observed — the cause, and any cause-specific fix the caller
 // must apply first — and never the recovery prescription itself: that follows
-// from the prompt state and is worded once in internal/steer.
+// from the prompt state and is worded once in internal/prose.
 type Outcome struct {
 	Status              string // job.StatusOK / StatusFailed / StatusInfra
 	Text                string // final text (ok only)

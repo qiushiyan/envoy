@@ -9,7 +9,7 @@ import (
 
 	"github.com/qiushiyan/envoy/internal/gitx"
 	"github.com/qiushiyan/envoy/internal/job"
-	"github.com/qiushiyan/envoy/internal/steer"
+	"github.com/qiushiyan/envoy/internal/prose"
 	"github.com/qiushiyan/envoy/internal/text"
 )
 
@@ -54,7 +54,7 @@ func (r *run) initMeta() {
 		RunnerInstanceID: r.instance,
 		PromptState:      job.PromptUnknown,
 		ResultKind:       job.ResultNone,
-		NextAction:       steer.RunningNext(r.ws.Dir, r.ws.WatchCommand()),
+		NextAction:       prose.RunningNext(r.ws.Dir, r.ws.WatchCommand()),
 	}
 	r.setSession(r.driver.PreflightSessionID())
 }
@@ -91,14 +91,14 @@ func (r *run) printStartupBlock() {
 		fmt.Fprintf(w, "session: %s\n", r.session())
 		fmt.Fprintf(w, "takeover-after-terminal: %s\n", r.driver.Takeover())
 	}
-	fmt.Fprintf(w, "next: %s\n", steer.DispatchNext(r.ws.Dir))
+	fmt.Fprintf(w, "next: %s\n", prose.DispatchNext(r.ws.Dir))
 }
 
 type finishArgs struct {
 	status              string
 	text                string // final text, ok only
 	errorText           string
-	recovery            string // the prescription; steer owns its wording
+	recovery            string // the prescription; prose owns its wording
 	partial             *string
 	tokens              *job.Tokens
 	costUSD             *float64
@@ -121,13 +121,13 @@ func (r *run) finish(f finishArgs) {
 		}
 	}
 	endedAt := time.Now()
-	collectAction := steer.CollectThisJob(r.ws.Dir)
+	collectAction := prose.CollectThisJob(r.ws.Dir)
 
 	var recoveryAction *string
 	if f.status != job.StatusOK {
 		recovery := f.recovery
 		if recovery == "" {
-			recovery = steer.Recovery(r.meta.PromptState, r.resumeCommand(), "")
+			recovery = prose.Recovery(r.meta.PromptState, r.resumeCommand(), "")
 		}
 		recoveryAction = job.Ptr(recovery)
 	}
@@ -183,7 +183,7 @@ func (r *run) finish(f finishArgs) {
 
 	w := r.opts.Stdout
 	fmt.Fprintln(w, "")
-	fmt.Fprintf(w, "status: %s\n", steer.StatusLine(f.status))
+	fmt.Fprintf(w, "status: %s\n", prose.StatusLine(f.status))
 	fmt.Fprintf(w, "result: %s\n", r.ws.ResultPath())
 	fmt.Fprintf(w, "meta: %s\n", r.ws.MetaPath())
 	session := r.session()

@@ -5,15 +5,15 @@ import (
 	"path/filepath"
 
 	"github.com/qiushiyan/envoy/internal/job"
-	"github.com/qiushiyan/envoy/internal/steer"
+	"github.com/qiushiyan/envoy/internal/prose"
 )
 
 // ResumeBlocker is one member standing between a fan-out and a set-level
-// resume, classified in steer's vocabulary so every surface words it the
+// resume, classified in prose's vocabulary so every surface words it the
 // same way.
 type ResumeBlocker struct {
 	Member string
-	Kind   steer.FanResumeBlockerKind
+	Kind   prose.FanResumeBlockerKind
 	Detail string // the read error for an unreadable meta; "" otherwise
 }
 
@@ -40,16 +40,16 @@ type FanResumeState struct {
 // resume line so the two can never advertise different sets. A recorded
 // session-lock conflict blocks the set exactly as it suppresses that
 // member's own resume command: the session may belong to another job.
-func memberResumeBlocker(meta *job.Meta) (steer.FanResumeBlockerKind, bool) {
+func memberResumeBlocker(meta *job.Meta) (prose.FanResumeBlockerKind, bool) {
 	switch {
 	case meta == nil:
-		return steer.FanBlockerUnreadableMeta, true
+		return prose.FanBlockerUnreadableMeta, true
 	case meta.Status == job.StatusRunning:
-		return steer.FanBlockerRunning, true
+		return prose.FanBlockerRunning, true
 	case meta.SessionLockConflict != nil:
-		return steer.FanBlockerLockConflict, true
+		return prose.FanBlockerLockConflict, true
 	case meta.SessionID == nil:
-		return steer.FanBlockerNoSession, true
+		return prose.FanBlockerNoSession, true
 	}
 	return "", false
 }

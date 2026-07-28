@@ -17,6 +17,7 @@ make install                  # builds to ~/.local/bin/envoy
 envoy turn --provider codex --prompt-file brief.md --timeout-min 30 --label consult
 envoy fan --prompt-file brief.md --with codex --with claude:opus   # one prompt, N models
 envoy collect <out-dir>       # print + stamp one job (default: latest for this repo)
+envoy steer --prompt-file more.md [out-dir]   # route a supplement to a dispatched job
 envoy pending [--base DIR]    # discovery-only recovery index after a missed notification
 envoy version
 ```
@@ -45,6 +46,15 @@ member. The fan-out dir adds `group.json` (the member roster and shared
 settings) and the shared `prompt.md`; `envoy collect <fan-out-dir>` prints every
 member's status and result in one block, split by member name. Fan-outs are
 read-only: `--allow-write` is refused because members share one working tree.
+
+`envoy steer` answers the "forgot to mention X" moment after a dispatch. No
+provider accepts input into a running turn — claude's streaming input would
+queue the supplement as a separate turn, codex reads its instructions once at
+dispatch — so nothing is ever injected: steer inspects the job and replies
+"not delivered" plus the one command that does carry the supplement, the
+follow-up turn continuing the same session with your file already in its
+`--prompt-file` slot. On a fan-out it hands each member its own steer line. It
+reads without mutating and never marks anything collected.
 
 All jobs live in one central store — nothing is ever written inside the
 project tree: `~/.local/state/envoy/jobs/<project-slug>/<stamp>-<label>/`,
@@ -82,6 +92,10 @@ and others did not).
   invariant; the group adds only supervision and presentation. `group.json` is
   a roster of coordinates, never a copy of member state, and one member's
   outcome licenses nothing about another.
+- **Steer answers, never delivers.** No provider accepts input into a live
+  turn, so `envoy steer` hands over the follow-up command that carries the
+  supplement instead of pretending to inject it (DESIGN.md, 2026-07-28, has
+  the verified provider research behind this).
 
 ## Library
 
@@ -93,12 +107,13 @@ The root package is an embeddable facade over the same engine:
 envoy.Turn(envoy.TurnRequest{Provider: "codex", PromptFile: "brief.md"})
 envoy.Fan(envoy.FanRequest{With: []string{"codex", "claude:opus"}, PromptFile: "brief.md"})
 envoy.Collect(outDir, os.Stdout, os.Stderr)
+envoy.Steer(envoy.SteerRequest{PromptFile: "more.md"})
 envoy.Pending(base, os.Stdout, os.Stderr)
 ```
 
 Providers implement `internal/provider.Driver`; adding one is a single driver
 file, the lifecycle never changes. Everything envoy says to its caller is
-worded in `internal/steer` — one situation, one wording.
+worded in `internal/prose` — one situation, one wording.
 
 ## Development
 

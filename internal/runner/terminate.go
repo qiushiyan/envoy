@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/qiushiyan/envoy/internal/job"
+	"github.com/qiushiyan/envoy/internal/prose"
 	"github.com/qiushiyan/envoy/internal/provider"
-	"github.com/qiushiyan/envoy/internal/steer"
 )
 
 // afterFunc schedules fn onto the event loop, so timer callbacks share the
@@ -44,7 +44,7 @@ func (r *run) requestTermination(kind, signalName string) {
 		if kind == "interrupted" {
 			m.InterruptionSignal = job.Ptr(signalName)
 		}
-		m.NextAction = steer.Stopping()
+		m.NextAction = prose.Stopping()
 	})
 	reason := signalName
 	if kind == "timeout" {
@@ -148,7 +148,7 @@ func (r *run) onChildDone(exit exitResult) {
 			status: job.StatusInfra,
 			errorText: fmt.Sprintf("%s reported a session id that another turn already holds, so this turn was stopped.",
 				capitalize(r.opts.Provider)),
-			recovery:            steer.LockedSession(*r.meta.SessionLockConflict, false),
+			recovery:            prose.LockedSession(*r.meta.SessionLockConflict, false),
 			partial:             ev.Partial,
 			tokens:              ev.Tokens,
 			promptState:         job.PromptAccepted,
@@ -175,7 +175,7 @@ func (r *run) onChildDone(exit exitResult) {
 			status: job.StatusInfra,
 			errorText: fmt.Sprintf("%s was killed by signal %s, which envoy did not send.",
 				r.opts.Provider, *exit.signal),
-			recovery:            steer.Recovery(promptState, r.resumeCommand(), ""),
+			recovery:            prose.Recovery(promptState, r.resumeCommand(), ""),
 			partial:             ev.Partial,
 			tokens:              ev.Tokens,
 			costUSD:             ev.CostUSD,
@@ -198,14 +198,14 @@ func (r *run) onChildDone(exit exitResult) {
 		r.setSession(outcome.SessionID)
 	}
 	// The driver reported the cause; the prescription follows from the prompt
-	// state it observed, worded once in steer.
+	// state it observed, worded once in prose.
 	recovery := ""
 	if outcome.Status != job.StatusOK {
 		promptState := outcome.PromptState
 		if promptState == "" {
 			promptState = r.meta.PromptState
 		}
-		recovery = steer.Recovery(promptState, r.resumeCommand(), outcome.Remedy)
+		recovery = prose.Recovery(promptState, r.resumeCommand(), outcome.Remedy)
 	}
 	r.finish(finishArgs{
 		status:              outcome.Status,
@@ -255,7 +255,7 @@ func (r *run) finishAfterStop(exit exitResult) {
 	r.finish(finishArgs{
 		status:              status,
 		errorText:           stopped,
-		recovery:            steer.Recovery(promptState, r.resumeCommand(), ""),
+		recovery:            prose.Recovery(promptState, r.resumeCommand(), ""),
 		partial:             ev.Partial,
 		tokens:              ev.Tokens,
 		costUSD:             ev.CostUSD,

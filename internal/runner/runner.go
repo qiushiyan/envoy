@@ -22,8 +22,8 @@ import (
 
 	"github.com/qiushiyan/envoy/internal/job"
 	"github.com/qiushiyan/envoy/internal/lock"
+	"github.com/qiushiyan/envoy/internal/prose"
 	"github.com/qiushiyan/envoy/internal/provider"
-	"github.com/qiushiyan/envoy/internal/steer"
 	"github.com/qiushiyan/envoy/internal/text"
 )
 
@@ -239,8 +239,8 @@ func (r *run) execute(promptText string) Result {
 	if err != nil {
 		r.finish(finishArgs{
 			status:              job.StatusInfra,
-			errorText:           steer.SpawnFailed(r.opts.Provider, err),
-			recovery:            steer.Recovery(job.PromptNotStarted, r.resumeCommand(), ""),
+			errorText:           prose.SpawnFailed(r.opts.Provider, err),
+			recovery:            prose.Recovery(job.PromptNotStarted, r.resumeCommand(), ""),
 			promptState:         job.PromptNotStarted,
 			promptStateEvidence: job.Ptr("provider spawn error"),
 			hasEvidence:         true,
@@ -352,7 +352,7 @@ func (r *run) conflicted() bool { return r.meta.SessionLockConflict != nil }
 // resumeCommand is the follow-up command for this turn's session, carrying
 // the settings it was dispatched with.
 func (r *run) resumeCommand() string {
-	return steer.Turn{
+	return prose.Turn{
 		Provider:   r.opts.Provider,
 		SessionID:  r.session(),
 		Cwd:        r.opts.Cwd,

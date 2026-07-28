@@ -169,7 +169,7 @@ func TestClaudeBudgetStop(t *testing.T) {
 		t.Fatalf("budget outcome = %+v", out)
 	}
 	// The driver states the cause and the cause-specific fix; the recovery
-	// prescription itself is steer's, keyed off this prompt state.
+	// prescription itself is prose's, keyed off this prompt state.
 	if out.PromptState != job.PromptAccepted {
 		t.Fatalf("a budget stop happens after acceptance, got %q", out.PromptState)
 	}

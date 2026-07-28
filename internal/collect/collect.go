@@ -18,7 +18,7 @@ import (
 	"github.com/qiushiyan/envoy/internal/gitx"
 	"github.com/qiushiyan/envoy/internal/job"
 	"github.com/qiushiyan/envoy/internal/proc"
-	"github.com/qiushiyan/envoy/internal/steer"
+	"github.com/qiushiyan/envoy/internal/prose"
 )
 
 // JobDirs lists job directories under base, oldest first (stamped names make
@@ -105,7 +105,7 @@ func resumeCommand(meta *job.Meta) string {
 	if meta.SessionLockConflict != nil || meta.SessionID == nil {
 		return ""
 	}
-	return steer.Turn{
+	return prose.Turn{
 		Provider:   meta.Provider,
 		SessionID:  *meta.SessionID,
 		Cwd:        meta.Cwd,
@@ -128,15 +128,15 @@ func deref(s *string) string {
 // put two turns in one tree.
 func recoveryForStale(meta *job.Meta, state runningState) string {
 	if meta.SessionLockConflict != nil {
-		return steer.LockedSession(*meta.SessionLockConflict, state.kind == "orphaned")
+		return prose.LockedSession(*meta.SessionLockConflict, state.kind == "orphaned")
 	}
 	switch state.kind {
 	case "orphaned":
-		return steer.Orphaned()
+		return prose.Orphaned()
 	case "abandoned":
-		return steer.Recovery(meta.PromptState, resumeCommand(meta), "")
+		return prose.Recovery(meta.PromptState, resumeCommand(meta), "")
 	default:
-		return steer.Unprovable()
+		return prose.Unprovable()
 	}
 }
 
@@ -150,7 +150,7 @@ func reconcileAbandoned(outDir string, meta *job.Meta, state runningState) *job.
 	meta.Status = job.StatusAbandoned
 	meta.ReconciledAt = job.Ptr(job.ISO(time.Now()))
 	meta.Error = job.Ptr(errText)
-	meta.NextAction = steer.CollectThisJob(outDir)
+	meta.NextAction = prose.CollectThisJob(outDir)
 	meta.RecoveryAction = job.Ptr(recoveryForStale(meta, state))
 	resultPath := filepath.Join(outDir, "result.md")
 	if _, err := os.Stat(resultPath); os.IsNotExist(err) {
@@ -245,7 +245,7 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 	if mode == ModeResultOnly && meta.Status == job.StatusOK {
 		if data, err := os.ReadFile(resultPath); err == nil {
 			fmt.Fprintln(w, string(data))
-			stampCollected(metaPath, meta, steer.CollectedOK())
+			stampCollected(metaPath, meta, prose.CollectedOK())
 			return meta, false, 0
 		}
 	}
@@ -254,7 +254,7 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 	if meta.Status == job.StatusRunning {
 		fmt.Fprintf(w, "status: running (%s — %s; result.md is not final)\n", state.kind, state.detail)
 	} else {
-		fmt.Fprintf(w, "status: %s\n", steer.StatusLine(meta.Status))
+		fmt.Fprintf(w, "status: %s\n", prose.StatusLine(meta.Status))
 	}
 	display := func(v *string) string {
 		if v == nil {
@@ -346,7 +346,7 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 
 	if meta.Status == job.StatusRunning {
 		if state.kind == "live" {
-			fmt.Fprintf(w, "\nnext: %s\n", steer.RunningNext(outDir, meta.WatchCommand))
+			fmt.Fprintf(w, "\nnext: %s\n", prose.RunningNext(outDir, meta.WatchCommand))
 		} else {
 			fmt.Fprintf(w, "\nnext: %s\n", recoveryForStale(meta, state))
 		}
@@ -354,7 +354,7 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 	}
 
 	if mode == ModeStatusOnly {
-		fmt.Fprintf(w, "\nnext: %s\n", steer.StatusOnlyNext(outDir))
+		fmt.Fprintf(w, "\nnext: %s\n", prose.StatusOnlyNext(outDir))
 		return meta, false, 0
 	}
 
@@ -362,13 +362,13 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 	// and recovery above. Only a delivered deliverable stamps collection, so
 	// an ok turn whose result.md cannot be read stays owed.
 	if meta.Status == job.StatusOK && !resultDelivered {
-		fmt.Fprintf(w, "\nnext: %s\n", steer.OkResultUnreadable(outDir))
+		fmt.Fprintf(w, "\nnext: %s\n", prose.OkResultUnreadable(outDir))
 		return meta, true, 0
 	}
 
 	postCollectionAction := ""
 	if meta.Status == job.StatusOK {
-		postCollectionAction = steer.CollectedOK()
+		postCollectionAction = prose.CollectedOK()
 	} else if meta.RecoveryAction != nil {
 		postCollectionAction = *meta.RecoveryAction
 	} else {
@@ -417,7 +417,7 @@ func collectGroup(dir string, mode Mode, w, errW io.Writer) int {
 		if code != 0 {
 			// The member dir carries no readable meta: the turn never got far
 			// enough to publish one. collectJob has already said so on stderr.
-			fmt.Fprintf(&body, "status: %s\n", steer.FanUndispatched())
+			fmt.Fprintf(&body, "status: %s\n", prose.FanUndispatched())
 		} else {
 			status = meta.Status
 		}
@@ -440,24 +440,24 @@ func collectGroup(dir string, mode Mode, w, errW io.Writer) int {
 	// "every result above is usable".
 	closing := func() string {
 		if len(undelivered) > 0 {
-			return steer.FanUndeliveredResults(undelivered)
+			return prose.FanUndeliveredResults(undelivered)
 		}
-		return steer.FanCollected(dir, statuses)
+		return prose.FanCollected(dir, statuses)
 	}
 
 	// Result-only keeps the aggregate line and the member split — attribution
 	// is the point of a fan-out — and drops the coordinate preamble.
 	if mode == ModeResultOnly {
-		fmt.Fprintf(w, "status: %s\n", steer.FanStatusLine(statuses))
+		fmt.Fprintf(w, "status: %s\n", prose.FanStatusLine(statuses))
 		w.Write(body.Bytes())
-		if len(undelivered) > 0 || steer.FanStatus(statuses) != steer.FanOK {
+		if len(undelivered) > 0 || prose.FanStatus(statuses) != prose.FanOK {
 			fmt.Fprintf(w, "\nnext: %s\n", closing())
 		}
 		return 0
 	}
 
 	fmt.Fprintf(w, "fan-out: %s\n", dir)
-	fmt.Fprintf(w, "status: %s\n", steer.FanStatusLine(statuses))
+	fmt.Fprintf(w, "status: %s\n", prose.FanStatusLine(statuses))
 	fmt.Fprintf(w, "members: %s\n", strings.Join(labels, " · "))
 	fmt.Fprintf(w, "prompt: %s\n", gw.PromptPath())
 	if group.ResumedFrom != nil {
@@ -466,7 +466,7 @@ func collectGroup(dir string, mode Mode, w, errW io.Writer) int {
 	// The set-level follow-up is offered only when it is provably possible:
 	// every member finished and holds a session to continue.
 	if resumable {
-		fmt.Fprintf(w, "resume: %s\n", steer.FanResumeCommand(dir, group.TimeoutMin))
+		fmt.Fprintf(w, "resume: %s\n", prose.FanResumeCommand(dir, group.TimeoutMin))
 	}
 	if group.EndedAt == nil {
 		fmt.Fprintf(w, "watch: %s\n", group.WatchCommand)
@@ -478,7 +478,7 @@ func collectGroup(dir string, mode Mode, w, errW io.Writer) int {
 	}
 	w.Write(body.Bytes())
 	if mode == ModeStatusOnly {
-		fmt.Fprintf(w, "\nnext: %s\n", steer.StatusOnlyNext(dir))
+		fmt.Fprintf(w, "\nnext: %s\n", prose.StatusOnlyNext(dir))
 	} else {
 		fmt.Fprintf(w, "\nnext: %s\n", closing())
 	}
@@ -610,7 +610,7 @@ func Pending(base string, w io.Writer) int {
 		fmt.Fprintf(w, "why: %s\n", item.detail)
 		switch item.kind {
 		case "terminal", "group":
-			fmt.Fprintf(w, "next: %s\n", steer.CollectCommand(item.dir))
+			fmt.Fprintf(w, "next: %s\n", prose.CollectCommand(item.dir))
 		case "corrupt":
 			fmt.Fprintf(w, "next: inspect %s, %s, %s, and the working tree; do not infer completion from the damaged metadata\n",
 				filepath.Join(item.dir, "progress.log"),

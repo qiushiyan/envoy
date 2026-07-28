@@ -19,9 +19,9 @@ import (
 	"github.com/qiushiyan/envoy/internal/collect"
 	"github.com/qiushiyan/envoy/internal/fan"
 	"github.com/qiushiyan/envoy/internal/job"
+	"github.com/qiushiyan/envoy/internal/prose"
 	"github.com/qiushiyan/envoy/internal/provider"
 	"github.com/qiushiyan/envoy/internal/runner"
-	"github.com/qiushiyan/envoy/internal/steer"
 )
 
 // Version of the engine, reported by `envoy version`.
@@ -199,7 +199,7 @@ func Fan(req FanRequest) int {
 	resumedFrom := ""
 	if req.ResumeFrom != "" {
 		if len(req.With) > 0 {
-			return usageError(stderr, "%s", steer.FanResumeFromAndWith())
+			return usageError(stderr, "%s", prose.FanResumeFromAndWith())
 		}
 		resumedFrom = absOrSelf(req.ResumeFrom)
 		resolved, group, errText := resumableMembers(resumedFrom)
@@ -278,23 +278,23 @@ func Fan(req FanRequest) int {
 func resumableMembers(dir string) ([]fan.Member, *job.Group, string) {
 	if !job.IsGroupDir(dir) {
 		if cmd, isTurn := collect.TurnResume(dir); isTurn {
-			return nil, nil, steer.FanResumeFromNotAFanOut(dir, cmd)
+			return nil, nil, prose.FanResumeFromNotAFanOut(dir, cmd)
 		}
-		return nil, nil, steer.FanResumeFromNoGroup(dir)
+		return nil, nil, prose.FanResumeFromNoGroup(dir)
 	}
 	state, err := collect.InspectFanResume(dir)
 	if err != nil {
-		return nil, nil, steer.FanResumeFromUnreadableManifest(dir, err)
+		return nil, nil, prose.FanResumeFromUnreadableManifest(dir, err)
 	}
 	if len(state.Members) == 0 && len(state.Blockers) == 0 {
-		return nil, nil, steer.FanResumeFromEmptyManifest(dir)
+		return nil, nil, prose.FanResumeFromEmptyManifest(dir)
 	}
 	if len(state.Blockers) > 0 {
 		reasons := make([]string, len(state.Blockers))
 		for i, b := range state.Blockers {
-			reasons[i] = steer.FanResumeBlockerLine(b.Member, b.Kind, b.Detail)
+			reasons[i] = prose.FanResumeBlockerLine(b.Member, b.Kind, b.Detail)
 		}
-		return nil, nil, steer.FanResumeFromBlocked(dir, reasons)
+		return nil, nil, prose.FanResumeFromBlocked(dir, reasons)
 	}
 	members := make([]fan.Member, len(state.Members))
 	for i, m := range state.Members {
@@ -372,6 +372,45 @@ func Collect(req CollectRequest) int {
 		}
 	}
 	return collect.Collect(absOrSelf(outDir), mode, stdout, stderr)
+}
+
+// SteerRequest names a supplement file and the job it was meant for.
+type SteerRequest struct {
+	PromptFile string // the supplemental prompt, as a file — required
+	OutDir     string // "" = the newest job for the current directory's project
+	Stdout     io.Writer
+	Stderr     io.Writer
+}
+
+// Steer answers whether a supplemental prompt can still reach a dispatched
+// job. It cannot — no provider accepts input into a running turn — so the
+// engine's whole job here is the honest report: why not, and the exact
+// follow-up command that carries the supplement to the same session. Steer
+// delivers nothing and mutates nothing.
+func Steer(req SteerRequest) int {
+	stdout, stderr := defaultWriters(req.Stdout, req.Stderr)
+	if req.PromptFile == "" {
+		return usageError(stderr, "--prompt-file <path> is required: write the supplement to a file first — it becomes the follow-up turn's prompt")
+	}
+	if _, err := os.Stat(req.PromptFile); err != nil {
+		return usageError(stderr, "prompt file not found: %s", req.PromptFile)
+	}
+	outDir := req.OutDir
+	if outDir == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintf(stderr, "steer error: cannot determine cwd: %s\n", err)
+			return ExitUsage
+		}
+		base := job.DefaultBase(cwd)
+		if outDir = collect.LatestJobDir(base); outDir == "" {
+			fmt.Fprintf(stderr, "steer error: no job dirs under %s; pass an out-dir explicitly\n", base)
+			return ExitUsage
+		}
+	}
+	// Both paths are printed into commands that may run from any directory,
+	// so they must survive leaving this one.
+	return collect.Steer(absOrSelf(outDir), absOrSelf(req.PromptFile), stdout, stderr)
 }
 
 // Pending prints the discovery-only recovery index for base ("" = the default

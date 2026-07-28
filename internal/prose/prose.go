@@ -1,4 +1,4 @@
-// Package steer holds every sentence envoy addresses to its caller.
+// Package prose holds every sentence envoy addresses to its caller.
 //
 // The caller is usually an AI agent reading stdout, so this text is a prompt
 // surface: it must say what happened, what that rules in or out, and the one
@@ -6,7 +6,7 @@
 // observed. Centralizing it here keeps a single wording for each situation
 // (the runner, the drivers, and collect all describe the same few outcomes)
 // and makes the whole vocabulary reviewable in one file.
-package steer
+package prose
 
 import (
 	"fmt"
@@ -25,6 +25,17 @@ type Turn struct {
 	Effort     string
 	AllowWrite bool
 	TimeoutMin float64
+}
+
+// promptPlaceholder is the slot every follow-up command leaves open: a resumed
+// turn needs a NEW prompt, and only the caller knows which file that will be.
+const promptPlaceholder = "<your-follow-up.md>"
+
+// FillPromptFile substitutes an actual prompt file into a follow-up command's
+// placeholder slot — for the one case where the new prompt already exists as a
+// file in the caller's hand, a steer supplement.
+func FillPromptFile(cmd, promptFile string) string {
+	return strings.Replace(cmd, promptPlaceholder, text.ShellQuote(promptFile), 1)
 }
 
 // ResumeCommand is the complete command that continues this provider session,
@@ -48,7 +59,7 @@ func (t Turn) ResumeCommand() string {
 	if t.Cwd != "" {
 		parts = append(parts, "--cwd "+text.ShellQuote(t.Cwd))
 	}
-	parts = append(parts, fmt.Sprintf("--timeout-min %g", t.TimeoutMin), "--prompt-file <your-follow-up.md>")
+	parts = append(parts, fmt.Sprintf("--timeout-min %g", t.TimeoutMin), "--prompt-file "+promptPlaceholder)
 	return strings.Join(parts, " ")
 }
 
@@ -372,7 +383,7 @@ func FanResumeFromNotAFanOut(dir, resumeCmd string) string {
 }
 
 // FanResumeBlockerKind classifies why one member blocks a set-level resume.
-// The kinds are steer vocabulary so every surface that reports a blocker —
+// The kinds are prose vocabulary so every surface that reports a blocker —
 // the facade's refusal, collect's resume line — words one situation one way.
 type FanResumeBlockerKind string
 
@@ -451,8 +462,8 @@ func FanUndeliveredResults(members []string) string {
 // fan-out, mirroring Turn.ResumeCommand: settings carried, prompt file left as
 // the placeholder a follow-up must fill.
 func FanResumeCommand(dir string, timeoutMin float64) string {
-	return fmt.Sprintf("envoy fan --resume-from %s --timeout-min %g --prompt-file <your-follow-up.md>",
-		text.ShellQuote(dir), timeoutMin)
+	return fmt.Sprintf("envoy fan --resume-from %s --timeout-min %g --prompt-file %s",
+		text.ShellQuote(dir), timeoutMin, promptPlaceholder)
 }
 
 // FanMemberFlagRefused catches a turn flag aimed at a fan-out, where it would
@@ -460,4 +471,97 @@ func FanResumeCommand(dir string, timeoutMin float64) string {
 func FanMemberFlagRefused(flag string) string {
 	return fmt.Sprintf("%s is not available on a fan-out, where each member has its own. Put it in the member spec instead: "+
 		"--with provider[:model[:effort]], for example --with codex --with claude:opus:high.", flag)
+}
+
+// ---------- steer ----------
+//
+// `envoy steer` answers one question about a dispatched job: can a
+// supplemental prompt still reach it? The answer is always no — no provider
+// accepts input into a running turn (claude's streaming input would queue it
+// as a separate turn; codex exec reads its instructions once, at dispatch) —
+// so every report below opens with "not delivered" and hands over the one
+// command that does carry the supplement: the follow-up turn that continues
+// the same session, with the supplement already in its --prompt-file slot.
+// The engine delivers nothing, mutates nothing, and stamps nothing collected.
+
+// SteerReport is the whole answer to one steer request: why the supplement
+// was not delivered, and the one action that carries it forward.
+type SteerReport struct {
+	Why  string // one clause, printed after "not delivered — "
+	Next string // the action, possibly spanning lines with indented commands
+}
+
+// SteerCommand is the steer invocation for one job dir, spelled out so a
+// fan-out's members can each be handed their own runnable line.
+func SteerCommand(promptFile, outDir string) string {
+	return "envoy steer --prompt-file " + text.ShellQuote(promptFile) + " " + text.ShellQuote(outDir)
+}
+
+// SteerLive reports a genuinely live turn. resumeCmd is the follow-up command
+// with the supplement already filled in, or "" when the turn has not published
+// a session id yet (a fresh codex thread before thread.started).
+func SteerLive(provider, resumeCmd, outDir string) SteerReport {
+	var why string
+	switch provider {
+	case "claude":
+		why = "this turn is still running, and claude takes no input into a turn in flight — " +
+			"its streaming input would only queue the supplement as a second turn after this one finishes"
+	case "codex":
+		why = "this turn is still running, and codex takes no input after dispatch — " +
+			"codex exec reads its instructions once, at start"
+	default:
+		why = "this turn is still running, and no provider accepts input into a turn in flight"
+	}
+	if resumeCmd == "" {
+		return SteerReport{Why: why, Next: "no session id has been published yet, so the follow-up command " +
+			"cannot be printed here. Wait for this job to finish, then collect it (" + CollectCommand(outDir) +
+			") and give this supplement to the resume command it prints."}
+	}
+	return SteerReport{Why: why, Next: "wait for this job to finish and read its result — it may already cover " +
+		"this — then send the supplement as the same session's follow-up prompt:\n  " + resumeCmd}
+}
+
+// SteerStale reports a job whose meta says running while its runner is gone.
+// Steer prescribes nothing itself: collect owns the stranded-turn diagnosis,
+// and a second reader would drift from it.
+func SteerStale(kind, outDir string) SteerReport {
+	return SteerReport{
+		Why: "this job records status running but its runner process is gone (" + kind + "), so nothing is listening for input",
+		Next: "collect the job: " + CollectCommand(outDir) + " — that diagnoses the stranded turn and prescribes " +
+			"the safe continuation; give this supplement to whatever follow-up command it prints.",
+	}
+}
+
+// SteerTerminalOK reports a finished ok turn: the supplement is simply the
+// session's next prompt. An uncollected result is read first — it may already
+// cover what the supplement asks.
+func SteerTerminalOK(resumeCmd, outDir string, collected bool) SteerReport {
+	why := "this job is already terminal (status ok), so there is no running turn to reach"
+	if !collected {
+		return SteerReport{Why: why, Next: "read the result first — it may already cover this: " + CollectCommand(outDir) +
+			". Then send the supplement as the same session's follow-up prompt:\n  " + resumeCmd}
+	}
+	return SteerReport{Why: why, Next: "send the supplement as the same session's follow-up prompt:\n  " + resumeCmd}
+}
+
+// SteerTerminalNotOK reports a finished non-ok turn without prescribing a
+// resume: whether that session may continue is the job's own recovery
+// decision, which follows from its prompt state and is printed by collect.
+func SteerTerminalNotOK(status, outDir string) SteerReport {
+	return SteerReport{
+		Why: "this job is already terminal (status " + status + "), so there is no running turn to reach",
+		Next: "whether its session may continue is that job's own recovery decision. Collect it and follow its " +
+			"next line, giving this supplement to any follow-up command it prints: " + CollectCommand(outDir),
+	}
+}
+
+// SteerGroup redirects a steer aimed at a fan-out directory: members hold
+// independent sessions, so the supplement goes to one member — or to all of
+// them as a new round once the set is finished.
+func SteerGroup(memberCmds []string, fanResumeCmd string) SteerReport {
+	return SteerReport{
+		Why: "this is a fan-out, and its members hold independent sessions that can be in different states",
+		Next: "steer one member:\n  " + strings.Join(memberCmds, "\n  ") +
+			"\nOr send the supplement to every member as one new round once the fan-out is finished:\n  " + fanResumeCmd,
+	}
 }

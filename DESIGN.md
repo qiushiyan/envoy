@@ -173,6 +173,10 @@ the same second once shared one (see the log, 2026-07-27).
   auto-selection.
 - No group-wide retry, and no partial resume of a fan-out: recovery is per
   member, and a round continues the whole set or is refused.
+- No live steering of a running turn: no provider accepts input into one —
+  claude's streaming input queues a NEW turn (a multi-turn job in disguise),
+  codex exec has no channel at all. `envoy steer` answers with the follow-up
+  command instead; the verified research is in the log (2026-07-28).
 - No sandbox flag for codex, ever; no permission machinery beyond claude's
   own `--permission-mode`.
 - No activity-based hang detector; no timeout that resets on output.
@@ -265,3 +269,26 @@ Engine-relevant history, distilled from the predecessor and continued here.
   (collapsed into one typed inspection, blockers worded by steer), and
   collect stamped `collectedAt` even when an ok turn's result body never
   reached the caller (the stamp now follows delivery).
+- **2026-07-28 — steer, and the live-input research it banked.** "I forgot to
+  mention X" wanted a supplement delivered into a running job. Verified live
+  (claude 2.1.220, codex 0.144.6): claude's `--input-format stream-json`
+  accepts further user messages but **queues each as its own turn** — the
+  in-flight turn never sees it — one result envelope per message, delivery
+  ack via `--replay-user-messages`, input shape undocumented; and when stdin
+  EOF arrives after an idle result (the exact teardown order steering needs),
+  the CLI lingers for minutes, while EOF before work exits in seconds. codex
+  exec reads stdin once at dispatch and has no channel at all; injection
+  lives only in experimental servers. So "steering" a live turn is really
+  scheduling a second turn, and building delivery would make the job
+  multi-turn — per-message prompt state, aggregate statuses, kill-based
+  teardown for the linger; the meta schema's singular
+  `promptState`/`providerTerminalAt` stop being honest. A design-blind codex
+  consult reached the same verdict and named the admission test this fails:
+  fan cost zero lifecycle change, this reshapes driver, runner, schema, and
+  collect. Shipped instead: `envoy steer` as pure state inspection — always
+  "not delivered", plus the one runnable follow-up with the supplement file
+  filled into the prompt slot (the single place the placeholder closes), per
+  member on a fan-out. `internal/steer` was renamed `internal/prose` so the
+  command could take the name. If steer refusals ever pile up in the job
+  store, that is the usage-lab evidence an opt-in streaming turn would need
+  to justify its cost.

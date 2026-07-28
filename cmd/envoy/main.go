@@ -2,6 +2,7 @@
 //
 //	envoy turn --provider <claude|codex> --prompt-file <F> [flags]
 //	envoy collect [out-dir]
+//	envoy steer --prompt-file <F> [out-dir]
 //	envoy pending [--base DIR]
 //	envoy version
 package main
@@ -16,7 +17,7 @@ import (
 	"strings"
 
 	"github.com/qiushiyan/envoy"
-	"github.com/qiushiyan/envoy/internal/steer"
+	"github.com/qiushiyan/envoy/internal/prose"
 )
 
 // usageText is the tool description an agent reads before driving envoy, so
@@ -35,6 +36,8 @@ USAGE
                               continue every member of a finished fan-out
   envoy collect [flags] [job-dir]
                               print one job: status, coordinates, result.md
+  envoy steer --prompt-file <F> [job-dir]
+                              route a supplemental prompt to a dispatched job
   envoy pending [--base DIR]  jobs still needing attention, after a missed completion
   envoy version
 
@@ -116,6 +119,17 @@ TURN FLAGS
   applies to each member separately. --resume-from <fan-out-dir> replaces
   --with entirely: the members come from that fan-out's manifest.
 
+FORGOT SOMETHING AFTER DISPATCHING
+  envoy steer --prompt-file more.md [job-dir]
+
+  No provider accepts input into a running turn — claude would queue it as a
+  separate turn, codex reads its instructions once at dispatch — so nothing is
+  ever injected. Steer inspects the job and answers with the one command that
+  does carry the supplement: the follow-up turn that continues the same
+  session, with your file already in its --prompt-file slot. On a fan-out,
+  steer a member, or make the supplement a new round with fan --resume-from.
+  Steer never marks anything collected; it exits 0 once it has answered.
+
 BEFORE YOU DISPATCH
   Model and effort. Leaving --model or --effort off puts the provider's own
   configuration in charge; envoy never substitutes a model of its own, and
@@ -175,6 +189,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdFan(args[1:], stdout, stderr)
 	case "collect":
 		return cmdCollect(args[1:], stdout, stderr)
+	case "steer":
+		return cmdSteer(args[1:], stdout, stderr)
 	case "pending":
 		return cmdPending(args[1:], stdout, stderr)
 	case "version":
@@ -287,15 +303,15 @@ func cmdFan(args []string, stdout, stderr io.Writer) int {
 	refusal := ""
 	switch {
 	case *allowWrite:
-		refusal = steer.FanAllowWriteRefused()
+		refusal = prose.FanAllowWriteRefused()
 	case *resume != "":
-		refusal = steer.FanResumeRefused()
+		refusal = prose.FanResumeRefused()
 	case *model != "":
-		refusal = steer.FanMemberFlagRefused("--model")
+		refusal = prose.FanMemberFlagRefused("--model")
 	case *effort != "":
-		refusal = steer.FanMemberFlagRefused("--effort")
+		refusal = prose.FanMemberFlagRefused("--effort")
 	case *providerFlag != "":
-		refusal = steer.FanMemberFlagRefused("--provider")
+		refusal = prose.FanMemberFlagRefused("--provider")
 	}
 	if refusal != "" {
 		fmt.Fprintf(stderr, "usage error: %s\n", refusal)
@@ -327,6 +343,24 @@ func cmdCollect(args []string, stdout, stderr io.Writer) int {
 		OutDir:     fs.Arg(0),
 		ResultOnly: *resultOnly,
 		StatusOnly: *statusOnly,
+		Stdout:     stdout,
+		Stderr:     stderr,
+	})
+}
+
+func cmdSteer(args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("steer", stderr)
+	promptFile := fs.String("prompt-file", "", "")
+	if proceed, code := parseFlags(fs, args, stdout); !proceed {
+		return code
+	}
+	if fs.NArg() > 1 {
+		fmt.Fprintln(stderr, "usage error: pass at most one job dir, with --prompt-file before it")
+		return envoy.ExitUsage
+	}
+	return envoy.Steer(envoy.SteerRequest{
+		PromptFile: *promptFile,
+		OutDir:     fs.Arg(0),
 		Stdout:     stdout,
 		Stderr:     stderr,
 	})

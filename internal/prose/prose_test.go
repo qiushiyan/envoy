@@ -1,4 +1,4 @@
-package steer
+package prose
 
 import (
 	"strings"
@@ -140,5 +140,92 @@ func TestFanNextPrescribesPerMemberRecovery(t *testing.T) {
 	none := FanNext("/jobs/g", []string{job.StatusTimeout, job.StatusInfra})
 	if !strings.Contains(none, "prompt was accepted is what decides") {
 		t.Errorf("FanNext with no results must name the prompt state as the discriminator, got %q", none)
+	}
+}
+
+// The one case where the prompt-file placeholder closes is a steer supplement:
+// the new prompt already exists, so the handed-over command must be runnable
+// as printed, quoted path and all — and a command without the slot must pass
+// through untouched rather than be guessed at.
+func TestFillPromptFile(t *testing.T) {
+	cmd := Turn{Provider: "codex", SessionID: "s1", TimeoutMin: 30}.ResumeCommand()
+	filled := FillPromptFile(cmd, "/tmp/supp file.md")
+	if !strings.Contains(filled, "--prompt-file '/tmp/supp file.md'") {
+		t.Fatalf("placeholder not filled: %q", filled)
+	}
+	if strings.Contains(filled, "<your-follow-up.md>") {
+		t.Fatalf("placeholder survived filling: %q", filled)
+	}
+	if got := FillPromptFile("codex resume s1", "/tmp/s.md"); got != "codex resume s1" {
+		t.Fatalf("command without a slot must pass through, got %q", got)
+	}
+}
+
+// Steer's whole vocabulary answers one question — can a supplement still reach
+// this job? — and the honest answer is always no. Each wording must say why in
+// the provider's own terms and hand over a runnable continuation, and the
+// non-ok terminal wording must never prescribe a resume the job's recovery has
+// not licensed.
+func TestSteerVocabulary(t *testing.T) {
+	const filled = "envoy turn --provider claude --resume s1 --timeout-min 30 --prompt-file '/tmp/supp.md'"
+
+	live := SteerLive("claude", filled, "/jobs/j1")
+	if !strings.Contains(live.Why, "claude takes no input into a turn in flight") ||
+		!strings.Contains(live.Why, "queue the supplement as a second turn") {
+		t.Fatalf("claude live why = %q", live.Why)
+	}
+	if !strings.Contains(live.Next, filled) {
+		t.Fatalf("claude live next must hand over the filled command: %q", live.Next)
+	}
+
+	codexLive := SteerLive("codex", filled, "/jobs/j1")
+	if !strings.Contains(codexLive.Why, "codex takes no input after dispatch") {
+		t.Fatalf("codex live why = %q", codexLive.Why)
+	}
+
+	// No session yet: nothing runnable exists, and inventing one is forbidden —
+	// the caller is pointed at collect, which prints the command once it exists.
+	noSession := SteerLive("codex", "", "/jobs/j1")
+	if strings.Contains(noSession.Next, "envoy turn") {
+		t.Fatalf("no session must mean no resume command: %q", noSession.Next)
+	}
+	if !strings.Contains(noSession.Next, "envoy collect '/jobs/j1'") {
+		t.Fatalf("no-session next must point at collect: %q", noSession.Next)
+	}
+
+	stale := SteerStale("abandoned", "/jobs/j1")
+	if !strings.Contains(stale.Why, "runner process is gone (abandoned)") ||
+		!strings.Contains(stale.Next, "envoy collect '/jobs/j1'") {
+		t.Fatalf("stale = %+v", stale)
+	}
+
+	okFresh := SteerTerminalOK(filled, "/jobs/j1", false)
+	if !strings.Contains(okFresh.Next, "read the result first") || !strings.Contains(okFresh.Next, filled) {
+		t.Fatalf("uncollected ok next = %q", okFresh.Next)
+	}
+	okCollected := SteerTerminalOK(filled, "/jobs/j1", true)
+	if strings.Contains(okCollected.Next, "read the result first") || !strings.Contains(okCollected.Next, filled) {
+		t.Fatalf("collected ok next = %q", okCollected.Next)
+	}
+
+	failed := SteerTerminalNotOK(job.StatusFailed, "/jobs/j1")
+	if strings.Contains(failed.Next, "envoy turn") {
+		t.Fatalf("a non-ok terminal steer must not prescribe a resume: %q", failed.Next)
+	}
+	if !strings.Contains(failed.Why, "status failed") || !strings.Contains(failed.Next, "envoy collect '/jobs/j1'") {
+		t.Fatalf("failed = %+v", failed)
+	}
+
+	group := SteerGroup(
+		[]string{SteerCommand("/tmp/supp.md", "/jobs/fan/codex"), SteerCommand("/tmp/supp.md", "/jobs/fan/claude")},
+		"envoy fan --resume-from '/jobs/fan' --timeout-min 30 --prompt-file '/tmp/supp.md'")
+	for _, want := range []string{
+		"envoy steer --prompt-file '/tmp/supp.md' '/jobs/fan/codex'",
+		"envoy steer --prompt-file '/tmp/supp.md' '/jobs/fan/claude'",
+		"envoy fan --resume-from '/jobs/fan'",
+	} {
+		if !strings.Contains(group.Next, want) {
+			t.Fatalf("group next missing %q:\n%s", want, group.Next)
+		}
 	}
 }

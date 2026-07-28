@@ -24,9 +24,9 @@ import (
 
 	"github.com/qiushiyan/envoy/internal/job"
 	"github.com/qiushiyan/envoy/internal/lock"
+	"github.com/qiushiyan/envoy/internal/prose"
 	"github.com/qiushiyan/envoy/internal/provider"
 	"github.com/qiushiyan/envoy/internal/runner"
-	"github.com/qiushiyan/envoy/internal/steer"
 	"github.com/qiushiyan/envoy/internal/text"
 )
 
@@ -147,7 +147,7 @@ func Run(opts Options) int {
 	go func() {
 		select {
 		case sig := <-sigCh:
-			fmt.Fprintf(opts.Stdout, "\n%s\n", steer.FanStopping(sigName(sig), len(members)))
+			fmt.Fprintf(opts.Stdout, "\n%s\n", prose.FanStopping(sigName(sig), len(members)))
 		case <-done:
 		}
 	}()
@@ -232,7 +232,7 @@ func reserveSessions(members []Member, coords []job.GroupMember) ([]*lock.Handle
 		if err != nil {
 			releaseAll(handles)
 			if _, ok := err.(*lock.Conflict); ok {
-				return nil, "usage error: " + steer.FanResumeSessionHeld(coords[i].Name, err.Error()), job.ExitUsage
+				return nil, "usage error: " + prose.FanResumeSessionHeld(coords[i].Name, err.Error()), job.ExitUsage
 			}
 			return nil, fmt.Sprintf("envoy: cannot reserve member sessions: %s", err), job.ExitInfra
 		}
@@ -264,23 +264,23 @@ func printDispatchBlock(opts Options, gw job.GroupWorkspace, members []job.Group
 		fmt.Fprintf(w, "baseline: %s\n", opts.Baseline)
 	}
 	fmt.Fprintf(w, "watch: %s\n", gw.WatchCommand(members))
-	fmt.Fprintf(w, "next: %s\n", steer.FanDispatchNext(gw.Dir))
+	fmt.Fprintf(w, "next: %s\n", prose.FanDispatchNext(gw.Dir))
 }
 
 func printTerminalBlock(opts Options, dir string, outcomes []outcome, statuses []string) {
 	w := opts.Stdout
 	fmt.Fprintln(w, "")
-	fmt.Fprintf(w, "status: %s\n", steer.FanStatusLine(statuses))
+	fmt.Fprintf(w, "status: %s\n", prose.FanStatusLine(statuses))
 	for _, o := range outcomes {
 		if o.status == "" {
-			fmt.Fprintf(w, "member %s: %s\n", o.name, steer.FanUndispatched())
+			fmt.Fprintf(w, "member %s: %s\n", o.name, prose.FanUndispatched())
 			continue
 		}
-		fmt.Fprintf(w, "member %s: %s · result %s\n", o.name, steer.StatusLine(o.status),
+		fmt.Fprintf(w, "member %s: %s · result %s\n", o.name, prose.StatusLine(o.status),
 			job.Workspace{Dir: o.outDir}.ResultPath())
 	}
 	fmt.Fprintf(w, "group: %s\n", job.GroupWorkspace{Dir: dir}.GroupPath())
-	fmt.Fprintf(w, "next: %s\n", steer.FanNext(dir, statuses))
+	fmt.Fprintf(w, "next: %s\n", prose.FanNext(dir, statuses))
 }
 
 func writeGroup(group *job.Group, gw job.GroupWorkspace, stderr io.Writer) {
