@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/qiushiyan/envoy/internal/job"
+	"github.com/qiushiyan/envoy/internal/lock"
 	"github.com/qiushiyan/envoy/internal/provider"
 	"github.com/qiushiyan/envoy/internal/runner"
 	"github.com/qiushiyan/envoy/internal/steer"
@@ -79,25 +80,40 @@ func Run(opts Options) int {
 		return job.ExitInfra
 	}
 	gw := job.GroupWorkspace{Dir: dir}
-	if err := gw.Prepare(opts.PromptFile); err != nil {
-		fmt.Fprintf(opts.Stderr, "envoy: cannot prepare fan-out dir: %s\n", err)
-		return job.ExitInfra
-	}
-	// Member dirs exist before the coordinates are published, so the watch
-	// command works from the moment the caller reads it.
 	members := make([]job.GroupMember, len(opts.Members))
 	for i, m := range opts.Members {
-		ws := gw.Member(names[i])
-		if err := os.MkdirAll(ws.Dir, 0o755); err != nil {
-			fmt.Fprintf(opts.Stderr, "envoy: cannot create member dir: %s\n", err)
-			return job.ExitInfra
-		}
 		members[i] = job.GroupMember{
 			Name:     names[i],
 			Provider: m.Provider,
 			Model:    ptrIfNonEmpty(m.Model),
 			Effort:   ptrIfNonEmpty(m.Effort),
-			OutDir:   ws.Dir,
+			OutDir:   gw.Member(names[i]).Dir,
+		}
+	}
+
+	// A resumed fan-out starts every member or none. Reserving each member's
+	// session before anything is prepared or spawned turns a held session —
+	// a caller resumed one member individually, say — into a refusal of the
+	// whole round, instead of a partial round discovered member by member
+	// after validation passed on historical metadata.
+	handles, refusal, code := reserveSessions(opts.Members, members)
+	if code != 0 {
+		fmt.Fprintf(opts.Stderr, "%s\n", refusal)
+		return code
+	}
+
+	if err := gw.Prepare(opts.PromptFile); err != nil {
+		releaseAll(handles)
+		fmt.Fprintf(opts.Stderr, "envoy: cannot prepare fan-out dir: %s\n", err)
+		return job.ExitInfra
+	}
+	// Member dirs exist before the coordinates are published, so the watch
+	// command works from the moment the caller reads it.
+	for i := range members {
+		if err := os.MkdirAll(members[i].OutDir, 0o755); err != nil {
+			releaseAll(handles)
+			fmt.Fprintf(opts.Stderr, "envoy: cannot create member dir: %s\n", err)
+			return job.ExitInfra
 		}
 	}
 
@@ -143,7 +159,7 @@ func Run(opts Options) int {
 		wg.Add(1)
 		go func(i int, m Member) {
 			defer wg.Done()
-			outcomes[i] = runMember(opts, m, members[i], &mu)
+			outcomes[i] = runMember(opts, m, members[i], handles[i], &mu)
 		}(i, m)
 	}
 	wg.Wait()
@@ -170,7 +186,7 @@ func Run(opts Options) int {
 // the process. The member is then reported as one that published no status,
 // and its provider — if it had started one — is left exactly as a killed
 // runner leaves it, which is the case collect's recovery path already covers.
-func runMember(opts Options, m Member, gm job.GroupMember, mu *sync.Mutex) (res outcome) {
+func runMember(opts Options, m Member, gm job.GroupMember, held *lock.Handle, mu *sync.Mutex) (res outcome) {
 	res = outcome{name: gm.Name, provider: m.Provider, outDir: gm.OutDir, exitCode: job.ExitInfra}
 	stderr := &prefixWriter{mu: mu, w: opts.Stderr, prefix: gm.Name}
 	defer func() {
@@ -181,12 +197,13 @@ func runMember(opts Options, m Member, gm job.GroupMember, mu *sync.Mutex) (res 
 		stderr.flush()
 	}()
 	r := runner.Run(runner.Options{
-		Provider:   m.Provider,
-		PromptFile: opts.PromptFile,
-		Cwd:        opts.Cwd,
-		Baseline:   opts.Baseline,
-		Label:      opts.Label,
-		OutDir:     gm.OutDir,
+		Provider:    m.Provider,
+		PromptFile:  opts.PromptFile,
+		Cwd:         opts.Cwd,
+		Baseline:    opts.Baseline,
+		Label:       opts.Label,
+		OutDir:      gm.OutDir,
+		SessionLock: held,
 		Turn: provider.Options{
 			Model:      m.Model,
 			Effort:     m.Effort,
@@ -198,6 +215,36 @@ func runMember(opts Options, m Member, gm job.GroupMember, mu *sync.Mutex) (res 
 	})
 	res.exitCode, res.status = r.ExitCode, r.Status
 	return res
+}
+
+// reserveSessions acquires every resumed member's session lock before any
+// turn spawns, and rolls back the rest on one failure: the round dispatches
+// whole or not at all. A member with no session to resume needs no
+// reservation and holds slot nil.
+func reserveSessions(members []Member, coords []job.GroupMember) ([]*lock.Handle, string, int) {
+	instance := job.UUID4()
+	handles := make([]*lock.Handle, len(members))
+	for i, m := range members {
+		if m.Resume == "" {
+			continue
+		}
+		h, err := lock.Acquire(m.Resume, coords[i].OutDir, instance)
+		if err != nil {
+			releaseAll(handles)
+			if _, ok := err.(*lock.Conflict); ok {
+				return nil, "usage error: " + steer.FanResumeSessionHeld(coords[i].Name, err.Error()), job.ExitUsage
+			}
+			return nil, fmt.Sprintf("envoy: cannot reserve member sessions: %s", err), job.ExitInfra
+		}
+		handles[i] = h
+	}
+	return handles, "", 0
+}
+
+func releaseAll(handles []*lock.Handle) {
+	for _, h := range handles {
+		h.Release()
+	}
 }
 
 func printDispatchBlock(opts Options, gw job.GroupWorkspace, members []job.GroupMember) {

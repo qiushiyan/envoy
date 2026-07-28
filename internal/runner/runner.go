@@ -58,8 +58,13 @@ type Options struct {
 	Label      string
 	OutDir     string // "" = derive from cwd/label
 	Turn       provider.Options
-	Stdout     io.Writer
-	Stderr     io.Writer
+	// SessionLock is a lock a supervisor already holds for this turn's
+	// resumed session — a fan-out reserves every member before any spawns,
+	// so a held session refuses the whole round instead of one member. The
+	// runner takes ownership and releases it however the turn ends.
+	SessionLock *lock.Handle
+	Stdout      io.Writer
+	Stderr      io.Writer
 }
 
 type termination struct {
@@ -151,8 +156,13 @@ func Run(opts Options) Result {
 		sigCh:     make(chan os.Signal, 4),
 	}
 
+	// A supervisor's reservation is owned from the first moment, so every
+	// early return below releases it instead of stranding the session.
+	r.sessionLock = opts.SessionLock
+
 	outDir, err := job.ResolveOutDir(opts.OutDir, opts.Cwd, opts.Label, opts.Provider, startedAt)
 	if err != nil {
+		r.releaseLock()
 		fmt.Fprintf(opts.Stderr, "envoy: cannot create out-dir: %s\n", err)
 		return Result{ExitCode: job.ExitInfra, OutDir: opts.OutDir}
 	}
@@ -162,6 +172,7 @@ func Run(opts Options) Result {
 
 	driver, err := provider.New(opts.Provider, opts.Turn, r.ws, startedAt)
 	if err != nil {
+		r.releaseLock()
 		fmt.Fprintf(opts.Stderr, "usage error: %s\n", err)
 		return Result{ExitCode: job.ExitUsage, OutDir: outDir}
 	}
@@ -169,14 +180,15 @@ func Run(opts Options) Result {
 
 	promptText, err := os.ReadFile(opts.PromptFile)
 	if err != nil {
+		r.releaseLock()
 		fmt.Fprintf(opts.Stderr, "envoy: cannot read prompt file: %s\n", err)
 		return Result{ExitCode: job.ExitInfra, OutDir: outDir}
 	}
 
 	// A known session id (claude, or any --resume) locks before any job
 	// artifact is written, so a rejected racing resume cannot truncate the
-	// live job's files.
-	if sessionID := driver.PreflightSessionID(); sessionID != "" {
+	// live job's files. A supervisor may have reserved it already.
+	if sessionID := driver.PreflightSessionID(); sessionID != "" && r.sessionLock == nil {
 		handle, err := lock.Acquire(sessionID, outDir, r.instance)
 		if err != nil {
 			fmt.Fprintf(opts.Stderr, "lock error: %s\n", err)

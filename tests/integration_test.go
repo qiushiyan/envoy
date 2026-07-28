@@ -1310,3 +1310,109 @@ func TestFanCollectResultOnly(t *testing.T) {
 		}
 	}
 }
+
+// A resumed fan-out starts every member or none — including at dispatch time.
+// A member's session held by another live turn (a caller resumed it
+// individually, say) must refuse the round before any sibling spawns, not
+// strand a partial round after validation passed on historical metadata.
+func TestFanResumeFromRefusesWhenASessionIsHeld(t *testing.T) {
+	e := newEnv(t).
+		set("ENVOY_FAKE_SCENARIO", "success").
+		set("ENVOY_FAKE_SESSION_ID_CODEX", "sess-codex-held").
+		set("ENVOY_FAKE_SESSION_ID_CLAUDE", "sess-claude-free")
+	r1 := filepath.Join(t.TempDir(), "round1")
+	prompt := writePrompt(t, t.TempDir())
+	if res := runEnvoy(t, e, fanArgs(prompt, r1, "--with", "codex", "--with", "claude:opus",
+		"--timeout-min", "5")...); res.code != 0 {
+		t.Fatalf("round 1 exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+
+	// Another live turn holds the codex member's session, exactly as when a
+	// caller resumed that member individually and it is still running.
+	lockDir := filepath.Join(e.home, ".local", "state", "envoy", "locks")
+	if err := os.MkdirAll(lockDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	payload := fmt.Sprintf(`{"pid":%d,"runnerInstanceId":"another-turn","outDir":"%s","startedAt":"2026-07-28T00:00:00.000Z"}`,
+		os.Getpid(), t.TempDir())
+	if err := os.WriteFile(filepath.Join(lockDir, "sess-codex-held.lock"), []byte(payload+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r2 := filepath.Join(t.TempDir(), "round2")
+	res := runEnvoy(t, e, "fan", "--resume-from", r1, "--prompt-file", prompt,
+		"--out-dir", r2, "--timeout-min", "5")
+	if res.code != 3 {
+		t.Fatalf("held-session resume exit = %d, want 3\nstdout:\n%s\nstderr:\n%s",
+			res.code, res.stdout, res.stderr)
+	}
+	mustContain(t, "stderr", res.stderr, "sess-codex-held")
+	if _, err := os.Stat(filepath.Join(r2, "claude-opus", "meta.json")); err == nil {
+		t.Fatal("a sibling turn ran while the set was refused")
+	}
+}
+
+// "Resumable" has one definition. A member whose turn ended in a session-lock
+// conflict does not advertise a resume command of its own, so the set-level
+// resume must not advertise or accept it either.
+func TestConflictedMemberIsNotSetResumable(t *testing.T) {
+	e := newEnv(t)
+	dir := filepath.Join(t.TempDir(), "group")
+	codexDir := filepath.Join(dir, "codex")
+	opusDir := filepath.Join(dir, "claude-opus")
+	for _, d := range []string{codexDir, opusDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cwd := t.TempDir()
+	group := fmt.Sprintf(`{"schemaVersion":1,"startedAt":"2026-07-28T00:00:00.000Z","endedAt":"2026-07-28T00:05:00.000Z","cwd":%q,"promptFile":%q,"label":null,"timeoutMin":5,"gitBaseline":null,"outDir":%q,"watchCommand":"","supervisorPid":1,"members":[{"name":"codex","provider":"codex","model":null,"effort":null,"outDir":%q},{"name":"claude-opus","provider":"claude","model":"opus","effort":null,"outDir":%q}]}`,
+		cwd, filepath.Join(dir, "prompt.md"), dir, codexDir, opusDir)
+	if err := os.WriteFile(filepath.Join(dir, "group.json"), []byte(group), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	okMeta := `{"schemaVersion":4,"status":"ok","provider":"codex","sessionId":"sess-ok","promptState":"accepted","timeoutMin":5,"collectedAt":null}`
+	conflictMeta := `{"schemaVersion":4,"status":"failed","provider":"claude","model":"opus","sessionId":"sess-conflict","sessionLockConflict":"session sess-conflict already has a live turn","promptState":"unknown","timeoutMin":5,"collectedAt":null}`
+	os.WriteFile(filepath.Join(codexDir, "meta.json"), []byte(okMeta), 0o644)
+	os.WriteFile(filepath.Join(opusDir, "meta.json"), []byte(conflictMeta), 0o644)
+	os.WriteFile(filepath.Join(codexDir, "result.md"), []byte("codex answer"), 0o644)
+	os.WriteFile(filepath.Join(opusDir, "result.md"), []byte("opus partial"), 0o644)
+
+	col := runEnvoy(t, e, "collect", dir)
+	if strings.Contains(col.stdout, "envoy fan --resume-from") {
+		t.Fatalf("a conflicted member must suppress the set-level resume line:\n%s", col.stdout)
+	}
+
+	prompt := writePrompt(t, t.TempDir())
+	res := runEnvoy(t, e, "fan", "--resume-from", dir, "--prompt-file", prompt)
+	if res.code != 3 {
+		t.Fatalf("conflicted-member resume exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
+	}
+	mustContain(t, "stderr", res.stderr, "claude-opus", "session-lock conflict")
+}
+
+// collectedAt means the result body reached a caller. A turn that reports ok
+// while its result.md is unreadable delivered nothing — the collect must say
+// so and leave the job owed, in both full and result-only modes.
+func TestCollectDoesNotStampAnOkTurnWithoutItsResult(t *testing.T) {
+	for _, args := range [][]string{{"collect"}, {"collect", "--result-only"}} {
+		e := newEnv(t)
+		dir := filepath.Join(t.TempDir(), "job")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		meta := `{"schemaVersion":4,"status":"ok","provider":"codex","sessionId":"sess-1","promptState":"accepted","timeoutMin":5,"collectedAt":null}`
+		if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte(meta), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		res := runEnvoy(t, e, append(args, dir)...)
+		if res.code != 0 {
+			t.Fatalf("%v exit = %d\nstderr:\n%s", args, res.code, res.stderr)
+		}
+		mustContain(t, fmt.Sprintf("stdout of %v", args), res.stdout, "result.md could not be read")
+		if readMeta(t, dir)["collectedAt"] != nil {
+			t.Fatalf("%v stamped a result it never delivered", args)
+		}
+	}
+}

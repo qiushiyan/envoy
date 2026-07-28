@@ -237,14 +237,15 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 	meta = reconcileAbandoned(outDir, meta, state)
 	state = classifyRunning(meta)
 
+	// The result-only shortcut applies only when the payload actually reads:
+	// an ok turn whose result.md is unreadable falls through to the full
+	// block, which diagnoses the missing payload and leaves the job owed.
 	if mode == ModeResultOnly && meta.Status == job.StatusOK {
 		if data, err := os.ReadFile(resultPath); err == nil {
 			fmt.Fprintln(w, string(data))
-		} else {
-			fmt.Fprintln(w, "(no result.md yet)")
+			stampCollected(metaPath, meta, steer.CollectedOK())
+			return meta, 0
 		}
-		stampCollected(metaPath, meta, steer.CollectedOK())
-		return meta, 0
 	}
 
 	fmt.Fprintf(w, "job: %s\n", outDir)
@@ -330,10 +331,12 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 		printGitSinceBaseline(w, meta.Cwd, *meta.GitBaseline)
 	}
 
+	resultDelivered := false
 	if mode != ModeStatusOnly {
 		fmt.Fprintln(w, "\n--- result.md ---")
 		if data, err := os.ReadFile(resultPath); err == nil {
 			fmt.Fprintln(w, string(data))
+			resultDelivered = true
 		} else {
 			fmt.Fprintln(w, "(no result.md yet)")
 		}
@@ -350,6 +353,14 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 
 	if mode == ModeStatusOnly {
 		fmt.Fprintf(w, "\nnext: %s\n", steer.StatusOnlyNext(outDir))
+		return meta, 0
+	}
+
+	// An ok turn's deliverable is its payload; a non-ok turn's is the status
+	// and recovery above. Only a delivered deliverable stamps collection, so
+	// an ok turn whose result.md cannot be read stays owed.
+	if meta.Status == job.StatusOK && !resultDelivered {
+		fmt.Fprintf(w, "\nnext: %s\n", steer.OkResultUnreadable(outDir))
 		return meta, 0
 	}
 
@@ -407,7 +418,7 @@ func collectGroup(dir string, mode Mode, w, errW io.Writer) int {
 		} else {
 			status = meta.Status
 		}
-		if meta == nil || meta.Status == job.StatusRunning || meta.SessionID == nil {
+		if _, blocked := memberResumeBlocker(meta); blocked {
 			resumable = false
 		}
 		statuses = append(statuses, status)

@@ -179,6 +179,15 @@ func StatusOnlyNext(outDir string) string {
 		"Print the full job: " + CollectCommand(outDir) + "."
 }
 
+// OkResultUnreadable closes a collection that found a terminal ok turn whose
+// result.md could not be read: the answer was not delivered, so the job stays
+// uncollected rather than being stamped over a payload nobody received.
+func OkResultUnreadable(outDir string) string {
+	return "this turn reports ok but its result.md could not be read, so its answer was not delivered and nothing " +
+		"was marked collected. The payload may survive in raw.log or last-message.txt under " + outDir +
+		"; recover it, then collect again: " + CollectCommand(outDir) + "."
+}
+
 // CollectThisJob is the action every terminal turn ends on.
 func CollectThisJob(outDir string) string {
 	return "Collect and verify this job: " + CollectCommand(outDir) + "."
@@ -362,6 +371,33 @@ func FanResumeFromNotAFanOut(dir, resumeCmd string) string {
 	return head + " Collect it to see what it licenses: " + CollectCommand(dir) + "."
 }
 
+// FanResumeBlockerKind classifies why one member blocks a set-level resume.
+// The kinds are steer vocabulary so every surface that reports a blocker —
+// the facade's refusal, collect's resume line — words one situation one way.
+type FanResumeBlockerKind string
+
+const (
+	FanBlockerUnreadableMeta FanResumeBlockerKind = "unreadable-meta"
+	FanBlockerRunning        FanResumeBlockerKind = "running"
+	FanBlockerNoSession      FanResumeBlockerKind = "no-session"
+	FanBlockerLockConflict   FanResumeBlockerKind = "lock-conflict"
+)
+
+// FanResumeBlockerLine words one member's blocker as an observation. detail
+// carries the read error for an unreadable meta and is ignored otherwise.
+func FanResumeBlockerLine(member string, kind FanResumeBlockerKind, detail string) string {
+	switch kind {
+	case FanBlockerUnreadableMeta:
+		return fmt.Sprintf("member %s has no readable meta.json (%s)", member, detail)
+	case FanBlockerRunning:
+		return fmt.Sprintf("member %s is still running", member)
+	case FanBlockerLockConflict:
+		return fmt.Sprintf("member %s's last turn ended in a session-lock conflict, so its session may belong to another job", member)
+	default: // FanBlockerNoSession
+		return fmt.Sprintf("member %s never published a session id, so it has no conversation to continue", member)
+	}
+}
+
 // FanResumeFromBlocked refuses a resume whose set is not whole: every member
 // is continued together or not at all, because dispatching the ready ones now
 // would leave the blocked voices out of the round with no record of why.
@@ -371,6 +407,15 @@ func FanResumeFromBlocked(dir string, reasons []string) string {
 		"its own recovery; once every member is finished with a session, resume the set — or continue just the ready "+
 		"members individually with the `envoy turn --resume` command their sections print.",
 		strings.Join(reasons, "; "), CollectCommand(dir))
+}
+
+// FanResumeSessionHeld refuses a round whose session reservation found a
+// member's conversation held by another live turn. Nothing was dispatched:
+// reservation happens before any member spawns, so the set stays whole.
+func FanResumeSessionHeld(member, conflict string) string {
+	return fmt.Sprintf("cannot start this round — member %s: %s\nA resumed fan-out starts every member or none, "+
+		"and nothing was dispatched. Once that session is free, run this command again.",
+		member, strings.TrimRight(conflict, ". \t\n")+".")
 }
 
 // FanResumeCommand is the complete command that continues every member of this

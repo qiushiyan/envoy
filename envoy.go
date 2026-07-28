@@ -270,68 +270,43 @@ func Fan(req FanRequest) int {
 	})
 }
 
-// resumableMembers reads a finished fan-out's roster and each member's own
-// meta.json, and hands back the members as resumed turns. The set is whole or
-// refused: a member still running, or one that never published a session,
-// blocks the resume rather than being silently left out of the round.
+// resumableMembers resolves a --resume-from directory into the members of a
+// new round, through collect's typed inspection so the dispatch decision and
+// collect's own resume line can never disagree about who can continue. The
+// set is whole or refused: any blocked member refuses the round rather than
+// being silently left out of it.
 func resumableMembers(dir string) ([]fan.Member, *job.Group, string) {
 	if !job.IsGroupDir(dir) {
-		if meta, _, err := job.ReadMetaFile(filepath.Join(dir, "meta.json")); err == nil {
-			resumeCmd := ""
-			if meta.SessionID != nil && meta.SessionLockConflict == nil {
-				resumeCmd = steer.Turn{
-					Provider:   meta.Provider,
-					SessionID:  *meta.SessionID,
-					Cwd:        meta.Cwd,
-					Model:      strOrEmpty(meta.Model),
-					Effort:     strOrEmpty(meta.Effort),
-					AllowWrite: meta.AllowWrite,
-					TimeoutMin: meta.TimeoutMin,
-				}.ResumeCommand()
-			}
-			return nil, nil, steer.FanResumeFromNotAFanOut(dir, resumeCmd)
+		if cmd, isTurn := collect.TurnResume(dir); isTurn {
+			return nil, nil, steer.FanResumeFromNotAFanOut(dir, cmd)
 		}
 		return nil, nil, fmt.Sprintf("--resume-from %s: no fan-out found there (no group.json). Pass the fan-out's out-dir printed at dispatch", dir)
 	}
-	group, err := job.ReadGroupFile(job.GroupWorkspace{Dir: dir}.GroupPath())
+	state, err := collect.InspectFanResume(dir)
 	if err != nil {
 		return nil, nil, fmt.Sprintf("--resume-from %s: group.json is unreadable (%s)", dir, err)
 	}
-	if len(group.Members) == 0 {
+	if len(state.Members) == 0 && len(state.Blockers) == 0 {
 		return nil, nil, fmt.Sprintf("--resume-from %s: the manifest lists no members", dir)
 	}
-	members := make([]fan.Member, 0, len(group.Members))
-	var blocked []string
-	for _, m := range group.Members {
-		meta, _, err := job.ReadMetaFile(filepath.Join(m.OutDir, "meta.json"))
-		switch {
-		case err != nil:
-			blocked = append(blocked, fmt.Sprintf("member %s has no readable meta.json (%s)", m.Name, err))
-		case meta.Status == job.StatusRunning:
-			blocked = append(blocked, fmt.Sprintf("member %s is still running", m.Name))
-		case meta.SessionID == nil:
-			blocked = append(blocked, fmt.Sprintf("member %s never published a session id, so it has no conversation to continue", m.Name))
-		default:
-			members = append(members, fan.Member{
-				Provider: m.Provider,
-				Model:    strOrEmpty(m.Model),
-				Effort:   strOrEmpty(m.Effort),
-				Resume:   *meta.SessionID,
-				Name:     m.Name,
-			})
+	if len(state.Blockers) > 0 {
+		reasons := make([]string, len(state.Blockers))
+		for i, b := range state.Blockers {
+			reasons[i] = steer.FanResumeBlockerLine(b.Member, b.Kind, b.Detail)
+		}
+		return nil, nil, steer.FanResumeFromBlocked(dir, reasons)
+	}
+	members := make([]fan.Member, len(state.Members))
+	for i, m := range state.Members {
+		members[i] = fan.Member{
+			Provider: m.Provider,
+			Model:    m.Model,
+			Effort:   m.Effort,
+			Resume:   m.Session,
+			Name:     m.Name,
 		}
 	}
-	if len(blocked) > 0 {
-		return nil, nil, steer.FanResumeFromBlocked(dir, blocked)
-	}
-	return members, group, ""
-}
-
-func strOrEmpty(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
+	return members, state.Group, ""
 }
 
 // parseMember reads one member spec. The colon form keeps a member's settings

@@ -139,11 +139,12 @@ Consequences that are load-bearing, not incidental:
 
 ## Collection: delivery, not display
 
-`collectedAt` means one thing: *the return value reached a caller*. That is
-why the stamp is set exactly when a result body is printed — a full collect,
-or `--result-only` — and never by `--status-only` or `pending`, which read
-coordinates without delivering anything: the result stays owed, and pending
-keeps listing the job. The two selection flags exist because the block is
+`collectedAt` means one thing: *the return value reached a caller*. The stamp
+marks a delivered deliverable — an ok turn's printed result body, or a non-ok
+turn's full diagnostic block, whose status and recovery are its result — and
+is never set by `--status-only` or `pending`, which read coordinates without
+delivering anything, nor for an ok turn whose `result.md` would not read: in
+both cases the result stays owed and pending keeps listing the job. The two selection flags exist because the block is
 read by an agent whose context the result body and the status preamble
 compete for (the logs showed nearly every collect piped through `sed`/`head`).
 They select sections, never soften the contract: `--result-only` on anything
@@ -256,4 +257,11 @@ Engine-relevant history, distilled from the predecessor and continued here.
   quotes and could never run as printed → member paths spelled out, pinned by
   an exact-line test. The lesson that generalizes: **the engine's own job
   store is its usage lab — read it before inventing features, and after
-  shipping them.**
+  shipping them.** The same-day review round then caught the new features'
+  own gaps, each fixed against a red test: a resumed round could dispatch
+  partially when a member's session was held by another live turn (the round
+  now reserves every member's session before any turn spawns), "resumable"
+  had grown two contradictory definitions across collect and the facade
+  (collapsed into one typed inspection, blockers worded by steer), and
+  collect stamped `collectedAt` even when an ok turn's result body never
+  reached the caller (the stamp now follows delivery).
