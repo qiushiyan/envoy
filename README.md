@@ -1,12 +1,7 @@
 # envoy
 
 Run one headless AI-session turn (`claude` or `codex`) as a background-friendly
-job and get it back as durable data. envoy is the engine behind the `/consult`,
-`/review`, and `/delegate` Claude Code skills: the skills own judgment, envoy
-owns mechanism — one turn in, files out, zero retries, zero gates.
-
-It is a Go rewrite (and superset) of the earlier `sidekick-runtime` Node
-scripts, with the same caller contract. Zero third-party dependencies.
+job and get it back as durable data.
 
 ## Install
 
