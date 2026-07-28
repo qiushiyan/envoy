@@ -98,12 +98,12 @@ func classifyRunning(meta *job.Meta) runningState {
 	}
 }
 
-// resumeCommand rebuilds this job's follow-up command from what the turn was
-// dispatched with, so the caller never has to assemble one — or discover too
-// late that the original turn's write intent was dropped.
-func resumeCommand(meta *job.Meta) string {
+// turnFromMeta rebuilds the dispatched turn's settings for follow-up
+// rendering, or reports false when this job has no continuable session (none
+// recorded, or a lock conflict that means the session may belong elsewhere).
+func turnFromMeta(meta *job.Meta) (prose.Turn, bool) {
 	if meta.SessionLockConflict != nil || meta.SessionID == nil {
-		return ""
+		return prose.Turn{}, false
 	}
 	return prose.Turn{
 		Provider:   meta.Provider,
@@ -113,7 +113,18 @@ func resumeCommand(meta *job.Meta) string {
 		Effort:     deref(meta.Effort),
 		AllowWrite: meta.AllowWrite,
 		TimeoutMin: meta.TimeoutMin,
-	}.ResumeCommand()
+	}, true
+}
+
+// resumeCommand rebuilds this job's follow-up command from what the turn was
+// dispatched with, so the caller never has to assemble one — or discover too
+// late that the original turn's write intent was dropped.
+func resumeCommand(meta *job.Meta) string {
+	turn, ok := turnFromMeta(meta)
+	if !ok {
+		return ""
+	}
+	return turn.ResumeCommand()
 }
 
 func deref(s *string) string {

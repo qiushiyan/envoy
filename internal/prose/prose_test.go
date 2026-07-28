@@ -143,21 +143,26 @@ func TestFanNextPrescribesPerMemberRecovery(t *testing.T) {
 	}
 }
 
-// The one case where the prompt-file placeholder closes is a steer supplement:
-// the new prompt already exists, so the handed-over command must be runnable
-// as printed, quoted path and all — and a command without the slot must pass
-// through untouched rather than be guessed at.
-func TestFillPromptFile(t *testing.T) {
-	cmd := Turn{Provider: "codex", SessionID: "s1", TimeoutMin: 30}.ResumeCommand()
-	filled := FillPromptFile(cmd, "/tmp/supp file.md")
-	if !strings.Contains(filled, "--prompt-file '/tmp/supp file.md'") {
-		t.Fatalf("placeholder not filled: %q", filled)
+// The one case where the prompt-file placeholder closes is a steer supplement.
+// The filled command is rendered from the turn's structured fields, never by
+// editing the placeholder out of a finished string — so a dispatched path that
+// happens to contain the placeholder text cannot collide with the slot.
+func TestResumeCommandWith(t *testing.T) {
+	turn := Turn{Provider: "codex", SessionID: "s1", Cwd: "/tmp/<your-follow-up.md>/repo", TimeoutMin: 30}
+	got := turn.ResumeCommandWith("/tmp/supp file.md")
+	if !strings.Contains(got, "--cwd '/tmp/<your-follow-up.md>/repo'") {
+		t.Fatalf("cwd corrupted: %q", got)
 	}
-	if strings.Contains(filled, "<your-follow-up.md>") {
-		t.Fatalf("placeholder survived filling: %q", filled)
+	if !strings.Contains(got, "--prompt-file '/tmp/supp file.md'") {
+		t.Fatalf("prompt slot not filled or unquoted: %q", got)
 	}
-	if got := FillPromptFile("codex resume s1", "/tmp/s.md"); got != "codex resume s1" {
-		t.Fatalf("command without a slot must pass through, got %q", got)
+	if (Turn{Provider: "codex"}).ResumeCommandWith("/tmp/s.md") != "" {
+		t.Fatal("no session id means no follow-up command, filled or not")
+	}
+	round := FanResumeCommandWith("/jobs/<your-follow-up.md>", 30, "/tmp/s.md")
+	if !strings.Contains(round, "--resume-from '/jobs/<your-follow-up.md>'") ||
+		!strings.Contains(round, "--prompt-file '/tmp/s.md'") {
+		t.Fatalf("fan round rendered wrong: %q", round)
 	}
 }
 

@@ -29,20 +29,27 @@ type Turn struct {
 
 // promptPlaceholder is the slot every follow-up command leaves open: a resumed
 // turn needs a NEW prompt, and only the caller knows which file that will be.
+// Commands are always rendered from structured fields — never edited as
+// strings afterwards — so a path that happens to contain this text can never
+// collide with the slot.
 const promptPlaceholder = "<your-follow-up.md>"
-
-// FillPromptFile substitutes an actual prompt file into a follow-up command's
-// placeholder slot — for the one case where the new prompt already exists as a
-// file in the caller's hand, a steer supplement.
-func FillPromptFile(cmd, promptFile string) string {
-	return strings.Replace(cmd, promptPlaceholder, text.ShellQuote(promptFile), 1)
-}
 
 // ResumeCommand is the complete command that continues this provider session,
 // carrying the original turn's settings so a follow-up cannot silently drop
 // write intent or run against another tree. The prompt file is a placeholder:
 // a resumed turn needs a new prompt, never the original one again.
 func (t Turn) ResumeCommand() string {
+	return t.resumeCommand(promptPlaceholder)
+}
+
+// ResumeCommandWith renders the follow-up with an existing prompt file in the
+// slot — steer's case, the one place the placeholder closes because the new
+// prompt is already in the caller's hand.
+func (t Turn) ResumeCommandWith(promptFile string) string {
+	return t.resumeCommand(text.ShellQuote(promptFile))
+}
+
+func (t Turn) resumeCommand(promptArg string) string {
 	if t.SessionID == "" {
 		return ""
 	}
@@ -59,7 +66,7 @@ func (t Turn) ResumeCommand() string {
 	if t.Cwd != "" {
 		parts = append(parts, "--cwd "+text.ShellQuote(t.Cwd))
 	}
-	parts = append(parts, fmt.Sprintf("--timeout-min %g", t.TimeoutMin), "--prompt-file "+promptPlaceholder)
+	parts = append(parts, fmt.Sprintf("--timeout-min %g", t.TimeoutMin), "--prompt-file "+promptArg)
 	return strings.Join(parts, " ")
 }
 
@@ -462,8 +469,18 @@ func FanUndeliveredResults(members []string) string {
 // fan-out, mirroring Turn.ResumeCommand: settings carried, prompt file left as
 // the placeholder a follow-up must fill.
 func FanResumeCommand(dir string, timeoutMin float64) string {
+	return fanResumeCommand(dir, timeoutMin, promptPlaceholder)
+}
+
+// FanResumeCommandWith renders the round with an existing prompt file in the
+// slot, mirroring Turn.ResumeCommandWith.
+func FanResumeCommandWith(dir string, timeoutMin float64, promptFile string) string {
+	return fanResumeCommand(dir, timeoutMin, text.ShellQuote(promptFile))
+}
+
+func fanResumeCommand(dir string, timeoutMin float64, promptArg string) string {
 	return fmt.Sprintf("envoy fan --resume-from %s --timeout-min %g --prompt-file %s",
-		text.ShellQuote(dir), timeoutMin, promptPlaceholder)
+		text.ShellQuote(dir), timeoutMin, promptArg)
 }
 
 // FanMemberFlagRefused catches a turn flag aimed at a fan-out, where it would
@@ -489,6 +506,15 @@ func FanMemberFlagRefused(flag string) string {
 type SteerReport struct {
 	Why  string // one clause, printed after "not delivered — "
 	Next string // the action, possibly spanning lines with indented commands
+}
+
+// Block renders the complete steer answer, so the "not delivered" verdict —
+// the one fact every steer report shares — is worded here with the rest of
+// the vocabulary rather than at the printing surface.
+func (r SteerReport) Block(outDir string) string {
+	return "steer: not delivered — " + r.Why + "\n" +
+		"job: " + outDir + "\n" +
+		"next: " + r.Next + "\n"
 }
 
 // SteerCommand is the steer invocation for one job dir, spelled out so a

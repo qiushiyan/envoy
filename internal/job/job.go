@@ -40,6 +40,17 @@ const (
 	StatusAbandoned   = "abandoned" // written by collect's reconciliation, never by the runner
 )
 
+// KnownStatus reports whether s is a status this engine writes — the
+// discriminator between a job's meta.json and some other program's file that
+// happens to parse and carry a "status" field.
+func KnownStatus(s string) bool {
+	switch s {
+	case StatusRunning, StatusOK, StatusFailed, StatusInfra, StatusTimeout, StatusInterrupted, StatusAbandoned:
+		return true
+	}
+	return false
+}
+
 // ExitCodeFor maps a terminal status to the process exit code.
 func ExitCodeFor(status string) int {
 	switch status {

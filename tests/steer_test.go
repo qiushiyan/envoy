@@ -1,7 +1,10 @@
 // Steer contract: a supplement is never delivered into a live turn — no
 // provider accepts one — so every steer answer is "not delivered" plus the one
-// runnable command that carries the supplement to the session. These tests pin
-// the wording per job state and the invariant that steer mutates nothing.
+// runnable command that carries the supplement to the session. Steer's stdout
+// is a three-line block and fully deterministic, so these tests assert the
+// complete output: extra lines, reordering, and wording drift all fail, not
+// just missing fragments. They also pin the invariant that steer mutates
+// nothing.
 package integration
 
 import (
@@ -24,18 +27,16 @@ func writeSupplement(t *testing.T) string {
 	return p
 }
 
-func mustNotContain(t *testing.T, name, s string, subs ...string) {
+func mustEqual(t *testing.T, name, got, want string) {
 	t.Helper()
-	for _, sub := range subs {
-		if strings.Contains(s, sub) {
-			t.Fatalf("%s must not contain %q, got:\n%s", name, sub, s)
-		}
+	if got != want {
+		t.Fatalf("%s mismatch\n--- got ---\n%s\n--- want ---\n%s", name, got, want)
 	}
 }
 
 // A live claude turn holds a session from the first moment, so steer can hand
-// over the exact follow-up command — filled with the supplement, placeholder
-// closed — while saying plainly that the in-flight turn will never see it.
+// over the exact follow-up command — rendered with the supplement in the
+// prompt slot — while saying plainly that the in-flight turn will never see it.
 func TestSteerLiveClaudeHandsOverFilledResume(t *testing.T) {
 	e := newEnv(t).
 		set("ENVOY_FAKE_SCENARIO", "delayed-success").
@@ -74,17 +75,16 @@ func TestSteerLiveClaudeHandsOverFilledResume(t *testing.T) {
 	if res.code != 0 {
 		t.Fatalf("steer = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
-	session := readMeta(t, outDir)["sessionId"].(string)
-	mustContain(t, "steer stdout", res.stdout,
-		"steer: not delivered — this turn is still running, and claude takes no input into a turn in flight",
-		"queue the supplement as a second turn",
-		"job: "+outDir,
-		"next: wait for this job to finish and read its result",
-		"envoy turn --provider claude --resume "+session,
-		"--timeout-min 5",
-		"--prompt-file '"+supp+"'",
-	)
-	mustNotContain(t, "steer stdout", res.stdout, "<your-follow-up.md>")
+	meta := readMeta(t, outDir)
+	session := meta["sessionId"].(string)
+	cwd := meta["cwd"].(string)
+	mustEqual(t, "steer stdout", res.stdout,
+		"steer: not delivered — this turn is still running, and claude takes no input into a turn in flight — "+
+			"its streaming input would only queue the supplement as a second turn after this one finishes\n"+
+			"job: "+outDir+"\n"+
+			"next: wait for this job to finish and read its result — it may already cover this — "+
+			"then send the supplement as the same session's follow-up prompt:\n"+
+			"  envoy turn --provider claude --resume "+session+" --cwd '"+cwd+"' --timeout-min 5 --prompt-file '"+supp+"'\n")
 }
 
 // Before a fresh codex thread reports its id there is no session to continue,
@@ -123,12 +123,13 @@ func TestSteerLiveCodexWithoutSessionPointsAtCollect(t *testing.T) {
 	if res.code != 0 {
 		t.Fatalf("steer = %d\n%s", res.code, res.stderr)
 	}
-	mustContain(t, "steer stdout", res.stdout,
-		"codex takes no input after dispatch",
-		"no session id has been published yet",
-		"envoy collect '"+outDir+"'",
-	)
-	mustNotContain(t, "steer stdout", res.stdout, "envoy turn")
+	mustEqual(t, "steer stdout", res.stdout,
+		"steer: not delivered — this turn is still running, and codex takes no input after dispatch — "+
+			"codex exec reads its instructions once, at start\n"+
+			"job: "+outDir+"\n"+
+			"next: no session id has been published yet, so the follow-up command cannot be printed here. "+
+			"Wait for this job to finish, then collect it (envoy collect '"+outDir+"') "+
+			"and give this supplement to the resume command it prints.\n")
 }
 
 // A finished ok turn: the supplement is the session's next prompt. An
@@ -143,18 +144,19 @@ func TestSteerTerminalOkFillsResumeAndStampsNothing(t *testing.T) {
 	if res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "5")...); res.code != 0 {
 		t.Fatalf("turn = %d\n%s", res.code, res.stderr)
 	}
+	cwd := readMeta(t, outDir)["cwd"].(string)
+	followUp := "  envoy turn --provider codex --resume fake-session-id --cwd '" + cwd +
+		"' --timeout-min 5 --prompt-file '" + supp + "'\n"
 
 	res := runEnvoy(t, e, "steer", "--prompt-file", supp, outDir)
 	if res.code != 0 {
 		t.Fatalf("steer = %d\n%s", res.code, res.stderr)
 	}
-	mustContain(t, "steer stdout", res.stdout,
-		"steer: not delivered — this job is already terminal (status ok)",
-		"read the result first",
-		"envoy collect '"+outDir+"'",
-		"envoy turn --provider codex --resume fake-session-id",
-		"--prompt-file '"+supp+"'",
-	)
+	mustEqual(t, "steer stdout", res.stdout,
+		"steer: not delivered — this job is already terminal (status ok), so there is no running turn to reach\n"+
+			"job: "+outDir+"\n"+
+			"next: read the result first — it may already cover this: envoy collect '"+outDir+"'. "+
+			"Then send the supplement as the same session's follow-up prompt:\n"+followUp)
 	if meta := readMeta(t, outDir); meta["collectedAt"] != nil {
 		t.Fatalf("steer must not stamp collectedAt, got %v", meta["collectedAt"])
 	}
@@ -164,8 +166,10 @@ func TestSteerTerminalOkFillsResumeAndStampsNothing(t *testing.T) {
 		t.Fatalf("collect = %d\n%s", res.code, res.stderr)
 	}
 	res = runEnvoy(t, e, "steer", "--prompt-file", supp, outDir)
-	mustContain(t, "steer after collect", res.stdout, "next: send the supplement as the same session's follow-up prompt")
-	mustNotContain(t, "steer after collect", res.stdout, "read the result first")
+	mustEqual(t, "steer after collect", res.stdout,
+		"steer: not delivered — this job is already terminal (status ok), so there is no running turn to reach\n"+
+			"job: "+outDir+"\n"+
+			"next: send the supplement as the same session's follow-up prompt:\n"+followUp)
 }
 
 // A non-ok terminal turn licenses nothing by itself: whether its session may
@@ -185,12 +189,12 @@ func TestSteerTerminalFailedRoutesThroughCollect(t *testing.T) {
 	if res.code != 0 {
 		t.Fatalf("steer = %d\n%s", res.code, res.stderr)
 	}
-	mustContain(t, "steer stdout", res.stdout,
-		"steer: not delivered — this job is already terminal (status failed)",
-		"its session may continue is that job's own recovery decision",
-		"envoy collect '"+outDir+"'",
-	)
-	mustNotContain(t, "steer stdout", res.stdout, "envoy turn")
+	mustEqual(t, "steer stdout", res.stdout,
+		"steer: not delivered — this job is already terminal (status failed), so there is no running turn to reach\n"+
+			"job: "+outDir+"\n"+
+			"next: whether its session may continue is that job's own recovery decision. "+
+			"Collect it and follow its next line, giving this supplement to any follow-up command it prints: "+
+			"envoy collect '"+outDir+"'\n")
 }
 
 // A job whose meta says running while its runner is gone has nothing listening.
@@ -217,10 +221,12 @@ func TestSteerStaleRunningJobMutatesNothing(t *testing.T) {
 	if res.code != 0 {
 		t.Fatalf("steer = %d\n%s", res.code, res.stderr)
 	}
-	mustContain(t, "steer stdout", res.stdout,
-		"runner process is gone (abandoned)",
-		"envoy collect '"+outDir+"'",
-	)
+	mustEqual(t, "steer stdout", res.stdout,
+		"steer: not delivered — this job records status running but its runner process is gone (abandoned), "+
+			"so nothing is listening for input\n"+
+			"job: "+outDir+"\n"+
+			"next: collect the job: envoy collect '"+outDir+"' — that diagnoses the stranded turn and prescribes "+
+			"the safe continuation; give this supplement to whatever follow-up command it prints.\n")
 	if got := readFile(t, metaPath); got != string(data) {
 		t.Fatalf("steer rewrote meta.json:\n%s", got)
 	}
@@ -246,16 +252,20 @@ func TestSteerGroupRedirectsPerMember(t *testing.T) {
 	if res.code != 0 {
 		t.Fatalf("steer = %d\n%s", res.code, res.stderr)
 	}
-	mustContain(t, "steer stdout", res.stdout,
-		"steer: not delivered — this is a fan-out",
-		"steer one member:",
-		"envoy steer --prompt-file '"+supp+"' '"+filepath.Join(outDir, "codex")+"'",
-		"envoy steer --prompt-file '"+supp+"' '"+filepath.Join(outDir, "claude")+"'",
-		"envoy fan --resume-from '"+outDir+"' --timeout-min 5 --prompt-file '"+supp+"'",
-	)
+	mustEqual(t, "steer stdout", res.stdout,
+		"steer: not delivered — this is a fan-out, and its members hold independent sessions that can be in different states\n"+
+			"job: "+outDir+"\n"+
+			"next: steer one member:\n"+
+			"  envoy steer --prompt-file '"+supp+"' '"+filepath.Join(outDir, "codex")+"'\n"+
+			"  envoy steer --prompt-file '"+supp+"' '"+filepath.Join(outDir, "claude")+"'\n"+
+			"Or send the supplement to every member as one new round once the fan-out is finished:\n"+
+			"  envoy fan --resume-from '"+outDir+"' --timeout-min 5 --prompt-file '"+supp+"'\n")
 }
 
-// Steer's own misuse answers: no supplement file, no job, a foreign meta.json.
+// Steer's own misuse answers: no supplement file, no job, and — because any
+// program can leave a parseable meta.json behind — a file whose status is not
+// one this engine writes, or that names no provider, is refused as a non-job
+// rather than reasoned about.
 func TestSteerUsageErrors(t *testing.T) {
 	e := newEnv(t)
 	supp := writeSupplement(t)
@@ -279,11 +289,18 @@ func TestSteerUsageErrors(t *testing.T) {
 	}
 	mustContain(t, "stderr", res.stderr, "meta.json not found", "out-dir printed at dispatch")
 
-	foreign := t.TempDir()
-	os.WriteFile(filepath.Join(foreign, "meta.json"), []byte(`{"commit":"abc"}`), 0o644)
-	res = runEnvoy(t, e, "steer", "--prompt-file", supp, foreign)
-	if res.code != 3 {
-		t.Fatalf("foreign meta = %d, want 3", res.code)
+	foreign := map[string]string{
+		"no status":      `{"commit":"abc"}`,
+		"unknown status": `{"status":"deployed","provider":"other"}`,
+		"no provider":    `{"status":"ok"}`,
 	}
-	mustContain(t, "stderr", res.stderr, "not a job this engine wrote")
+	for name, content := range foreign {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "meta.json"), []byte(content), 0o644)
+		res = runEnvoy(t, e, "steer", "--prompt-file", supp, dir)
+		if res.code != 3 {
+			t.Fatalf("%s meta = %d, want 3\nstdout:\n%s", name, res.code, res.stdout)
+		}
+		mustContain(t, name+" stderr", res.stderr, "not a job this engine wrote")
+	}
 }

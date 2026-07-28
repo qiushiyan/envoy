@@ -33,26 +33,27 @@ func Steer(outDir, promptFile string, w, errW io.Writer) int {
 			"steer error: %s is not valid JSON (%s); collect the job before acting on it\n", metaPath, err)
 		return job.ExitUsage
 	}
-	// The runner writes a status from the first moment, so a meta without one
-	// is some other program's file, not a job to reason about.
-	if meta.Status == "" {
+	// The runner records a known status and a provider from the first moment,
+	// so a meta missing either is some other program's file that happens to
+	// parse — not a job to reason about.
+	if !job.KnownStatus(meta.Status) || meta.Provider == "" {
 		fmt.Fprintf(errW,
-			"steer error: %s has no status, so this is not a job this engine wrote — pass the out-dir printed at dispatch\n",
-			metaPath)
+			"steer error: %s is not a job this engine wrote (status %q) — pass the out-dir printed at dispatch\n",
+			metaPath, meta.Status)
 		return job.ExitUsage
 	}
-	printSteer(w, outDir, steerReport(meta, classifyRunning(meta), outDir, promptFile))
+	fmt.Fprint(w, steerReport(meta, classifyRunning(meta), outDir, promptFile).Block(outDir))
 	return 0
 }
 
 // steerReport maps one turn's observed state onto prose's steer vocabulary.
-// The follow-up command is the job's own recorded resume shape with the
-// supplement filled in — the one place the prompt-file placeholder closes,
+// The follow-up command is the job's own resume shape rendered with the
+// supplement in the prompt slot — the one place that placeholder closes,
 // because here the new prompt already exists in the caller's hand.
 func steerReport(meta *job.Meta, state runningState, outDir, promptFile string) prose.SteerReport {
-	followUp := resumeCommand(meta)
-	if followUp != "" {
-		followUp = prose.FillPromptFile(followUp, promptFile)
+	followUp := ""
+	if turn, ok := turnFromMeta(meta); ok {
+		followUp = turn.ResumeCommandWith(promptFile)
 	}
 	if meta.Status == job.StatusRunning {
 		if state.kind == "live" {
@@ -89,13 +90,7 @@ func steerGroup(dir, promptFile string, w, errW io.Writer) int {
 	for _, m := range group.Members {
 		memberCmds = append(memberCmds, prose.SteerCommand(promptFile, m.OutDir))
 	}
-	round := prose.FillPromptFile(prose.FanResumeCommand(dir, group.TimeoutMin), promptFile)
-	printSteer(w, dir, prose.SteerGroup(memberCmds, round))
+	round := prose.FanResumeCommandWith(dir, group.TimeoutMin, promptFile)
+	fmt.Fprint(w, prose.SteerGroup(memberCmds, round).Block(dir))
 	return 0
-}
-
-func printSteer(w io.Writer, outDir string, report prose.SteerReport) {
-	fmt.Fprintf(w, "steer: not delivered — %s\n", report.Why)
-	fmt.Fprintf(w, "job: %s\n", outDir)
-	fmt.Fprintf(w, "next: %s\n", report.Next)
 }
