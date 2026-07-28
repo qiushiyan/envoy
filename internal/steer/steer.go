@@ -172,6 +172,13 @@ func CollectedOK() string {
 	return "result.md above is this turn's return value — use it in the step that dispatched it."
 }
 
+// StatusOnlyNext closes a status-only read, which delivers no result and
+// therefore marks nothing collected.
+func StatusOnlyNext(outDir string) string {
+	return "this was a status check only — no result was printed and nothing was marked collected. " +
+		"Print the full job: " + CollectCommand(outDir) + "."
+}
+
 // CollectThisJob is the action every terminal turn ends on.
 func CollectThisJob(outDir string) string {
 	return "Collect and verify this job: " + CollectCommand(outDir) + "."
@@ -329,11 +336,49 @@ func FanAllowWriteRefused() string {
 		"a git worktree per turn — and dispatch them as separate `envoy turn --allow-write --cwd <tree>` commands."
 }
 
-// FanResumeRefused explains why continuing a conversation is a single-turn
-// operation.
+// FanResumeRefused explains why a bare session id cannot continue a fan-out,
+// and where each of the two follow-up shapes lives.
 func FanResumeRefused() string {
-	return "--resume is not available on a fan-out: a session id names one conversation, and a fan-out starts several. " +
-		"Resume the member you mean with `envoy turn --resume <session>` — `envoy collect` prints each member's own resume command."
+	return "--resume is not available on a fan-out: a session id names one conversation, and a fan-out runs several. " +
+		"Resume one member with `envoy turn --resume <session>`, or continue every member of a finished fan-out on one " +
+		"new prompt with `envoy fan --resume-from <fan-out-dir>` — `envoy collect` prints both commands."
+}
+
+// FanResumeFromAndWith explains why a resumed fan-out takes no member specs.
+func FanResumeFromAndWith() string {
+	return "--resume-from and --with are mutually exclusive: a resumed fan-out continues the members recorded in the " +
+		"original fan-out's manifest, so the roster is already decided. Drop --with, or drop --resume-from to dispatch " +
+		"a fresh fan-out."
+}
+
+// FanResumeFromNotAFanOut redirects a --resume-from aimed at a single turn.
+// When that turn published a session, the redirect carries its actual resume
+// command instead of a shape to imitate.
+func FanResumeFromNotAFanOut(dir, resumeCmd string) string {
+	head := fmt.Sprintf("--resume-from needs a fan-out directory, and %s is a single turn.", dir)
+	if resumeCmd != "" {
+		return head + " Continue it directly:\n  " + resumeCmd
+	}
+	return head + " Collect it to see what it licenses: " + CollectCommand(dir) + "."
+}
+
+// FanResumeFromBlocked refuses a resume whose set is not whole: every member
+// is continued together or not at all, because dispatching the ready ones now
+// would leave the blocked voices out of the round with no record of why.
+func FanResumeFromBlocked(dir string, reasons []string) string {
+	return fmt.Sprintf("this fan-out cannot be resumed as a set yet — %s. A resumed fan-out continues every member "+
+		"together. Collect it first (%s): that reconciles members that died without a status, and each section carries "+
+		"its own recovery; once every member is finished with a session, resume the set — or continue just the ready "+
+		"members individually with the `envoy turn --resume` command their sections print.",
+		strings.Join(reasons, "; "), CollectCommand(dir))
+}
+
+// FanResumeCommand is the complete command that continues every member of this
+// fan-out, mirroring Turn.ResumeCommand: settings carried, prompt file left as
+// the placeholder a follow-up must fill.
+func FanResumeCommand(dir string, timeoutMin float64) string {
+	return fmt.Sprintf("envoy fan --resume-from %s --timeout-min %g --prompt-file <your-follow-up.md>",
+		text.ShellQuote(dir), timeoutMin)
 }
 
 // FanMemberFlagRefused catches a turn flag aimed at a fan-out, where it would

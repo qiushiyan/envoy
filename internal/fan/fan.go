@@ -30,27 +30,32 @@ import (
 )
 
 // Member is one turn of a fan-out. Its name is derived from the provider and
-// model, never supplied by the caller, so the directory layout and every line
-// that mentions the member agree by construction.
+// model, never supplied by the caller — except on a resumed fan-out, where the
+// original manifest's names carry over so a voice keeps its identity across
+// rounds. Either way the directory layout and every line that mentions the
+// member agree by construction.
 type Member struct {
 	Provider string
 	Model    string // "" = the provider's own configured default
 	Effort   string // "" = the provider's own configured default
+	Resume   string // "" = a fresh session; else the session id to continue
+	Name     string // "" = derive from provider and model
 }
 
 // Options is one validated fan-out request. Everything here is shared by every
 // member except the members themselves: the whole point is one prompt, one
 // cap, one directory.
 type Options struct {
-	Members    []Member
-	PromptFile string
-	Cwd        string
-	Baseline   string
-	Label      string
-	OutDir     string // "" = derive from cwd/label
-	TimeoutMin float64
-	Stdout     io.Writer
-	Stderr     io.Writer
+	Members     []Member
+	PromptFile  string
+	Cwd         string
+	Baseline    string
+	Label       string
+	OutDir      string // "" = derive from cwd/label
+	ResumedFrom string // "" = a fresh fan-out; else the fan-out whose sessions this one continues
+	TimeoutMin  float64
+	Stdout      io.Writer
+	Stderr      io.Writer
 }
 
 // outcome is one member's terminal state as the group reports it.
@@ -105,8 +110,9 @@ func Run(opts Options) int {
 		TimeoutMin:    opts.TimeoutMin,
 		GitBaseline:   ptrIfNonEmpty(opts.Baseline),
 		OutDir:        dir,
-		WatchCommand:  gw.WatchCommand(),
+		WatchCommand:  gw.WatchCommand(members),
 		SupervisorPid: os.Getpid(),
+		ResumedFrom:   ptrIfNonEmpty(opts.ResumedFrom),
 		Members:       members,
 	}
 	writeGroup(group, gw, opts.Stderr)
@@ -184,6 +190,7 @@ func runMember(opts Options, m Member, gm job.GroupMember, mu *sync.Mutex) (res 
 		Turn: provider.Options{
 			Model:      m.Model,
 			Effort:     m.Effort,
+			Resume:     m.Resume,
 			TimeoutMin: opts.TimeoutMin,
 		},
 		Stdout: io.Discard,
@@ -197,6 +204,9 @@ func printDispatchBlock(opts Options, gw job.GroupWorkspace, members []job.Group
 	w := opts.Stdout
 	fmt.Fprintf(w, "out-dir: %s\n", gw.Dir)
 	fmt.Fprintf(w, "fan-out: %d turns · one prompt · hard cap %s each\n", len(members), text.HardCap(opts.TimeoutMin))
+	if opts.ResumedFrom != "" {
+		fmt.Fprintf(w, "resumed-from: %s\n", opts.ResumedFrom)
+	}
 	// The member name already carries its provider and model, so the line adds
 	// only what the name cannot: the resolved settings and where it writes.
 	for _, m := range members {
@@ -206,7 +216,7 @@ func printDispatchBlock(opts Options, gw job.GroupWorkspace, members []job.Group
 	if opts.Baseline != "" {
 		fmt.Fprintf(w, "baseline: %s\n", opts.Baseline)
 	}
-	fmt.Fprintf(w, "watch: %s\n", gw.WatchCommand())
+	fmt.Fprintf(w, "watch: %s\n", gw.WatchCommand(members))
 	fmt.Fprintf(w, "next: %s\n", steer.FanDispatchNext(gw.Dir))
 }
 
@@ -239,14 +249,19 @@ var memberNameUnsafe = regexp.MustCompile(`[^a-z0-9._-]+`)
 
 // memberNames labels each member with its provider, plus the model when one was
 // named, so two members of the same family are distinguishable at a glance. A
-// repeated pair — the same model dispatched twice on purpose — is numbered.
+// repeated pair — the same model dispatched twice on purpose — is numbered. A
+// preset name (a resumed fan-out carrying its original roster) wins over
+// derivation, still sanitized because the name is also a directory.
 func memberNames(members []Member) []string {
 	names := make([]string, len(members))
 	seen := map[string]int{}
 	for i, m := range members {
-		base := m.Provider
-		if m.Model != "" {
-			base += "-" + m.Model
+		base := m.Name
+		if base == "" {
+			base = m.Provider
+			if m.Model != "" {
+				base += "-" + m.Model
+			}
 		}
 		base = strings.Trim(memberNameUnsafe.ReplaceAllString(strings.ToLower(base), "-"), "-")
 		if base == "" {

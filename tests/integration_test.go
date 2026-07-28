@@ -745,7 +745,9 @@ func TestFanDispatchesEveryMemberAsAnOrdinaryTurn(t *testing.T) {
 		"fan-out: 2 turns · one prompt · hard cap 5m each",
 		"member codex: model (provider default) · effort (provider default) · out-dir "+filepath.Join(outDir, "codex"),
 		"member claude-opus: model opus · effort (provider default) · out-dir "+filepath.Join(outDir, "claude-opus"),
-		"watch: tail -f",
+		// Runnable as printed: every member's progress log spelled out and
+		// quoted — a glob inside shell quotes would match a literal filename.
+		"watch: tail -f '"+filepath.Join(outDir, "codex", "progress.log")+"' '"+filepath.Join(outDir, "claude-opus", "progress.log")+"'",
 		"next: let this command run to completion — it exits once every member is done",
 		"nothing to track per member",
 		"status: ok — all 2 turns returned a result",
@@ -1061,5 +1063,250 @@ func TestUsageErrors(t *testing.T) {
 			t.Fatalf("%v: exit = %d, want 3", c.args, res.code)
 		}
 		mustContain(t, fmt.Sprintf("stderr of %v", c.args), res.stderr, c.want)
+	}
+}
+
+func readGroup(t *testing.T, dir string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, "group.json"))
+	if err != nil {
+		t.Fatalf("group.json: %v", err)
+	}
+	var g map[string]any
+	if err := json.Unmarshal(data, &g); err != nil {
+		t.Fatalf("group.json parse: %v\n%s", err, data)
+	}
+	return g
+}
+
+// A finished fan-out continues as a set: every member resumed in its own
+// session on one NEW prompt, dispatched and supervised as a new fan-out. The
+// roster, each member's session, and the settings come from the original
+// fan-out's records, so the caller re-decides nothing per member.
+func TestFanResumeFromContinuesEveryMember(t *testing.T) {
+	e := newEnv(t).
+		set("ENVOY_FAKE_SCENARIO", "success").
+		set("ENVOY_FAKE_SESSION_ID_CODEX", "sess-codex-r1").
+		set("ENVOY_FAKE_SESSION_ID_CLAUDE", "sess-claude-r1")
+	r1 := filepath.Join(t.TempDir(), "round1")
+	prompt := writePrompt(t, t.TempDir())
+
+	res := runEnvoy(t, e, fanArgs(prompt, r1, "--with", "codex", "--with", "claude:opus",
+		"--timeout-min", "5", "--label", "consult")...)
+	if res.code != 0 {
+		t.Fatalf("round 1 exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+
+	// Collecting the finished set offers the set-level follow-up, runnable as
+	// printed, with the prompt file left as the placeholder a round 2 must fill.
+	col := runEnvoy(t, e, "collect", r1)
+	mustContain(t, "collect stdout", col.stdout,
+		"resume: envoy fan --resume-from '"+r1+"' --timeout-min 5 --prompt-file <your-follow-up.md>")
+
+	round2 := filepath.Join(t.TempDir(), "round2.md")
+	if err := os.WriteFile(round2, []byte("round-2 prompt body\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r2 := filepath.Join(t.TempDir(), "round2-group")
+	res = runEnvoy(t, e, "fan", "--resume-from", r1, "--prompt-file", round2,
+		"--out-dir", r2, "--timeout-min", "5", "--label", "consult-r2")
+	if res.code != 0 {
+		t.Fatalf("round 2 exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	mustContain(t, "round 2 stdout", res.stdout,
+		"resumed-from: "+r1,
+		"member codex: ",
+		"member claude-opus: ",
+		"status: ok — all 2 turns returned a result",
+	)
+
+	// The manifest records the lineage, and the members keep their identities.
+	if g := readGroup(t, r2); g["resumedFrom"] != r1 {
+		t.Fatalf("resumedFrom = %v, want %s", g["resumedFrom"], r1)
+	}
+	// Each member's turn is a real resume — the provider argv carries the
+	// original session — and the roster's settings carry over.
+	mustContain(t, "codex argv", fmt.Sprintf("%v", readMeta(t, filepath.Join(r2, "codex"))["providerArgv"]),
+		"resume", "sess-codex-r1")
+	claudeMeta := readMeta(t, filepath.Join(r2, "claude-opus"))
+	mustContain(t, "claude argv", fmt.Sprintf("%v", claudeMeta["providerArgv"]),
+		"--resume", "sess-claude-r1")
+	if claudeMeta["model"] != "opus" {
+		t.Fatalf("claude-opus model = %v, want opus carried from the roster", claudeMeta["model"])
+	}
+	// And every member was sent the NEW prompt, never the original again.
+	for _, name := range []string{"codex", "claude-opus"} {
+		if got := readFile(t, filepath.Join(r2, name, "prompt.md")); got != "round-2 prompt body\n" {
+			t.Fatalf("%s prompt.md = %q", name, got)
+		}
+	}
+}
+
+// The redirects each carry the caller's actual next command rather than a
+// shape to imitate.
+func TestFanResumeFromRefusals(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	prompt := writePrompt(t, t.TempDir())
+
+	// The roster comes from the manifest, so member specs cannot combine with it.
+	res := runEnvoy(t, e, "fan", "--resume-from", t.TempDir(), "--with", "codex", "--with", "claude",
+		"--prompt-file", prompt)
+	if res.code != 3 {
+		t.Fatalf("with+resume-from exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
+	}
+	mustContain(t, "stderr", res.stderr, "mutually exclusive")
+
+	// Aimed at a single turn, the refusal hands over that turn's own resume command.
+	turnDir := filepath.Join(t.TempDir(), "turn")
+	if r := runEnvoy(t, e, turnArgs(prompt, turnDir, "--provider", "codex", "--timeout-min", "5")...); r.code != 0 {
+		t.Fatalf("turn exit = %d\nstderr:\n%s", r.code, r.stderr)
+	}
+	res = runEnvoy(t, e, "fan", "--resume-from", turnDir, "--prompt-file", prompt)
+	if res.code != 3 {
+		t.Fatalf("single-turn resume-from exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
+	}
+	mustContain(t, "stderr", res.stderr, "is a single turn",
+		"envoy turn --provider codex --resume fake-session-id")
+
+	// Nothing at the path at all.
+	res = runEnvoy(t, e, "fan", "--resume-from", filepath.Join(t.TempDir(), "nowhere"),
+		"--prompt-file", prompt)
+	if res.code != 3 {
+		t.Fatalf("missing-dir resume-from exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
+	}
+	mustContain(t, "stderr", res.stderr, "no group.json")
+}
+
+// The resume set is whole or refused: a member that never published a session
+// has no conversation to continue, and quietly dropping that voice would turn
+// a two-voice round into a one-voice round without a record of why.
+func TestFanResumeFromRefusesIncompleteSet(t *testing.T) {
+	e := newEnv(t).
+		set("ENVOY_FAKE_SCENARIO_CODEX", "exit-before-stdin").
+		set("ENVOY_FAKE_SCENARIO_CLAUDE", "success")
+	r1 := filepath.Join(t.TempDir(), "round1")
+	prompt := writePrompt(t, t.TempDir())
+	res := runEnvoy(t, e, fanArgs(prompt, r1, "--with", "codex", "--with", "claude:opus",
+		"--timeout-min", "5")...)
+	if res.code != 6 {
+		t.Fatalf("mixed fan exit = %d, want 6\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+
+	res = runEnvoy(t, e, "fan", "--resume-from", r1, "--prompt-file", prompt)
+	if res.code != 3 {
+		t.Fatalf("incomplete-set resume-from exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
+	}
+	mustContain(t, "stderr", res.stderr,
+		"cannot be resumed as a set",
+		"member codex never published a session id")
+}
+
+// --status-only reads coordinates without paying for the result body, and
+// deliberately stamps nothing: the result has not been delivered, so pending
+// discovery must keep listing the job.
+func TestCollectStatusOnlyLeavesTheResultOwed(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	outDir := filepath.Join(t.TempDir(), "job")
+	prompt := writePrompt(t, t.TempDir())
+	if r := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "5")...); r.code != 0 {
+		t.Fatalf("turn exit = %d\nstderr:\n%s", r.code, r.stderr)
+	}
+
+	res := runEnvoy(t, e, "collect", "--status-only", outDir)
+	if res.code != 0 {
+		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	mustContain(t, "stdout", res.stdout,
+		"status: ok",
+		"session: fake-session-id",
+		"resume: envoy turn --provider codex --resume fake-session-id",
+		"next: this was a status check only",
+	)
+	for _, banned := range []string{"--- result.md ---", "fake provider result"} {
+		if strings.Contains(res.stdout, banned) {
+			t.Fatalf("status-only must not print %q:\n%s", banned, res.stdout)
+		}
+	}
+	if readMeta(t, outDir)["collectedAt"] != nil {
+		t.Fatal("status-only must not stamp collection")
+	}
+	// The full collect afterwards is still the first collection.
+	if r := runEnvoy(t, e, "collect", outDir); r.code != 0 {
+		t.Fatalf("full collect exit = %d", r.code)
+	}
+	if readMeta(t, outDir)["collectedAt"] == nil {
+		t.Fatal("full collect must stamp collection")
+	}
+}
+
+// --result-only hands back an ok turn's payload alone and stamps collection.
+// A turn that is not ok prints its full block instead: its status and next
+// action are its result, and suppressing them would hand back a payload that
+// does not exist.
+func TestCollectResultOnly(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	outDir := filepath.Join(t.TempDir(), "job")
+	prompt := writePrompt(t, t.TempDir())
+	if r := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "5")...); r.code != 0 {
+		t.Fatalf("turn exit = %d\nstderr:\n%s", r.code, r.stderr)
+	}
+	res := runEnvoy(t, e, "collect", "--result-only", outDir)
+	if res.code != 0 {
+		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	mustContain(t, "stdout", res.stdout, "fake provider result")
+	for _, banned := range []string{"job:", "status:", "next:", "--- result.md ---"} {
+		if strings.Contains(res.stdout, banned) {
+			t.Fatalf("result-only must not print %q:\n%s", banned, res.stdout)
+		}
+	}
+	if readMeta(t, outDir)["collectedAt"] == nil {
+		t.Fatal("result-only delivered the result, so it must stamp collection")
+	}
+
+	// A failed turn has no payload to hand back alone.
+	failDir := filepath.Join(t.TempDir(), "failed")
+	e2 := newEnv(t).set("ENVOY_FAKE_SCENARIO", "nonzero-final")
+	if r := runEnvoy(t, e2, turnArgs(prompt, failDir, "--provider", "codex", "--timeout-min", "5")...); r.code != 1 {
+		t.Fatalf("failed turn exit = %d, want 1", r.code)
+	}
+	res = runEnvoy(t, e2, "collect", "--result-only", failDir)
+	if res.code != 0 {
+		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	mustContain(t, "stdout", res.stdout, "job: "+failDir, "status: failed", "next: ")
+
+	// Both selectors at once select nothing coherent.
+	res = runEnvoy(t, e, "collect", "--result-only", "--status-only", outDir)
+	if res.code != 3 {
+		t.Fatalf("exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
+	}
+	mustContain(t, "stderr", res.stderr, "mutually exclusive")
+}
+
+// A fan-out's result-only keeps the aggregate line and the member split —
+// attribution is the point of a fan-out — and drops the coordinate preamble.
+func TestFanCollectResultOnly(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	outDir := filepath.Join(t.TempDir(), "group")
+	prompt := writePrompt(t, t.TempDir())
+	if r := runEnvoy(t, e, fanArgs(prompt, outDir, "--with", "codex", "--with", "claude:opus",
+		"--timeout-min", "5")...); r.code != 0 {
+		t.Fatalf("fan exit = %d\nstderr:\n%s", r.code, r.stderr)
+	}
+	res := runEnvoy(t, e, "collect", "--result-only", outDir)
+	if res.code != 0 {
+		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	mustContain(t, "stdout", res.stdout,
+		"status: ok — all 2 turns returned a result",
+		"=== member codex ===",
+		"=== member claude-opus ===",
+		"fake provider result",
+	)
+	for _, banned := range []string{"fan-out:", "members:", "prompt:", "provider:", "next:"} {
+		if strings.Contains(res.stdout, banned) {
+			t.Fatalf("group result-only must not print %q:\n%s", banned, res.stdout)
+		}
 	}
 }

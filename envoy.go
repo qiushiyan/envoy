@@ -21,6 +21,7 @@ import (
 	"github.com/qiushiyan/envoy/internal/job"
 	"github.com/qiushiyan/envoy/internal/provider"
 	"github.com/qiushiyan/envoy/internal/runner"
+	"github.com/qiushiyan/envoy/internal/steer"
 )
 
 // Version of the engine, reported by `envoy version`.
@@ -164,12 +165,18 @@ func Turn(req TurnRequest) int {
 // turns, supervised as a single job. With holds one member spec per turn,
 // spelled provider[:model[:effort]] — the same form a caller types — so the
 // CLI and an embedding program get identical parsing and identical errors.
+// ResumeFrom instead names a finished fan-out whose members this one
+// continues: the roster, each member's session, the working directory, and
+// the baseline all come from that fan-out's own records, and With must be
+// empty.
 //
 // Everything else is shared by every member. There is deliberately no write
-// intent and no resume: members share one working tree and start separate
-// conversations. TimeoutMin follows TurnRequest — zero means the 30-minute cap.
+// intent and no per-member resume flag: members share one working tree, and a
+// single session id cannot name several conversations. TimeoutMin follows
+// TurnRequest — zero means the 30-minute cap.
 type FanRequest struct {
 	With       []string
+	ResumeFrom string
 	PromptFile string
 	Baseline   string
 	Cwd        string
@@ -188,18 +195,40 @@ type FanRequest struct {
 func Fan(req FanRequest) int {
 	stdout, stderr := defaultWriters(req.Stdout, req.Stderr)
 
-	if len(req.With) < 2 {
-		return usageError(stderr,
-			"a fan-out needs at least two members: --with provider[:model[:effort]] --with provider[:model[:effort]]. "+
-				"For one turn, use envoy turn")
-	}
-	members := make([]fan.Member, 0, len(req.With))
-	for _, spec := range req.With {
-		m, err := parseMember(spec)
-		if err != nil {
-			return usageError(stderr, "%s", err)
+	var members []fan.Member
+	resumedFrom := ""
+	if req.ResumeFrom != "" {
+		if len(req.With) > 0 {
+			return usageError(stderr, "%s", steer.FanResumeFromAndWith())
 		}
-		members = append(members, m)
+		resumedFrom = absOrSelf(req.ResumeFrom)
+		resolved, group, errText := resumableMembers(resumedFrom)
+		if errText != "" {
+			return usageError(stderr, "%s", errText)
+		}
+		members = resolved
+		// A resumed conversation continues in the tree and against the anchor
+		// it was dispatched with; explicit flags still win.
+		if req.Cwd == "" {
+			req.Cwd = group.Cwd
+		}
+		if req.Baseline == "" && group.GitBaseline != nil {
+			req.Baseline = *group.GitBaseline
+		}
+	} else {
+		if len(req.With) < 2 {
+			return usageError(stderr,
+				"a fan-out needs at least two members: --with provider[:model[:effort]] --with provider[:model[:effort]]. "+
+					"For one turn, use envoy turn")
+		}
+		members = make([]fan.Member, 0, len(req.With))
+		for _, spec := range req.With {
+			m, err := parseMember(spec)
+			if err != nil {
+				return usageError(stderr, "%s", err)
+			}
+			members = append(members, m)
+		}
 	}
 	if req.PromptFile == "" {
 		return usageError(stderr, "--prompt-file <path> is required")
@@ -228,16 +257,81 @@ func Fan(req FanRequest) int {
 		outDir = absOrSelf(outDir)
 	}
 	return fan.Run(fan.Options{
-		Members:    members,
-		PromptFile: req.PromptFile,
-		Cwd:        cwd,
-		Baseline:   req.Baseline,
-		Label:      req.Label,
-		OutDir:     outDir,
-		TimeoutMin: timeoutMin,
-		Stdout:     stdout,
-		Stderr:     stderr,
+		Members:     members,
+		PromptFile:  req.PromptFile,
+		Cwd:         cwd,
+		Baseline:    req.Baseline,
+		Label:       req.Label,
+		OutDir:      outDir,
+		ResumedFrom: resumedFrom,
+		TimeoutMin:  timeoutMin,
+		Stdout:      stdout,
+		Stderr:      stderr,
 	})
+}
+
+// resumableMembers reads a finished fan-out's roster and each member's own
+// meta.json, and hands back the members as resumed turns. The set is whole or
+// refused: a member still running, or one that never published a session,
+// blocks the resume rather than being silently left out of the round.
+func resumableMembers(dir string) ([]fan.Member, *job.Group, string) {
+	if !job.IsGroupDir(dir) {
+		if meta, _, err := job.ReadMetaFile(filepath.Join(dir, "meta.json")); err == nil {
+			resumeCmd := ""
+			if meta.SessionID != nil && meta.SessionLockConflict == nil {
+				resumeCmd = steer.Turn{
+					Provider:   meta.Provider,
+					SessionID:  *meta.SessionID,
+					Cwd:        meta.Cwd,
+					Model:      strOrEmpty(meta.Model),
+					Effort:     strOrEmpty(meta.Effort),
+					AllowWrite: meta.AllowWrite,
+					TimeoutMin: meta.TimeoutMin,
+				}.ResumeCommand()
+			}
+			return nil, nil, steer.FanResumeFromNotAFanOut(dir, resumeCmd)
+		}
+		return nil, nil, fmt.Sprintf("--resume-from %s: no fan-out found there (no group.json). Pass the fan-out's out-dir printed at dispatch", dir)
+	}
+	group, err := job.ReadGroupFile(job.GroupWorkspace{Dir: dir}.GroupPath())
+	if err != nil {
+		return nil, nil, fmt.Sprintf("--resume-from %s: group.json is unreadable (%s)", dir, err)
+	}
+	if len(group.Members) == 0 {
+		return nil, nil, fmt.Sprintf("--resume-from %s: the manifest lists no members", dir)
+	}
+	members := make([]fan.Member, 0, len(group.Members))
+	var blocked []string
+	for _, m := range group.Members {
+		meta, _, err := job.ReadMetaFile(filepath.Join(m.OutDir, "meta.json"))
+		switch {
+		case err != nil:
+			blocked = append(blocked, fmt.Sprintf("member %s has no readable meta.json (%s)", m.Name, err))
+		case meta.Status == job.StatusRunning:
+			blocked = append(blocked, fmt.Sprintf("member %s is still running", m.Name))
+		case meta.SessionID == nil:
+			blocked = append(blocked, fmt.Sprintf("member %s never published a session id, so it has no conversation to continue", m.Name))
+		default:
+			members = append(members, fan.Member{
+				Provider: m.Provider,
+				Model:    strOrEmpty(m.Model),
+				Effort:   strOrEmpty(m.Effort),
+				Resume:   *meta.SessionID,
+				Name:     m.Name,
+			})
+		}
+	}
+	if len(blocked) > 0 {
+		return nil, nil, steer.FanResumeFromBlocked(dir, blocked)
+	}
+	return members, group, ""
+}
+
+func strOrEmpty(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // parseMember reads one member spec. The colon form keeps a member's settings
@@ -265,10 +359,31 @@ func parseMember(spec string) (fan.Member, error) {
 	return m, nil
 }
 
+// CollectRequest selects one job and which of its sections to print.
+type CollectRequest struct {
+	OutDir     string // "" = the newest job for the current directory's project
+	ResultOnly bool   // an ok job's result body alone; a non-ok job prints its full block
+	StatusOnly bool   // everything except the result body; marks nothing collected
+	Stdout     io.Writer
+	Stderr     io.Writer
+}
+
 // Collect prints one job (or the latest job for the current directory when
-// outDir is "") and stamps first terminal collection.
-func Collect(outDir string, stdout, stderr io.Writer) int {
-	stdout, stderr = defaultWriters(stdout, stderr)
+// OutDir is "") and stamps first terminal collection — except under
+// StatusOnly, which delivers no result and therefore stamps nothing.
+func Collect(req CollectRequest) int {
+	stdout, stderr := defaultWriters(req.Stdout, req.Stderr)
+	if req.ResultOnly && req.StatusOnly {
+		return usageError(stderr, "--result-only and --status-only are mutually exclusive: one asks for the payload alone, the other for everything but the payload")
+	}
+	mode := collect.ModeFull
+	switch {
+	case req.ResultOnly:
+		mode = collect.ModeResultOnly
+	case req.StatusOnly:
+		mode = collect.ModeStatusOnly
+	}
+	outDir := req.OutDir
 	if outDir == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -281,7 +396,7 @@ func Collect(outDir string, stdout, stderr io.Writer) int {
 			return ExitUsage
 		}
 	}
-	return collect.Collect(absOrSelf(outDir), stdout, stderr)
+	return collect.Collect(absOrSelf(outDir), mode, stdout, stderr)
 }
 
 // Pending prints the discovery-only recovery index for base ("" = the default

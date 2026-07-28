@@ -31,7 +31,10 @@ USAGE
   envoy turn --provider <claude|codex> --prompt-file <F> [flags]
   envoy fan --prompt-file <F> --with <spec> --with <spec> [flags]
                               one prompt, several models, one job
-  envoy collect [job-dir]     print one job: status, coordinates, result.md
+  envoy fan --resume-from <fan-out-dir> --prompt-file <F> [flags]
+                              continue every member of a finished fan-out
+  envoy collect [flags] [job-dir]
+                              print one job: status, coordinates, result.md
   envoy pending [--base DIR]  jobs still needing attention, after a missed completion
   envoy version
 
@@ -46,6 +49,11 @@ THE LOOP
     envoy turn --provider codex --prompt-file brief.md --timeout-min 30 --label review
     # ...the turn runs; once the process exits:
     envoy collect               # newest job for this project, or pass a job dir
+    envoy collect --result-only # an ok job's result body alone; a job that is
+                                # not ok prints its full block — its status IS
+                                # the result then
+    envoy collect --status-only # everything except the result body; marks
+                                # nothing collected, so the result stays owed
 
   Tailing the logs shows progress, never completion — a quiet log means the
   model is thinking.
@@ -81,6 +89,14 @@ ONE PROMPT, SEVERAL MODELS
 
     envoy collect <fan-out-dir>   every member's status and result, in one block
 
+  A finished fan-out continues as a set: one NEW prompt file, every member
+  resumed in its own session, supervised as a new fan-out. The roster, each
+  member's session, the working directory, and the baseline come from the
+  original fan-out's records; collect prints this command whenever every
+  member can be continued.
+
+    envoy fan --resume-from <fan-out-dir> --prompt-file round2.md
+
 TURN FLAGS
   --provider        claude or codex (required)
   --prompt-file     the full prompt (required); copied into the job dir
@@ -97,7 +113,8 @@ TURN FLAGS
 
   envoy fan takes --prompt-file, --baseline, --cwd, --out-dir, --timeout-min
   and --label with the same meaning, plus --with once per member. The cap
-  applies to each member separately.
+  applies to each member separately. --resume-from <fan-out-dir> replaces
+  --with entirely: the members come from that fan-out's manifest.
 
 BEFORE YOU DISPATCH
   Model and effort. Leaving --model or --effort off puts the provider's own
@@ -244,6 +261,7 @@ func cmdFan(args []string, stdout, stderr io.Writer) int {
 	var req envoy.FanRequest
 	var with stringList
 	fs.Var(&with, "with", "")
+	fs.StringVar(&req.ResumeFrom, "resume-from", "", "")
 	fs.StringVar(&req.PromptFile, "prompt-file", "", "")
 	fs.StringVar(&req.Baseline, "baseline", "", "")
 	fs.StringVar(&req.Cwd, "cwd", "", "")
@@ -296,14 +314,22 @@ func cmdFan(args []string, stdout, stderr io.Writer) int {
 
 func cmdCollect(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("collect", stderr)
+	resultOnly := fs.Bool("result-only", false, "")
+	statusOnly := fs.Bool("status-only", false, "")
 	if proceed, code := parseFlags(fs, args, stdout); !proceed {
 		return code
 	}
 	if fs.NArg() > 1 {
-		fmt.Fprintln(stderr, "collect error: pass at most one out-dir")
+		fmt.Fprintln(stderr, "collect error: pass at most one out-dir, with any flags before it")
 		return envoy.ExitUsage
 	}
-	return envoy.Collect(fs.Arg(0), stdout, stderr)
+	return envoy.Collect(envoy.CollectRequest{
+		OutDir:     fs.Arg(0),
+		ResultOnly: *resultOnly,
+		StatusOnly: *statusOnly,
+		Stdout:     stdout,
+		Stderr:     stderr,
+	})
 }
 
 func cmdPending(args []string, stdout, stderr io.Writer) int {
