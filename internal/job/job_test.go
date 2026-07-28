@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -73,6 +74,41 @@ func TestResolveOutDirIsAlwaysCentral(t *testing.T) {
 	}
 	if dir2 == dir {
 		t.Fatal("colliding stamps must not share a dir")
+	}
+}
+
+// Two turns dispatched in the same second with the same label must never share
+// a job dir: sharing one means both runners overwrite the same meta.json and
+// result.md, and one turn's artifacts are lost. Creation itself has to be the
+// collision check — a stat-then-create window loses this race.
+func TestResolveOutDirConcurrentSameSecondDispatches(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cwd := t.TempDir()
+	now := time.Date(2026, 7, 27, 10, 7, 40, 0, time.Local)
+
+	const n = 8
+	dirs := make([]string, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			dirs[i], errs[i] = ResolveOutDir("", cwd, "review-r2", "codex", now)
+		}()
+	}
+	wg.Wait()
+
+	seen := make(map[string]bool, n)
+	for i := range n {
+		if errs[i] != nil {
+			t.Fatalf("dispatch %d: %v", i, errs[i])
+		}
+		if seen[dirs[i]] {
+			t.Fatalf("two dispatches share %s", dirs[i])
+		}
+		seen[dirs[i]] = true
 	}
 }
 

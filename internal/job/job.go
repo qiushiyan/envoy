@@ -174,11 +174,21 @@ func ResolveOutDir(explicit, cwd, label, provider string, now time.Time) (string
 	if len(slug) > 40 {
 		slug = slug[:40]
 	}
+	// os.Mkdir, not MkdirAll: MkdirAll succeeds on a directory that already
+	// exists, so two turns dispatched in the same second with the same label
+	// would silently share one dir and overwrite each other's artifacts. Mkdir
+	// makes creation the collision check, with no stat-then-create window.
 	dir := filepath.Join(base, stamp+"-"+slug)
-	if _, err := os.Stat(dir); err == nil {
-		dir = dir + "-" + RandomHex(2)
+	if err := os.Mkdir(dir, 0o755); err == nil || !os.IsExist(err) {
+		return dir, err
 	}
-	return dir, os.MkdirAll(dir, 0o755)
+	for range 4 {
+		suffixed := dir + "-" + RandomHex(2)
+		if err := os.Mkdir(suffixed, 0o755); err == nil || !os.IsExist(err) {
+			return suffixed, err
+		}
+	}
+	return "", fmt.Errorf("cannot create a unique job dir near %s", dir)
 }
 
 // Workspace is one job directory and the fixed names inside it.
