@@ -293,6 +293,7 @@ func TestSteerUsageErrors(t *testing.T) {
 		"no status":      `{"commit":"abc"}`,
 		"unknown status": `{"status":"deployed","provider":"other"}`,
 		"no provider":    `{"status":"ok"}`,
+		"no schema":      `{"status":"ok","provider":"codex"}`,
 	}
 	for name, content := range foreign {
 		dir := t.TempDir()

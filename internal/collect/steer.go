@@ -33,10 +33,12 @@ func Steer(outDir, promptFile string, w, errW io.Writer) int {
 			"steer error: %s is not valid JSON (%s); collect the job before acting on it\n", metaPath, err)
 		return job.ExitUsage
 	}
-	// The runner records a known status and a provider from the first moment,
-	// so a meta missing either is some other program's file that happens to
-	// parse — not a job to reason about.
-	if !job.KnownStatus(meta.Status) || meta.Provider == "" {
+	// The runner records a versioned schema, a known status, and a provider
+	// from the first moment, so a meta missing any of them is some other
+	// program's file that happens to parse — not a job to reason about. The
+	// version's value is not gated, only its presence: discrimination, not
+	// compatibility policy.
+	if meta.SchemaVersion < 1 || !job.KnownStatus(meta.Status) || meta.Provider == "" {
 		fmt.Fprintf(errW,
 			"steer error: %s is not a job this engine wrote (status %q) — pass the out-dir printed at dispatch\n",
 			metaPath, meta.Status)
