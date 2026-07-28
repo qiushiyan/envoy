@@ -56,7 +56,7 @@ Behavioral invariants the code encodes deliberately (each has a test):
 - **The timeout is a wall-clock deadline comparison, not a monotonic timer** (laptop sleep must not stretch the cap), and it is a safety cap, not a stall detector.
 - **Prompt-state recovery**: `accepted` → resume, never redispatch; `not_started` → one identical retry; `unknown` → absence of output is not proof of no work.
 - **Claude's result envelope session id overrides the preflight id** (a resumed conversation continues under a fresh id).
-- **One member's outcome licenses nothing about another.** A fan-out's aggregate code exists to keep that true: `6 partial` says results landed *and* a member needs a decision, so no caller reads a mixed fan-out as a whole-fan retry. Recovery, resume, and takeover are per member; there is deliberately no group resume, and `--allow-write` is refused on a fan-out because members share one tree.
+- **One member's outcome licenses nothing about another.** A fan-out's aggregate code exists to keep that true: `6 partial` says results landed *and* a member needs a decision, so no caller reads a mixed fan-out as a whole-fan retry. Recovery, resume, and takeover are per member — there is deliberately no group-wide retry — and `--allow-write` is refused on a fan-out because members share one tree. A follow-up *round* is not recovery: `fan --resume-from` continues every member of a finished fan-out on one NEW prompt as a new fan-out, and the set continues whole or is refused.
 
 ## Provider CLI Drift
 

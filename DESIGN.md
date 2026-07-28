@@ -99,11 +99,22 @@ Consequences that are load-bearing, not incidental:
 - **`group.json` is a roster of coordinates, never a mirror of member state.**
   A member's status lives in that member's `meta.json` and nowhere else, so the
   two cannot drift. Collect re-reads the members; the manifest records only
-  what the supervisor itself knows (who was dispatched, where, when).
-- **Recovery stays per member,** because prompt state is per member: one
-  `accepted` member licenses only a resume while its `not_started` sibling
-  licenses an identical retry. No group-level resume exists, and every
-  fan-out sentence points back at per-member actions.
+  what the supervisor itself knows (who was dispatched, where, when, and — for
+  a resumed fan-out — which fan-out its sessions continue).
+- **Recovery stays per member; a round addresses the set.** Prompt state is
+  per member: one `accepted` member licenses only a resume while its
+  `not_started` sibling licenses an identical retry, so there is no group-wide
+  retry and every failure sentence points back at per-member actions. A
+  *follow-up round* is not recovery: `fan --resume-from` re-dispatches every
+  member of a finished fan-out as a resumed turn on one NEW prompt — a new
+  fan-out over ordinary turns, with the roster, sessions, cwd, and baseline
+  read from the original's own records so the caller re-decides nothing per
+  member. The set continues whole or is refused: a member still running or
+  without a session blocks the round rather than being silently left out of
+  it. Cherry-picking voices stays a caller move, via the per-member
+  `turn --resume` commands collect prints. (The feature was paid for before it
+  was built: agents hand-rolled the round three different ways in three days —
+  see the log, 2026-07-28.)
 - **Exit code 6 (`partial`) earned a new code** rather than overloading an
   existing one. A fan-out where one member answered and one timed out is not a
   failure (results exist) and not a success (a member needs a decision);
@@ -126,6 +137,20 @@ Consequences that are load-bearing, not incidental:
   Member stderr is labelled and passed through, because warnings there are rare
   and load-bearing.
 
+## Collection: delivery, not display
+
+`collectedAt` means one thing: *the return value reached a caller*. That is
+why the stamp is set exactly when a result body is printed — a full collect,
+or `--result-only` — and never by `--status-only` or `pending`, which read
+coordinates without delivering anything: the result stays owed, and pending
+keeps listing the job. The two selection flags exist because the block is
+read by an agent whose context the result body and the status preamble
+compete for (the logs showed nearly every collect piped through `sed`/`head`).
+They select sections, never soften the contract: `--result-only` on anything
+other than an ok turn prints the full block, because a non-ok turn's status
+and next action *are* its result, and handing back silence in their place
+would manufacture a payload that does not exist.
+
 ## Storage
 
 Jobs live in one central store, `~/.local/state/envoy/jobs/<slug>/`, never in
@@ -135,7 +160,9 @@ deliberately gone — they polluted every repo with runtime state). The slug is
 symlink-resolved path for uniqueness, the git root as anchor so a dispatch
 from a subdirectory belongs to the project. The store is an implementation
 detail by contract: dispatch prints the out-dir, collect and pending
-re-derive it from cwd, and no caller constructs the path.
+re-derive it from cwd, and no caller constructs the path. Creating a job dir
+is atomic — `Mkdir`, not stat-then-create — because two turns dispatched in
+the same second once shared one (see the log, 2026-07-27).
 
 ## Deliberately not built
 
@@ -143,6 +170,8 @@ re-derive it from cwd, and no caller constructs the path.
   background-task layer is the live-job layer.
 - No alias translation, effort aliases, model fallbacks, or provider
   auto-selection.
+- No group-wide retry, and no partial resume of a fan-out: recovery is per
+  member, and a round continues the whole set or is refused.
 - No sandbox flag for codex, ever; no permission machinery beyond claude's
   own `--permission-mode`.
 - No activity-based hang detector; no timeout that resets on output.
@@ -201,3 +230,30 @@ Engine-relevant history, distilled from the predecessor and continued here.
   already instance-clean — which is exactly the test of whether a feature
   belongs in this engine: *supervision and presentation, yes; new turn
   semantics, no.*
+- **2026-07-26 — the stale-binary dispatch.** The skills learned `envoy fan`
+  hours before the binary on PATH did; the dispatch failed and the calling
+  agent silently fell back to two separate turns — the exact two-job ledger
+  fan exists to absorb. No engine change: the lesson is operational. A
+  contract taught to callers ships when the installed binary does, so
+  `make install` comes before the skill edit, not after the next incident.
+- **2026-07-27 — the same-second collision.** Two round-2 resumes dispatched
+  with `&` in one command started in the same second, derived the same
+  stamp+label job dir, and ran in it together: both runners overwrote one
+  `meta.json` and `result.md`, and one member's answer survived only in
+  `last-message.txt`. Root cause: stat-then-`MkdirAll`, where `MkdirAll`
+  succeeds on a dir that already exists. Fix: `Mkdir` with a random suffix on
+  `EEXIST` — creation itself is the collision check, and a concurrency test
+  races eight same-second dispatches to keep it that way.
+- **2026-07-28 — four days of dogfood logs read back.** All 37 archived turns
+  had ended ok; every friction lived in how agents drove the CLI, not in the
+  lifecycle. Three findings, each paid for in real time: the round-2-after-fan
+  pattern was hand-rolled three ways in three days (`;`-chained resumes that
+  silently serialized, `&`-chained ones that hit the collision above, then two
+  background tasks with hand-invented labels) → `fan --resume-from`; agents
+  trimmed nearly every collect through `sed`/`head` because the result body
+  and the preamble compete for caller context → `collect --result-only` /
+  `--status-only`; the group watch command shipped its glob inside shell
+  quotes and could never run as printed → member paths spelled out, pinned by
+  an exact-line test. The lesson that generalizes: **the engine's own job
+  store is its usage lab — read it before inventing features, and after
+  shipping them.**
