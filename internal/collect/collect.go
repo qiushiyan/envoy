@@ -329,8 +329,14 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 	}
 	if meta.SessionID != nil {
 		fmt.Fprintf(w, "session: %s\n", *meta.SessionID)
-		if resume := resumeCommand(meta); resume != "" {
-			fmt.Fprintf(w, "resume: %s\n", resume)
+		// The follow-up command is advertised only when dispatching it is
+		// licensed — the same eligibility --resume-from applies, so collect
+		// can never offer a continuation dispatch would refuse. A running
+		// turn's session still prints; its next line says to wait.
+		if _, blocked := memberResumeBlocker(meta); !blocked {
+			if resume := resumeCommand(meta); resume != "" {
+				fmt.Fprintf(w, "resume: %s\n", resume)
+			}
 		}
 		if meta.TakeoverCommand != nil {
 			fmt.Fprintf(w, "takeover: %s\n", *meta.TakeoverCommand)

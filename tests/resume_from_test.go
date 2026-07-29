@@ -138,7 +138,7 @@ func TestFanWithFromMixedRoster(t *testing.T) {
 	prompt := writePrompt(t, t.TempDir())
 
 	if r := runEnvoy(t, e, turnArgs(prompt, r1, "--provider", "codex", "--model", "fake-m",
-		"--cwd", workDir, "--timeout-min", "5", "--label", "consult")...); r.code != 0 {
+		"--cwd", workDir, "--baseline", "bl-consult", "--timeout-min", "5", "--label", "consult")...); r.code != 0 {
 		t.Fatalf("consult exit = %d\nstderr:\n%s", r.code, r.stderr)
 	}
 
@@ -172,9 +172,14 @@ func TestFanWithFromMixedRoster(t *testing.T) {
 		t.Fatalf("cold member must record no lineage, got %v", cold["resumedFrom"])
 	}
 
-	// The fan-out ran where the continued conversation lives.
-	if readGroup(t, g)["cwd"] != workDir {
-		t.Fatalf("group cwd = %v, want the continued job's tree %s", readGroup(t, g)["cwd"], workDir)
+	// The fan-out ran where the continued conversation lives, against the
+	// anchor it was dispatched with.
+	group := readGroup(t, g)
+	if group["cwd"] != workDir {
+		t.Fatalf("group cwd = %v, want the continued job's tree %s", group["cwd"], workDir)
+	}
+	if group["gitBaseline"] != "bl-consult" {
+		t.Fatalf("gitBaseline = %v, want bl-consult inherited from the warm source", group["gitBaseline"])
 	}
 
 	col := runEnvoy(t, e, "collect", g)
@@ -200,6 +205,13 @@ func TestFanWithFromRefusals(t *testing.T) {
 		"--timeout-min", "5")...); r.code != 0 {
 		t.Fatalf("fan exit = %d\nstderr:\n%s", r.code, r.stderr)
 	}
+	// A source that ran with write intent: continuing it inside a read-only
+	// fan-out would silently narrow the conversation's write intent.
+	writeJob := filepath.Join(t.TempDir(), "delegate")
+	if r := runEnvoy(t, e, turnArgs(prompt, writeJob, "--provider", "codex", "--allow-write",
+		"--timeout-min", "5")...); r.code != 0 {
+		t.Fatalf("write turn exit = %d\nstderr:\n%s", r.code, r.stderr)
+	}
 
 	cases := []struct {
 		args []string
@@ -213,6 +225,12 @@ func TestFanWithFromRefusals(t *testing.T) {
 			[]string{"same conversation twice"}},
 		{[]string{"fan", "--with-from", fanDir, "--with", "codex", "--prompt-file", prompt},
 			[]string{"this is a fan-out"}},
+		// A lone --with-from that names no job must report that, not hand
+		// over a turn command that would only fail the same way.
+		{[]string{"fan", "--with-from", filepath.Join(t.TempDir(), "nowhere"), "--prompt-file", prompt},
+			[]string{"no turn found there"}},
+		{[]string{"fan", "--with-from", writeJob, "--with", "codex", "--prompt-file", prompt},
+			[]string{"read-only", "envoy turn --resume-from"}},
 	}
 	for _, c := range cases {
 		res := runEnvoy(t, e, c.args...)
@@ -220,6 +238,71 @@ func TestFanWithFromRefusals(t *testing.T) {
 			t.Fatalf("%v: exit = %d, want 3\nstderr:\n%s", c.args, res.code, res.stderr)
 		}
 		mustContain(t, fmt.Sprintf("stderr of %v", c.args), res.stderr, c.want...)
+	}
+}
+
+// Collect and dispatch share one definition of "this session may continue":
+// while a turn records status running, collect must not advertise the resume
+// command that --resume-from refuses for the same job.
+func TestRunningJobIsNotAdvertisedAsContinuable(t *testing.T) {
+	e := newEnv(t)
+	dir := t.TempDir()
+	meta := fmt.Sprintf(`{"schemaVersion":6,"status":"running","provider":"codex","sessionId":"sess-live",`+
+		`"cwd":%q,"promptState":"accepted","timeoutMin":5,"runnerPid":%d,"nextAction":"wait","resultKind":"none","collectedAt":null}`,
+		dir, os.Getpid())
+	if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte(meta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	col := runEnvoy(t, e, "collect", dir)
+	mustContain(t, "collect stdout", col.stdout, "status: running (live", "session: sess-live")
+	if strings.Contains(col.stdout, "resume: envoy turn") {
+		t.Fatalf("a running turn must not advertise a resume command:\n%s", col.stdout)
+	}
+
+	prompt := writePrompt(t, t.TempDir())
+	res := runEnvoy(t, e, "turn", "--resume-from", dir, "--prompt-file", prompt)
+	if res.code != 3 {
+		t.Fatalf("resume-from a running job: exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
+	}
+	mustContain(t, "stderr", res.stderr, "still records status running")
+}
+
+// A warm source's recorded baseline is part of the conversation being
+// continued: it inherits like cwd does, and two warm sources that disagree
+// are refused rather than silently anchored to one of them.
+func TestFanWithFromBaselines(t *testing.T) {
+	prompt := writePrompt(t, t.TempDir())
+	shared := t.TempDir()
+
+	a := filepath.Join(t.TempDir(), "job-a")
+	eA := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").set("ENVOY_FAKE_SESSION_ID", "sess-bl-a")
+	if r := runEnvoy(t, eA, turnArgs(prompt, a, "--provider", "codex", "--cwd", shared,
+		"--baseline", "bl-a", "--timeout-min", "5")...); r.code != 0 {
+		t.Fatalf("job-a exit = %d\nstderr:\n%s", r.code, r.stderr)
+	}
+	b := filepath.Join(t.TempDir(), "job-b")
+	eB := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").set("ENVOY_FAKE_SESSION_ID", "sess-bl-b")
+	if r := runEnvoy(t, eB, turnArgs(prompt, b, "--provider", "codex", "--cwd", shared,
+		"--baseline", "bl-b", "--timeout-min", "5")...); r.code != 0 {
+		t.Fatalf("job-b exit = %d\nstderr:\n%s", r.code, r.stderr)
+	}
+
+	res := runEnvoy(t, eA, "fan", "--with-from", a, "--with-from", b, "--prompt-file", prompt)
+	if res.code != 3 {
+		t.Fatalf("divergent baselines: exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
+	}
+	mustContain(t, "stderr", res.stderr, "different baselines", "--baseline")
+
+	// An explicit anchor resolves it.
+	g := filepath.Join(t.TempDir(), "group")
+	res = runEnvoy(t, eA, "fan", "--with-from", a, "--with-from", b, "--prompt-file", prompt,
+		"--baseline", "bl-x", "--out-dir", g, "--timeout-min", "5")
+	if res.code != 0 {
+		t.Fatalf("explicit-baseline exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	if readGroup(t, g)["gitBaseline"] != "bl-x" {
+		t.Fatalf("gitBaseline = %v, want the explicit bl-x", readGroup(t, g)["gitBaseline"])
 	}
 }
 

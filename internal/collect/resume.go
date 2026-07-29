@@ -38,11 +38,13 @@ type FanResumeState struct {
 	Blockers []ResumeBlocker
 }
 
-// memberResumeBlocker is the single definition of "this member blocks a
-// set-level resume", shared by the dispatch-side inspection and collect's
-// resume line so the two can never advertise different sets. A recorded
-// session-lock conflict blocks the set exactly as it suppresses that
-// member's own resume command: the session may belong to another job.
+// memberResumeBlocker is the single definition of "this job's session may
+// not be continued", consulted by every surface that advertises or dispatches
+// a continuation: collect's turn-level resume line, the fan-out's set-level
+// resume line, and the --resume-from/--with-from inspections. One definition
+// means collect can never advertise a follow-up that dispatch would refuse.
+// A recorded session-lock conflict blocks exactly as it suppresses the job's
+// own resume command: the session may belong to another job.
 func memberResumeBlocker(meta *job.Meta) (prose.ResumeBlockerKind, bool) {
 	switch {
 	case meta == nil:
@@ -124,14 +126,19 @@ func InspectTurnResume(dir string) (*ResumableTurn, prose.ResumeBlockerKind, err
 	if kind, blocked := memberResumeBlocker(meta); blocked {
 		return nil, kind, nil
 	}
+	// The settings come from the same reconstruction collect's own resume
+	// line renders, so the command a caller saw and the turn this dispatches
+	// cannot diverge. The blocker has ruled out every case turnFromMeta
+	// reports false for.
+	turn, _ := turnFromMeta(meta)
 	return &ResumableTurn{
-		Provider:   meta.Provider,
-		Model:      deref(meta.Model),
-		Effort:     deref(meta.Effort),
-		Cwd:        meta.Cwd,
+		Provider:   turn.Provider,
+		Model:      turn.Model,
+		Effort:     turn.Effort,
+		Cwd:        turn.Cwd,
 		Baseline:   deref(meta.GitBaseline),
-		Session:    *meta.SessionID,
-		AllowWrite: meta.AllowWrite,
+		Session:    turn.SessionID,
+		AllowWrite: turn.AllowWrite,
 	}, "", nil
 }
 

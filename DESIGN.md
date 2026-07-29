@@ -322,4 +322,16 @@ Engine-relevant history, distilled from the predecessor and continued here.
   discovery ("the newest consult for this project") — the retained
   coordinate stays the out-dir printed at dispatch, and a listing command
   waits for usage-lab evidence of callers actually fumbling to find old
-  jobs.
+  jobs. The same-day review round caught the feature's own gaps, each
+  pinned red before its fix: collect's turn-level resume line advertised a
+  continuation `--resume-from` would refuse (eligibility now has the one
+  definition, `memberResumeBlocker`, consulted by both — a running turn's
+  session prints without its resume command); `--with-from` silently
+  narrowed a write-recorded source (now refused with the single-turn
+  alternative, which keeps the intent) and dropped a warm source's recorded
+  baseline (now inherited like cwd, agreeing across sources or refused);
+  and a lone invalid `--with-from` was redirected to a `turn --resume-from`
+  that could only fail identically (inspection now precedes the redirect).
+  One finding was rebutted: the resumed round's dispatch block keeps its
+  single group-level `resumed-from:` line instead of a per-member suffix —
+  the report-once precedent that already governs the group baseline.

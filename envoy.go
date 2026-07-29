@@ -268,28 +268,33 @@ func Fan(req FanRequest) int {
 			req.Baseline = *group.GitBaseline
 		}
 	} else {
-		if len(req.With)+len(req.WithFrom) < 2 {
-			if len(req.WithFrom) == 1 && len(req.With) == 0 {
-				return usageError(stderr, "%s", prose.FanSingleWithFrom(absOrSelf(req.WithFrom[0])))
-			}
-			return usageError(stderr,
-				"a fan-out needs at least two members: --with provider[:model[:effort]] per cold member, "+
-					"--with-from <job-dir> per member that continues a finished job's session. "+
-					"For one turn, use envoy turn")
-		}
+		// Continued members are resolved before anything else — the
+		// two-member minimum included — so every refusal is about the job
+		// actually named: a lone --with-from that names no continuable turn
+		// reports that, never a redirect to a command that would fail the
+		// same way.
+		//
+		// Continued members come first in the roster: each names one
+		// finished job whose session becomes this member's conversation.
+		// One conversation, one member — a session admits a single live
+		// turn. A write-recorded source is refused outright: fan members
+		// are read-only, and silently narrowing the conversation's write
+		// intent is the exact drop the inheritance contract forbids. And
+		// unless --cwd/--baseline say otherwise, the continued
+		// conversations keep the tree and the anchor they were dispatched
+		// with — which therefore have to agree across sources.
 		members = make([]fan.Member, 0, len(req.With)+len(req.WithFrom))
-		// Continued members first: each names one finished job whose session
-		// becomes this member's conversation. One conversation, one member —
-		// a session admits a single live turn — and unless --cwd says
-		// otherwise, the continued conversations stay in the tree they were
-		// dispatched in, which therefore has to be one tree.
 		sessionDirs := map[string]string{}
 		inheritedCwd, inheritedCwdDir := "", ""
+		inheritedBaseline, inheritedBaselineDir := "", ""
 		for _, raw := range req.WithFrom {
 			dir := absOrSelf(raw)
 			source, errText := resumableTurn("--with-from", dir)
 			if errText != "" {
 				return usageError(stderr, "%s", errText)
+			}
+			if source.AllowWrite {
+				return usageError(stderr, "%s", prose.FanWithFromWriteSource(dir))
 			}
 			if prev, dup := sessionDirs[source.Session]; dup {
 				return usageError(stderr, "%s", prose.FanWithFromDuplicateSession(source.Session, prev, dir))
@@ -302,6 +307,13 @@ func Fan(req FanRequest) int {
 					return usageError(stderr, "%s", prose.FanWithFromCwdMix(inheritedCwdDir, inheritedCwd, dir, source.Cwd))
 				}
 			}
+			if req.Baseline == "" && source.Baseline != "" {
+				if inheritedBaseline == "" {
+					inheritedBaseline, inheritedBaselineDir = source.Baseline, dir
+				} else if source.Baseline != inheritedBaseline {
+					return usageError(stderr, "%s", prose.FanWithFromBaselineMix(inheritedBaselineDir, inheritedBaseline, dir, source.Baseline))
+				}
+			}
 			members = append(members, fan.Member{
 				Provider:    source.Provider,
 				Model:       source.Model,
@@ -312,6 +324,18 @@ func Fan(req FanRequest) int {
 		}
 		if req.Cwd == "" {
 			req.Cwd = inheritedCwd
+		}
+		if req.Baseline == "" {
+			req.Baseline = inheritedBaseline
+		}
+		if len(members)+len(req.With) < 2 {
+			if len(members) == 1 && len(req.With) == 0 {
+				return usageError(stderr, "%s", prose.FanSingleWithFrom(members[0].ResumedFrom))
+			}
+			return usageError(stderr,
+				"a fan-out needs at least two members: --with provider[:model[:effort]] per cold member, "+
+					"--with-from <job-dir> per member that continues a finished job's session. "+
+					"For one turn, use envoy turn")
 		}
 		for _, spec := range req.With {
 			m, err := parseMember(spec)

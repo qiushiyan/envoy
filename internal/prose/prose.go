@@ -499,6 +499,25 @@ func FanWithFromCwdMix(firstDir, firstCwd, secondDir, secondCwd string) string {
 		firstDir, firstCwd, secondDir, secondCwd)
 }
 
+// FanWithFromBaselineMix asks for an explicit anchor when the continued jobs
+// recorded different ones: a fan-out reports one reviewed range, and the
+// engine will not choose which conversation's anchor wins.
+func FanWithFromBaselineMix(firstDir, firstBaseline, secondDir, secondBaseline string) string {
+	return fmt.Sprintf("the jobs named by --with-from recorded different baselines (%s recorded %s; %s recorded %s). "+
+		"A fan-out reports one reviewed range — pass --baseline to choose the anchor.",
+		firstDir, firstBaseline, secondDir, secondBaseline)
+}
+
+// FanWithFromWriteSource refuses to continue a write conversation inside a
+// fan-out, whose members are read-only: silently narrowing the conversation's
+// write intent is the exact drop the inheritance contract forbids, so the
+// intent is kept by continuing the conversation alone.
+func FanWithFromWriteSource(dir string) string {
+	return fmt.Sprintf("--with-from %s: that job ran with --allow-write, and a fan-out's members are read-only — "+
+		"they share one working tree. Continue this conversation alone, keeping its write intent:\n  %s",
+		dir, TurnResumeFromCommand(dir))
+}
+
 // FanResumeFromNotAFanOut redirects a --resume-from aimed at a single turn.
 // When that turn published a session, the redirect carries its actual resume
 // command instead of a shape to imitate.
