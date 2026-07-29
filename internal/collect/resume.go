@@ -41,8 +41,9 @@ type FanResumeState struct {
 // memberResumeBlocker is the single definition of "this job's session may
 // not be continued", consulted by every surface that advertises or dispatches
 // a continuation: collect's turn-level resume line, the fan-out's set-level
-// resume line, and the --resume-from/--with-from inspections. One definition
-// means collect can never advertise a follow-up that dispatch would refuse.
+// resume line, the --resume-from/--with-from inspections, and TurnResume's
+// fan redirect. One definition means no surface can advertise a follow-up
+// that dispatch would refuse.
 // A recorded session-lock conflict blocks exactly as it suppresses the job's
 // own resume command: the session may belong to another job.
 func memberResumeBlocker(meta *job.Meta) (prose.ResumeBlockerKind, bool) {
@@ -143,8 +144,12 @@ func InspectTurnResume(dir string) (*ResumableTurn, prose.ResumeBlockerKind, err
 }
 
 // TurnResume reports whether dir holds a single turn, and that turn's own
-// resume command when it has one — the redirect a --resume-from aimed at a
-// turn instead of a fan-out hands back.
+// resume command when continuing it is licensed — the redirect a
+// --resume-from aimed at a turn instead of a fan-out hands back. The one
+// eligibility definition governs here too: a blocked turn (running, lock
+// conflict, no session) yields no command, so the redirect falls back to
+// pointing at collect instead of advertising a continuation every other
+// surface refuses.
 func TurnResume(dir string) (cmd string, isTurn bool) {
 	metaPath := filepath.Join(dir, "meta.json")
 	if _, err := os.Stat(metaPath); err != nil {
@@ -152,6 +157,9 @@ func TurnResume(dir string) (cmd string, isTurn bool) {
 	}
 	meta, _, err := job.ReadMetaFile(metaPath)
 	if err != nil {
+		return "", true
+	}
+	if _, blocked := memberResumeBlocker(meta); blocked {
 		return "", true
 	}
 	return resumeCommand(meta), true

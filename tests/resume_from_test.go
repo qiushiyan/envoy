@@ -266,6 +266,18 @@ func TestRunningJobIsNotAdvertisedAsContinuable(t *testing.T) {
 		t.Fatalf("resume-from a running job: exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
 	}
 	mustContain(t, "stderr", res.stderr, "still records status running")
+
+	// The fan redirect is a continuation surface too: aimed at this running
+	// turn it must point at collect, not hand over the resume command every
+	// other surface is refusing.
+	res = runEnvoy(t, e, "fan", "--resume-from", dir, "--prompt-file", prompt)
+	if res.code != 3 {
+		t.Fatalf("fan --resume-from a running turn: exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
+	}
+	mustContain(t, "stderr", res.stderr, "is a single turn", "Collect it to see what it licenses")
+	if strings.Contains(res.stderr, "--resume sess-live") {
+		t.Fatalf("the redirect must not advertise a blocked turn's resume command:\n%s", res.stderr)
+	}
 }
 
 // A warm source's recorded baseline is part of the conversation being

@@ -325,8 +325,11 @@ Engine-relevant history, distilled from the predecessor and continued here.
   jobs. The same-day review round caught the feature's own gaps, each
   pinned red before its fix: collect's turn-level resume line advertised a
   continuation `--resume-from` would refuse (eligibility now has the one
-  definition, `memberResumeBlocker`, consulted by both — a running turn's
-  session prints without its resume command); `--with-from` silently
+  definition, `memberResumeBlocker`, consulted by every surface that
+  advertises or dispatches one — the round-2 pass caught the third
+  consumer, the fan redirect for a single-turn dir, still bypassing it —
+  so a running turn's session prints without its resume command
+  everywhere); `--with-from` silently
   narrowed a write-recorded source (now refused with the single-turn
   alternative, which keeps the intent) and dropped a warm source's recorded
   baseline (now inherited like cwd, agreeing across sources or refused);
