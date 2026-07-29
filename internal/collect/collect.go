@@ -324,6 +324,9 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 		orDefault(meta.ProgressPath, filepath.Join(outDir, "progress.log")),
 		orDefault(meta.RawPath, filepath.Join(outDir, "raw.log")),
 		orDefault(meta.StderrPath, filepath.Join(outDir, "stderr.log")))
+	if meta.ResumedFrom != nil {
+		fmt.Fprintf(w, "resumed-from: %s\n", *meta.ResumedFrom)
+	}
 	if meta.SessionID != nil {
 		fmt.Fprintf(w, "session: %s\n", *meta.SessionID)
 		if resume := resumeCommand(meta); resume != "" {

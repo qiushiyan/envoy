@@ -25,7 +25,7 @@ import (
 )
 
 // Version of the engine, reported by `envoy version`.
-const Version = "0.2.0"
+const Version = "0.3.0"
 
 // Exit codes: 0 ok · 1 provider failure · 2 infra · 3 usage · 4 timeout ·
 // 5 interrupted · 6 partial (fan-out only).
@@ -44,12 +44,21 @@ const (
 // a derived job dir for OutDir — and the engine's 30-minute safety cap for
 // TimeoutMin. Running uncapped requires saying so with NoTimeout: the
 // dangerous state must not be the zero value.
+//
+// ResumeFrom instead names a finished job whose session this turn continues:
+// the provider, session, and — unless set here explicitly — model, effort,
+// write intent, cwd, and baseline all come from that job's own records, so a
+// later phase can build on an earlier one without hand-carrying a session id
+// that may already be stale. Provider and Resume must be empty with it; the
+// timeout stays this request's own, because the cap is phase policy, not a
+// property of the conversation.
 type TurnRequest struct {
 	Provider     string
 	PromptFile   string
 	Model        string
 	Effort       string
 	Resume       string
+	ResumeFrom   string
 	Baseline     string
 	AllowWrite   bool
 	Cwd          string
@@ -97,6 +106,41 @@ func usageError(w io.Writer, format string, args ...any) int {
 func Turn(req TurnRequest) int {
 	stdout, stderr := defaultWriters(req.Stdout, req.Stderr)
 
+	resumedFrom := ""
+	if req.ResumeFrom != "" {
+		if req.Resume != "" {
+			return usageError(stderr, "%s", prose.ResumeFromAndResume())
+		}
+		if req.Provider != "" {
+			return usageError(stderr, "%s", prose.ResumeFromAndProvider())
+		}
+		source, errText := resumableTurn("--resume-from", absOrSelf(req.ResumeFrom))
+		if errText != "" {
+			return usageError(stderr, "%s", errText)
+		}
+		// The records supply what the caller left unsaid; explicit fields win.
+		// Write intent can only widen — the follow-up of a write turn must not
+		// silently go read-only.
+		req.Provider = source.Provider
+		req.Resume = source.Session
+		if req.Model == "" {
+			req.Model = source.Model
+		}
+		if req.Effort == "" {
+			req.Effort = source.Effort
+		}
+		if !req.AllowWrite {
+			req.AllowWrite = source.AllowWrite
+		}
+		if req.Cwd == "" {
+			req.Cwd = source.Cwd
+		}
+		if req.Baseline == "" {
+			req.Baseline = source.Baseline
+		}
+		resumedFrom = absOrSelf(req.ResumeFrom)
+	}
+
 	if req.Provider == "" {
 		return usageError(stderr, "--provider <claude|codex> is required")
 	}
@@ -142,12 +186,13 @@ func Turn(req TurnRequest) int {
 		outDir = absOrSelf(outDir)
 	}
 	return runner.Run(runner.Options{
-		Provider:   req.Provider,
-		PromptFile: req.PromptFile,
-		Cwd:        cwd,
-		Baseline:   req.Baseline,
-		Label:      req.Label,
-		OutDir:     outDir,
+		Provider:    req.Provider,
+		PromptFile:  req.PromptFile,
+		Cwd:         cwd,
+		Baseline:    req.Baseline,
+		Label:       req.Label,
+		OutDir:      outDir,
+		ResumedFrom: resumedFrom,
 		Turn: provider.Options{
 			Model:        req.Model,
 			Effort:       req.Effort,
@@ -165,17 +210,21 @@ func Turn(req TurnRequest) int {
 // turns, supervised as a single job. With holds one member spec per turn,
 // spelled provider[:model[:effort]] — the same form a caller types — so the
 // CLI and an embedding program get identical parsing and identical errors.
+// WithFrom adds members that continue finished jobs' sessions: each entry
+// names a job dir, and that member's provider, model, effort, and session
+// come from the job's own records — a warm voice beside With's cold ones.
 // ResumeFrom instead names a finished fan-out whose members this one
 // continues: the roster, each member's session, the working directory, and
-// the baseline all come from that fan-out's own records, and With must be
-// empty.
+// the baseline all come from that fan-out's own records, and With and
+// WithFrom must be empty.
 //
 // Everything else is shared by every member. There is deliberately no write
-// intent and no per-member resume flag: members share one working tree, and a
+// intent and no bare session-id resume: members share one working tree, and a
 // single session id cannot name several conversations. TimeoutMin follows
 // TurnRequest — zero means the 30-minute cap.
 type FanRequest struct {
 	With       []string
+	WithFrom   []string
 	ResumeFrom string
 	PromptFile string
 	Baseline   string
@@ -201,6 +250,9 @@ func Fan(req FanRequest) int {
 		if len(req.With) > 0 {
 			return usageError(stderr, "%s", prose.FanResumeFromAndWith())
 		}
+		if len(req.WithFrom) > 0 {
+			return usageError(stderr, "%s", prose.FanResumeFromAndWithFrom())
+		}
 		resumedFrom = absOrSelf(req.ResumeFrom)
 		resolved, group, errText := resumableMembers(resumedFrom)
 		if errText != "" {
@@ -216,12 +268,51 @@ func Fan(req FanRequest) int {
 			req.Baseline = *group.GitBaseline
 		}
 	} else {
-		if len(req.With) < 2 {
+		if len(req.With)+len(req.WithFrom) < 2 {
+			if len(req.WithFrom) == 1 && len(req.With) == 0 {
+				return usageError(stderr, "%s", prose.FanSingleWithFrom(absOrSelf(req.WithFrom[0])))
+			}
 			return usageError(stderr,
-				"a fan-out needs at least two members: --with provider[:model[:effort]] --with provider[:model[:effort]]. "+
+				"a fan-out needs at least two members: --with provider[:model[:effort]] per cold member, "+
+					"--with-from <job-dir> per member that continues a finished job's session. "+
 					"For one turn, use envoy turn")
 		}
-		members = make([]fan.Member, 0, len(req.With))
+		members = make([]fan.Member, 0, len(req.With)+len(req.WithFrom))
+		// Continued members first: each names one finished job whose session
+		// becomes this member's conversation. One conversation, one member —
+		// a session admits a single live turn — and unless --cwd says
+		// otherwise, the continued conversations stay in the tree they were
+		// dispatched in, which therefore has to be one tree.
+		sessionDirs := map[string]string{}
+		inheritedCwd, inheritedCwdDir := "", ""
+		for _, raw := range req.WithFrom {
+			dir := absOrSelf(raw)
+			source, errText := resumableTurn("--with-from", dir)
+			if errText != "" {
+				return usageError(stderr, "%s", errText)
+			}
+			if prev, dup := sessionDirs[source.Session]; dup {
+				return usageError(stderr, "%s", prose.FanWithFromDuplicateSession(source.Session, prev, dir))
+			}
+			sessionDirs[source.Session] = dir
+			if req.Cwd == "" {
+				if inheritedCwd == "" {
+					inheritedCwd, inheritedCwdDir = source.Cwd, dir
+				} else if source.Cwd != inheritedCwd {
+					return usageError(stderr, "%s", prose.FanWithFromCwdMix(inheritedCwdDir, inheritedCwd, dir, source.Cwd))
+				}
+			}
+			members = append(members, fan.Member{
+				Provider:    source.Provider,
+				Model:       source.Model,
+				Effort:      source.Effort,
+				Resume:      source.Session,
+				ResumedFrom: dir,
+			})
+		}
+		if req.Cwd == "" {
+			req.Cwd = inheritedCwd
+		}
 		for _, spec := range req.With {
 			m, err := parseMember(spec)
 			if err != nil {
@@ -270,6 +361,29 @@ func Fan(req FanRequest) int {
 	})
 }
 
+// resumableTurn resolves a job dir named by --resume-from or --with-from into
+// the turn it may continue, through collect's typed inspection so the
+// dispatch decision and collect's own resume line can never disagree about
+// which jobs may continue. flag names the surface for the refusal wording;
+// errText is "" exactly when the turn is continuable.
+func resumableTurn(flag, dir string) (*collect.ResumableTurn, string) {
+	if job.IsGroupDir(dir) {
+		round := ""
+		if group, err := job.ReadGroupFile(job.GroupWorkspace{Dir: dir}.GroupPath()); err == nil {
+			round = prose.FanResumeCommand(dir, group.TimeoutMin)
+		}
+		return nil, prose.ResumeFromIsFanOut(flag, dir, round)
+	}
+	source, blocker, err := collect.InspectTurnResume(dir)
+	if err != nil {
+		return nil, prose.ResumeFromNoTurn(flag, dir, err)
+	}
+	if blocker != "" {
+		return nil, prose.ResumeFromBlocked(flag, dir, blocker)
+	}
+	return source, ""
+}
+
 // resumableMembers resolves a --resume-from directory into the members of a
 // new round, through collect's typed inspection so the dispatch decision and
 // collect's own resume line can never disagree about who can continue. The
@@ -299,11 +413,12 @@ func resumableMembers(dir string) ([]fan.Member, *job.Group, string) {
 	members := make([]fan.Member, len(state.Members))
 	for i, m := range state.Members {
 		members[i] = fan.Member{
-			Provider: m.Provider,
-			Model:    m.Model,
-			Effort:   m.Effort,
-			Resume:   m.Session,
-			Name:     m.Name,
+			Provider:    m.Provider,
+			Model:       m.Model,
+			Effort:      m.Effort,
+			Resume:      m.Session,
+			ResumedFrom: m.OutDir,
+			Name:        m.Name,
 		}
 	}
 	return members, state.Group, ""

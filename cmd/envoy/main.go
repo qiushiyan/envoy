@@ -85,6 +85,16 @@ ONE PROMPT, SEVERAL MODELS
     --with claude:opus:high --with claude:sonnet  one family, two models
     --with codex --with codex                     the same model twice
 
+  A member can also continue a finished job's session instead of starting
+  cold: --with-from <job-dir> reads that job's provider, model, effort, and
+  session from its records. Mix the two to put a voice that already holds
+  context beside an independent cold one — a review where the model you
+  consulted follows through and a fresh model judges without that history:
+
+    envoy fan --prompt-file review.md --with-from <consult-job-dir> --with claude:opus
+
+  Continued members are listed first, and each conversation may appear once.
+
   Each member is an ordinary turn with its own session and job dir, in a
   subdirectory named after it, so recovery stays per member: resume the one
   that needs resuming. A fan-out is read-only — its members share one working
@@ -106,6 +116,10 @@ TURN FLAGS
   --model           model override; omitted means the provider's config chooses
   --effort          claude: %s · codex: %s
   --resume ID       continue an existing session with a new prompt
+  --resume-from DIR continue a finished job's session, named by its job dir;
+                    provider, session, model, effort, write intent, cwd, and
+                    baseline come from that job's records, and explicit flags
+                    (except --provider, which cannot change) override them
   --allow-write     let the turn edit files and run commands unattended
   --baseline SHA    diff anchor for collect; write turns default to HEAD
   --cwd DIR         directory the provider works in (default: current dir)
@@ -115,9 +129,10 @@ TURN FLAGS
   --label TEXT      names the job dir (default: provider name)
 
   envoy fan takes --prompt-file, --baseline, --cwd, --out-dir, --timeout-min
-  and --label with the same meaning, plus --with once per member. The cap
-  applies to each member separately. --resume-from <fan-out-dir> replaces
-  --with entirely: the members come from that fan-out's manifest.
+  and --label with the same meaning, plus --with once per cold member and
+  --with-from once per continued member. The cap applies to each member
+  separately. --resume-from <fan-out-dir> replaces both entirely: the members
+  come from that fan-out's manifest.
 
 FORGOT SOMETHING AFTER DISPATCHING
   envoy steer --prompt-file more.md [job-dir]
@@ -148,7 +163,11 @@ BEFORE YOU DISPATCH
   Continuing a turn. --resume <session> continues an existing conversation and
   takes a NEW prompt file: re-sending the original repeats work the provider
   already did. collect prints the exact command, carrying the settings the
-  first turn was dispatched with.
+  first turn was dispatched with. --resume-from <job-dir> is the same
+  follow-up anchored on the job's records instead of a session id — reach for
+  it when a later phase builds on an earlier phase's session (a review that
+  continues a consult, say): the records always name the conversation's
+  current id, where a remembered session id goes stale.
 
   The cap. --timeout-min bounds wall-clock time as a safety net, not a stall
   detector — it counts healthy work, so reaching it never proves a hang.
@@ -236,6 +255,7 @@ func cmdTurn(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&req.Model, "model", "", "")
 	fs.StringVar(&req.Effort, "effort", "", "")
 	fs.StringVar(&req.Resume, "resume", "", "")
+	fs.StringVar(&req.ResumeFrom, "resume-from", "", "")
 	fs.StringVar(&req.Baseline, "baseline", "", "")
 	fs.BoolVar(&req.AllowWrite, "allow-write", false, "")
 	fs.StringVar(&req.Cwd, "cwd", "", "")
@@ -275,8 +295,9 @@ func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
 func cmdFan(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("fan", stderr)
 	var req envoy.FanRequest
-	var with stringList
+	var with, withFrom stringList
 	fs.Var(&with, "with", "")
+	fs.Var(&withFrom, "with-from", "")
 	fs.StringVar(&req.ResumeFrom, "resume-from", "", "")
 	fs.StringVar(&req.PromptFile, "prompt-file", "", "")
 	fs.StringVar(&req.Baseline, "baseline", "", "")
@@ -323,6 +344,7 @@ func cmdFan(args []string, stdout, stderr io.Writer) int {
 		req.TimeoutMin = *timeoutMin
 	}
 	req.With = with
+	req.WithFrom = withFrom
 	req.Stdout = stdout
 	req.Stderr = stderr
 	return envoy.Fan(req)

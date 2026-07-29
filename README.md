@@ -15,7 +15,10 @@ make install                  # builds to ~/.local/bin/envoy
 
 ```sh
 envoy turn --provider codex --prompt-file brief.md --timeout-min 30 --label consult
+envoy turn --resume-from <job-dir> --prompt-file next.md   # continue a finished job's session
 envoy fan --prompt-file brief.md --with codex --with claude:opus   # one prompt, N models
+envoy fan --prompt-file review.md --with-from <job-dir> --with claude:opus
+                              # a continued conversation beside a cold voice
 envoy collect <out-dir>       # print + stamp one job (default: latest for this repo)
 envoy steer --prompt-file more.md [out-dir]   # route a supplement to a dispatched job
 envoy pending [--base DIR]    # discovery-only recovery index after a missed notification
@@ -46,6 +49,17 @@ member. The fan-out dir adds `group.json` (the member roster and shared
 settings) and the shared `prompt.md`; `envoy collect <fan-out-dir>` prints every
 member's status and result in one block, split by member name. Fan-outs are
 read-only: `--allow-write` is refused because members share one working tree.
+
+A finished job's session is a reusable asset: `envoy turn --resume-from
+<job-dir>` dispatches a follow-up turn into that job's conversation, reading
+the session and settings from the job's own records (explicit flags override;
+the provider cannot change). `envoy fan --with-from <job-dir>` does the same
+for one member of a new fan-out, beside fresh `--with` members — a voice that
+already holds the context of an earlier phase (a consult, say) next to a cold
+one that judges without it. The records are the safer anchor than a
+remembered session id: a resumed claude conversation continues under a fresh
+id, and only the job's `meta.json` names the current one. Every continued
+turn records its `resumedFrom` lineage and prints it at dispatch and collect.
 
 `envoy steer` answers the "forgot to mention X" moment after a dispatch. No
 provider accepts input into a running turn — claude's streaming input would

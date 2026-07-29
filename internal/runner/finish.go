@@ -39,6 +39,7 @@ func (r *run) initMeta() {
 		Cwd:              r.opts.Cwd,
 		AllowWrite:       r.opts.Turn.AllowWrite,
 		GitBaseline:      ptrIfNonEmpty(baseline),
+		ResumedFrom:      ptrIfNonEmpty(r.opts.ResumedFrom),
 		StartedAt:        job.ISO(r.startedAt),
 		TimeoutMin:       r.opts.Turn.TimeoutMin,
 		DeadlineAt:       deadlineAt,
@@ -86,6 +87,9 @@ func (r *run) printStartupBlock() {
 	fmt.Fprintf(w, "stderr: %s\n", r.ws.StderrLogPath())
 	if r.meta.GitBaseline != nil {
 		fmt.Fprintf(w, "baseline: %s\n", *r.meta.GitBaseline)
+	}
+	if r.opts.ResumedFrom != "" {
+		fmt.Fprintf(w, "resumed-from: %s\n", r.opts.ResumedFrom)
 	}
 	if r.session() != "" {
 		fmt.Fprintf(w, "session: %s\n", r.session())

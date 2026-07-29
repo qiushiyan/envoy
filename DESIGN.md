@@ -292,3 +292,34 @@ Engine-relevant history, distilled from the predecessor and continued here.
   command could take the name. If steer refusals ever pile up in the job
   store, that is the usage-lab evidence an opt-in streaming turn would need
   to justify its cost.
+- **2026-07-29 — cross-phase continuation: `turn --resume-from`,
+  `fan --with-from`.** Real usage runs consult at the top of a host session
+  and review at the bottom, and the consult session — the voice's whole
+  built mental model of the plan — died at the skill boundary: every review
+  dispatched cold and re-derived its context from scratch. The primitives
+  for continuing a conversation existed (`turn --resume`,
+  `fan --resume-from`), but not the shape that workflow needs: a follow-up
+  anchored on a *job dir* hours later, and a fan whose members mix one
+  continued conversation with cold ones. Two additions, no new turn
+  semantics (the fan admission test passes): `turn --resume-from <job-dir>`
+  reads the session and unspecified settings from the job's records — the
+  job dir is the correct anchor because a resumed claude conversation
+  continues under a fresh id, so a remembered session id silently forks the
+  conversation at a stale point, while the records always name the current
+  head — and `fan --with-from <job-dir>` makes one member of a fresh roster
+  continue a finished job's session (`fan.Member.Resume` already existed;
+  only the spelling was missing). Both route through the one typed
+  inspection collect's resume line uses, so dispatch and collect cannot
+  disagree about which jobs may continue. Decisions banked: the timeout
+  never inherits (the cap is phase policy — a 30-minute consult continues
+  into a 60-minute review); write intent inherits and can only widen (a
+  follow-up must not silently go read-only); the provider is not
+  overridable (a conversation cannot change model family — carrying context
+  to another family is prompt authorship, per the no-templating non-goal);
+  a warm reviewer is a *follow-through* check, not an independent one — the
+  mixed roster exists precisely so callers can put a cold voice beside it,
+  and that judgment stays with callers. Deliberately not built: job
+  discovery ("the newest consult for this project") — the retained
+  coordinate stays the out-dir printed at dispatch, and a listing command
+  waits for usage-lab evidence of callers actually fumbling to find old
+  jobs.

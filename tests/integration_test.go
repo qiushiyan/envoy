@@ -1028,6 +1028,8 @@ func TestHelpIsSelfSufficient(t *testing.T) {
 		"not a sandbox",                    // --allow-write is intent
 		"One live turn per session",        // the concurrency rule
 		"takes a NEW prompt file",          // resume discipline
+		"--resume-from DIR",                // record-anchored continuation
+		"--with-from <consult-job-dir>",    // a warm voice beside a cold one
 		"counts healthy work",              // cap semantics
 		"EXIT CODES, AND WHAT EACH ONE LICENSES",
 		"claude: low medium high xhigh max", // rendered from the provider map
@@ -1126,13 +1128,20 @@ func TestFanResumeFromContinuesEveryMember(t *testing.T) {
 	}
 	// Each member's turn is a real resume — the provider argv carries the
 	// original session — and the roster's settings carry over.
-	mustContain(t, "codex argv", fmt.Sprintf("%v", readMeta(t, filepath.Join(r2, "codex"))["providerArgv"]),
+	codexMeta := readMeta(t, filepath.Join(r2, "codex"))
+	mustContain(t, "codex argv", fmt.Sprintf("%v", codexMeta["providerArgv"]),
 		"resume", "sess-codex-r1")
 	claudeMeta := readMeta(t, filepath.Join(r2, "claude-opus"))
 	mustContain(t, "claude argv", fmt.Sprintf("%v", claudeMeta["providerArgv"]),
 		"--resume", "sess-claude-r1")
 	if claudeMeta["model"] != "opus" {
 		t.Fatalf("claude-opus model = %v, want opus carried from the roster", claudeMeta["model"])
+	}
+	// Each resumed member also records which job its conversation continues.
+	if codexMeta["resumedFrom"] != filepath.Join(r1, "codex") ||
+		claudeMeta["resumedFrom"] != filepath.Join(r1, "claude-opus") {
+		t.Fatalf("member lineage = %v / %v, want the original member dirs under %s",
+			codexMeta["resumedFrom"], claudeMeta["resumedFrom"], r1)
 	}
 	// And every member was sent the NEW prompt, never the original again.
 	for _, name := range []string{"codex", "claude-opus"} {

@@ -222,6 +222,92 @@ func SpawnFailed(provider string, err error) string {
 	return fmt.Sprintf("envoy could not start %s: %s", provider, err)
 }
 
+// ---------- continuing a finished job ----------
+//
+// --resume-from (a whole turn, or a whole fan-out) and --with-from (one
+// finished job's session as a member of a new fan-out) anchor a follow-up on
+// a job's own records instead of a hand-carried session id. The records are
+// the safer coordinate: a resumed claude conversation continues under a fresh
+// id, so the id a caller remembers goes stale while the job dir's meta always
+// names the current one. The wording below covers the two questions that
+// surface raises: which jobs can be continued, and which command fits the
+// shape at hand.
+
+// ResumeBlockerKind classifies why a job's session cannot be continued. The
+// kinds are prose vocabulary shared by every surface that reports one — the
+// fan facade's refusal, collect's resume line, and the --resume-from and
+// --with-from refusals — so one situation is worded one way everywhere.
+type ResumeBlockerKind string
+
+const (
+	BlockerUnreadableMeta ResumeBlockerKind = "unreadable-meta"
+	BlockerRunning        ResumeBlockerKind = "running"
+	BlockerNoSession      ResumeBlockerKind = "no-session"
+	BlockerLockConflict   ResumeBlockerKind = "lock-conflict"
+)
+
+// TurnResumeFromCommand is the complete command that continues a finished
+// turn's session by naming its job dir, settings read from that job's own
+// records. The prompt file stays the placeholder: a resumed turn needs a NEW
+// prompt.
+func TurnResumeFromCommand(dir string) string {
+	return "envoy turn --resume-from " + text.ShellQuote(dir) + " --prompt-file " + promptPlaceholder
+}
+
+// ResumeFromAndResume explains why the two ways of naming a conversation
+// cannot combine on one turn.
+func ResumeFromAndResume() string {
+	return "--resume-from and --resume are mutually exclusive: both name the conversation to continue. " +
+		"Point --resume-from at the job dir to let its records supply the session and settings, " +
+		"or use --resume <session-id> and spell the settings yourself."
+}
+
+// ResumeFromAndProvider explains why --resume-from takes no provider flag.
+func ResumeFromAndProvider() string {
+	return "--provider is already decided by --resume-from: the job's records name it, and a conversation " +
+		"cannot move to another provider. Drop --provider; --model and --effort still override how the follow-up runs."
+}
+
+// ResumeFromNoTurn rejects a --resume-from/--with-from path that holds no
+// readable turn. cause is the observation ("no turn found there (no
+// meta.json)", a parse error); the prescription is the same for all of them.
+func ResumeFromNoTurn(flag, dir string, cause error) string {
+	return fmt.Sprintf("%s %s: %s. Pass the out-dir printed when the job was dispatched — or a fan-out member's directory.",
+		flag, dir, cause)
+}
+
+// ResumeFromIsFanOut redirects a job-dir flag aimed at a fan-out directory: a
+// group holds several conversations, so the caller picks the set or a member.
+// roundCmd is the runnable set-level round, "" when the manifest is unreadable.
+func ResumeFromIsFanOut(flag, dir, roundCmd string) string {
+	head := fmt.Sprintf("%s %s: this is a fan-out, and its members hold their own sessions.", flag, dir)
+	if roundCmd != "" {
+		return head + " Continue every member as one round:\n  " + roundCmd +
+			"\nOr name one member's directory to continue that voice alone."
+	}
+	return head + " Name one member's directory to continue that voice alone, or continue every member " +
+		"as one round with envoy fan --resume-from."
+}
+
+// ResumeFromBlocked refuses to continue a job whose session is not provably
+// free to continue, naming the observation and the one safe next step.
+func ResumeFromBlocked(flag, dir string, kind ResumeBlockerKind) string {
+	collect := CollectCommand(dir)
+	head := fmt.Sprintf("%s %s: ", flag, dir)
+	switch kind {
+	case BlockerRunning:
+		return head + "this job still records status running, and a session admits one live turn at a time. " +
+			"If it is genuinely running, wait for its process to exit; if you believe it died, collect it first — " +
+			collect + " — and follow its next line."
+	case BlockerLockConflict:
+		return head + "this job's last turn ended in a session-lock conflict, so its session may belong to another job. " +
+			"Collect it first — " + collect + " — and follow its next line before continuing this conversation."
+	default: // BlockerNoSession
+		return head + "this job never published a session id, so it holds no conversation to continue. " +
+			"Collect it — " + collect + " — to see what recovery it licenses; a fresh dispatch may be the right move."
+	}
+}
+
 // ---------- fan-out ----------
 //
 // A fan-out is several turns on one prompt, supervised as a single job. Its
@@ -364,11 +450,12 @@ func FanAllowWriteRefused() string {
 }
 
 // FanResumeRefused explains why a bare session id cannot continue a fan-out,
-// and where each of the two follow-up shapes lives.
+// and where each of the follow-up shapes lives.
 func FanResumeRefused() string {
 	return "--resume is not available on a fan-out: a session id names one conversation, and a fan-out runs several. " +
-		"Resume one member with `envoy turn --resume <session>`, or continue every member of a finished fan-out on one " +
-		"new prompt with `envoy fan --resume-from <fan-out-dir>` — `envoy collect` prints both commands."
+		"Resume one member with `envoy turn --resume <session>`, continue every member of a finished fan-out on one " +
+		"new prompt with `envoy fan --resume-from <fan-out-dir>` — `envoy collect` prints both commands — or continue " +
+		"one finished job's session as a member of a new roster with `--with-from <its-job-dir>`."
 }
 
 // FanResumeFromAndWith explains why a resumed fan-out takes no member specs.
@@ -376,6 +463,40 @@ func FanResumeFromAndWith() string {
 	return "--resume-from and --with are mutually exclusive: a resumed fan-out continues the members recorded in the " +
 		"original fan-out's manifest, so the roster is already decided. Drop --with, or drop --resume-from to dispatch " +
 		"a fresh fan-out."
+}
+
+// FanResumeFromAndWithFrom keeps the two continuation shapes apart: the whole
+// original set, or a new roster built member by member.
+func FanResumeFromAndWithFrom() string {
+	return "--resume-from and --with-from are mutually exclusive: a resumed fan-out already continues every member of " +
+		"the original, so there is no roster to build. Use --resume-from alone to continue the whole set, or compose a " +
+		"new roster from --with-from and --with members."
+}
+
+// FanSingleWithFrom redirects a one-member fan-out to the single-turn form,
+// with the caller's actual dir already in the command.
+func FanSingleWithFrom(dir string) string {
+	return "a fan-out needs at least two members. To continue this one session by itself, use:\n  " +
+		TurnResumeFromCommand(dir) +
+		"\nOr add more voices: another --with-from <job-dir>, or a fresh --with provider[:model[:effort]]."
+}
+
+// FanWithFromDuplicateSession refuses a roster that names one conversation
+// twice: a session admits a single live turn, so the second member could
+// never dispatch.
+func FanWithFromDuplicateSession(session, firstDir, secondDir string) string {
+	return fmt.Sprintf("--with-from names the same conversation twice (session %s, from %s and %s), and a session "+
+		"admits one live turn at a time. Name each conversation once; add fresh voices with --with.",
+		session, firstDir, secondDir)
+}
+
+// FanWithFromCwdMix asks for an explicit tree when the continued jobs do not
+// share one: a fan-out's members run in a single working directory, and the
+// engine will not choose between the recorded ones.
+func FanWithFromCwdMix(firstDir, firstCwd, secondDir, secondCwd string) string {
+	return fmt.Sprintf("the jobs named by --with-from ran in different working directories (%s ran in %s; %s ran in %s). "+
+		"A fan-out's members share one tree — pass --cwd to choose it.",
+		firstDir, firstCwd, secondDir, secondCwd)
 }
 
 // FanResumeFromNotAFanOut redirects a --resume-from aimed at a single turn.
@@ -389,29 +510,18 @@ func FanResumeFromNotAFanOut(dir, resumeCmd string) string {
 	return head + " Collect it to see what it licenses: " + CollectCommand(dir) + "."
 }
 
-// FanResumeBlockerKind classifies why one member blocks a set-level resume.
-// The kinds are prose vocabulary so every surface that reports a blocker —
-// the facade's refusal, collect's resume line — words one situation one way.
-type FanResumeBlockerKind string
-
-const (
-	FanBlockerUnreadableMeta FanResumeBlockerKind = "unreadable-meta"
-	FanBlockerRunning        FanResumeBlockerKind = "running"
-	FanBlockerNoSession      FanResumeBlockerKind = "no-session"
-	FanBlockerLockConflict   FanResumeBlockerKind = "lock-conflict"
-)
-
-// FanResumeBlockerLine words one member's blocker as an observation. detail
-// carries the read error for an unreadable meta and is ignored otherwise.
-func FanResumeBlockerLine(member string, kind FanResumeBlockerKind, detail string) string {
+// FanResumeBlockerLine words one member's blocker as an observation, in the
+// shared ResumeBlockerKind vocabulary. detail carries the read error for an
+// unreadable meta and is ignored otherwise.
+func FanResumeBlockerLine(member string, kind ResumeBlockerKind, detail string) string {
 	switch kind {
-	case FanBlockerUnreadableMeta:
+	case BlockerUnreadableMeta:
 		return fmt.Sprintf("member %s has no readable meta.json (%s)", member, detail)
-	case FanBlockerRunning:
+	case BlockerRunning:
 		return fmt.Sprintf("member %s is still running", member)
-	case FanBlockerLockConflict:
+	case BlockerLockConflict:
 		return fmt.Sprintf("member %s's last turn ended in a session-lock conflict, so its session may belong to another job", member)
-	default: // FanBlockerNoSession
+	default: // BlockerNoSession
 		return fmt.Sprintf("member %s never published a session id, so it has no conversation to continue", member)
 	}
 }

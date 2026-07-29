@@ -57,7 +57,11 @@ type Options struct {
 	Baseline   string // "" = HEAD for write turns, else unset
 	Label      string
 	OutDir     string // "" = derive from cwd/label
-	Turn       provider.Options
+	// ResumedFrom is the job dir whose session this turn continues, "" for a
+	// fresh conversation or a bare --resume. Lineage only: recorded and
+	// printed as an observation, never acted on.
+	ResumedFrom string
+	Turn        provider.Options
 	// SessionLock is a lock a supervisor already holds for this turn's
 	// resumed session — a fan-out reserves every member before any spawns,
 	// so a held session refuses the whole round instead of one member. The

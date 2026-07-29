@@ -166,6 +166,49 @@ func TestResumeCommandWith(t *testing.T) {
 	}
 }
 
+// Every refusal of a job-dir continuation must carry a runnable next step —
+// the reader is an agent whose next move is a command, not a diagnosis — and
+// may prescribe only what the blocker actually observed: a running job gets
+// "wait", never a resume beside a possibly live turn.
+func TestResumeFromVocabulary(t *testing.T) {
+	if got := TurnResumeFromCommand("/jobs/consult"); got != "envoy turn --resume-from '/jobs/consult' --prompt-file <your-follow-up.md>" {
+		t.Fatalf("TurnResumeFromCommand = %q", got)
+	}
+
+	blocked := map[ResumeBlockerKind][]string{
+		BlockerRunning:      {"still records status running", "one live turn at a time", "wait for its process to exit"},
+		BlockerLockConflict: {"session-lock conflict", "may belong to another job"},
+		BlockerNoSession:    {"never published a session id", "no conversation to continue", "fresh dispatch"},
+	}
+	for kind, wants := range blocked {
+		got := ResumeFromBlocked("--resume-from", "/jobs/j1", kind)
+		for _, want := range append(wants, "--resume-from /jobs/j1", "envoy collect '/jobs/j1'") {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%s: %q is missing %q", kind, got, want)
+			}
+		}
+	}
+
+	fanned := ResumeFromIsFanOut("--resume-from", "/jobs/fan", "envoy fan --resume-from '/jobs/fan' --timeout-min 30 --prompt-file <your-follow-up.md>")
+	for _, want := range []string{"this is a fan-out", "envoy fan --resume-from '/jobs/fan'", "one member's directory"} {
+		if !strings.Contains(fanned, want) {
+			t.Fatalf("fan redirect %q is missing %q", fanned, want)
+		}
+	}
+
+	single := FanSingleWithFrom("/jobs/consult")
+	if !strings.Contains(single, "envoy turn --resume-from '/jobs/consult' --prompt-file <your-follow-up.md>") {
+		t.Fatalf("single with-from must hand over the runnable turn form: %q", single)
+	}
+
+	dup := FanWithFromDuplicateSession("s1", "/jobs/a", "/jobs/b")
+	for _, want := range []string{"same conversation twice", "session s1", "/jobs/a", "/jobs/b", "one live turn at a time"} {
+		if !strings.Contains(dup, want) {
+			t.Fatalf("duplicate-session refusal %q is missing %q", dup, want)
+		}
+	}
+}
+
 // Steer's whole vocabulary answers one question — can a supplement still reach
 // this job? — and the honest answer is always no. Each wording must say why in
 // the provider's own terms and hand over a runnable continuation, and the

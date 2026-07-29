@@ -36,11 +36,12 @@ import (
 // rounds. Either way the directory layout and every line that mentions the
 // member agree by construction.
 type Member struct {
-	Provider string
-	Model    string // "" = the provider's own configured default
-	Effort   string // "" = the provider's own configured default
-	Resume   string // "" = a fresh session; else the session id to continue
-	Name     string // "" = derive from provider and model
+	Provider    string
+	Model       string // "" = the provider's own configured default
+	Effort      string // "" = the provider's own configured default
+	Resume      string // "" = a fresh session; else the session id to continue
+	ResumedFrom string // job dir whose session Resume names, "" when none is known
+	Name        string // "" = derive from provider and model
 }
 
 // Options is one validated fan-out request. Everything here is shared by every
@@ -203,6 +204,7 @@ func runMember(opts Options, m Member, gm job.GroupMember, held *lock.Handle, mu
 		Baseline:    opts.Baseline,
 		Label:       opts.Label,
 		OutDir:      gm.OutDir,
+		ResumedFrom: m.ResumedFrom,
 		SessionLock: held,
 		Turn: provider.Options{
 			Model:      m.Model,
@@ -255,10 +257,16 @@ func printDispatchBlock(opts Options, gw job.GroupWorkspace, members []job.Group
 		fmt.Fprintf(w, "resumed-from: %s\n", opts.ResumedFrom)
 	}
 	// The member name already carries its provider and model, so the line adds
-	// only what the name cannot: the resolved settings and where it writes.
-	for _, m := range members {
-		fmt.Fprintf(w, "member %s: model %s · effort %s · out-dir %s\n",
+	// only what the name cannot: the resolved settings, where it writes, and —
+	// on a mixed roster — which conversation it continues. A resumed round
+	// says that once in its own resumed-from line instead of on every member.
+	for i, m := range members {
+		fmt.Fprintf(w, "member %s: model %s · effort %s · out-dir %s",
 			m.Name, display(m.Model), display(m.Effort), m.OutDir)
+		if opts.ResumedFrom == "" && opts.Members[i].ResumedFrom != "" {
+			fmt.Fprintf(w, " · continues %s", opts.Members[i].ResumedFrom)
+		}
+		fmt.Fprintln(w)
 	}
 	if opts.Baseline != "" {
 		fmt.Fprintf(w, "baseline: %s\n", opts.Baseline)
