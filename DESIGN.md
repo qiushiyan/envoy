@@ -338,3 +338,68 @@ Engine-relevant history, distilled from the predecessor and continued here.
   One finding was rebutted: the resumed round's dispatch block keeps its
   single group-level `resumed-from:` line instead of a per-member suffix —
   the report-once precedent that already governs the group baseline.
+- **2026-07-31 — three days of logs: the cap that lied, and the coordinate
+  callers kept rebuilding.** 78 turns since the last pass, 118 envoy
+  invocations across 14 host sessions. Read with the caveat that the calling
+  skills changed underneath the window (the consult and review briefs were
+  edited three times in it), so caller-side friction dates to a skill version,
+  not only to the engine. Cross-phase continuation was adopted immediately and
+  without a single refusal — 7 `turn --resume-from`, 5 `fan --resume-from`,
+  3 `fan --with-from`, every warm-plus-cold roster shaped as designed — which
+  is the strongest evidence yet that the 07-29 shapes were the missing ones.
+  Two findings, both paid for:
+
+  **The cap's envelope contradicted the job's own record.** Both timeouts in
+  the window were the same shape: the provider announced its thread and then
+  streamed *nothing* — 2 events, 258 bytes — for the entire cap, 60 minutes
+  once and 30 the next day. The engine saw it the whole time; every heartbeat
+  wrote `last_provider_activity=29m_ago events=2`. But the terminal envelope
+  dropped that and said only "the cap counts healthy work too, so reaching it
+  is not evidence the provider hung" — a true generality that, in 2 of 2 real
+  cases, pointed away from what had happened. It cost: one caller diagnosed it
+  by hand from `stderr.log` and redispatched; the next, a day later, believed
+  the envelope and wrote "your previous turn hit the cap before you emitted
+  output — do not restart the reading, write up what you have" into a session
+  that had produced no work at all. Fixed by carrying the observation the
+  engine already held: a capped turn's envelope now reports how long the
+  stream had been quiet, after how many events and which one last, or that
+  nothing arrived at all. Nothing about the cap's *behavior* changed — it stays
+  a wall-clock deadline, never a stall detector, and the recovery still follows
+  prompt state alone; `accepted` still means resume, never redispatch. The
+  boundary this sharpens: **not acting on an observation is not a reason to
+  withhold it.** A generality that is true of the mechanism can still be the
+  wrong sentence for the run, and the fix is the specific fact, not a verdict.
+  The same pass moved the cap sentence out of the runner, where it had been
+  written inline while `StatusGloss` and the help page carried two more
+  wordings of it — the drift `internal/prose` exists to prevent.
+
+  **Callers rebuilt job paths by hand, 13 times, six different ways.** Guessing
+  the stamp-and-label dir (`20260730-113745-review-r2` for a job actually at
+  `112124`) — wrong all five times it was tried, because the stamp is the
+  dispatch second and nothing but the dispatch knows it; `ls -td … | head -1`;
+  `envoy collect … 2>/dev/null || envoy pending`; and five times reaching into
+  the *host harness's* private background-task output file to grep back the
+  `out-dir:` envoy had printed there. This is exactly the evidence 07-28 and
+  07-29 deferred a listing command for ("a listing command waits for usage-lab
+  evidence of callers actually fumbling to find old jobs"), so `envoy jobs`
+  ships: this project's jobs newest first, each row carrying the full dir
+  `collect` takes, with status, shape, duration, and whether the result was
+  ever delivered. It passes the admission test — no lifecycle change, no turn
+  semantics, a read beside `pending` over the same store — and it keeps every
+  judgment with the caller: it names coordinates and prints no result, so like
+  `--status-only` it stamps nothing and an owed job stays owed. The retained
+  coordinate is still the one printed at dispatch; the roster is what answers
+  a caller that lost it. Two owed jobs the store had quietly buried since
+  07-29 (a cap that was never collected, an interrupted review) showed up in
+  the first listing run against the real store.
+
+  Two findings routed without code. `envoy collect` with no argument already
+  resolves to this project's newest job and was used that way **zero** times in
+  118 invocations — the affordance existed and the caller docs never taught it,
+  which is a skill fix, not an engine one. And the resume command collect hands
+  out still names `--resume <session-id>`, so the seven continuations dispatched
+  from it recorded no `resumedFrom` lineage while every `--resume-from` one did;
+  the continuation is still recoverable from `providerArgv`, so this pass paid
+  almost nothing for it, but a future pass that wants lineage as a first-class
+  field should switch the printed command to `--resume-from <job-dir>` — the
+  anchor this design already argues for — and pay the contract churn then.

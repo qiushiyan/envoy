@@ -3,9 +3,51 @@ package prose
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qiushiyan/envoy/internal/job"
 )
+
+// A cap alone reads the same whether the provider worked until the deadline or
+// went silent seconds after accepting the prompt, and those two turns want
+// opposite follow-ups: one continues work, the other is addressed to a session
+// that shows none. The engine records the difference, so the envelope must say
+// it — without ever calling the turn hung, which the cap does not prove.
+func TestTimedOutCarriesTheStreamItObserved(t *testing.T) {
+	quiet := TimedOut(30, "codex", CapStream{Events: 2, LastEvent: "turn.started", Quiet: 29*time.Minute + 58*time.Second})
+	for _, want := range []string{
+		"The 30-minute wall-clock cap ended this codex turn.",
+		"not evidence the provider hung",
+		"the stream had been quiet for 29m, after 2 events (last: turn.started)",
+	} {
+		if !strings.Contains(quiet, want) {
+			t.Fatalf("capped-and-quiet envelope %q is missing %q", quiet, want)
+		}
+	}
+
+	busy := TimedOut(60, "claude", CapStream{Events: 431, LastEvent: "assistant", Quiet: 3 * time.Second})
+	if !strings.Contains(busy, "quiet for 3s, after 431 events (last: assistant)") {
+		t.Fatalf("a turn still streaming at the cap must say so: %q", busy)
+	}
+
+	silent := TimedOut(30, "codex", CapStream{})
+	if !strings.Contains(silent, "streamed nothing at all before the cap") {
+		t.Fatalf("a turn with no events must say so plainly: %q", silent)
+	}
+	if strings.Contains(silent, "quiet for") {
+		t.Fatalf("no output means no quiet interval to report: %q", silent)
+	}
+	// The observation is evidence for the caller, never a verdict the engine
+	// acts on: the cap stays a deadline, so no wording may call the turn hung.
+	for _, envelope := range []string{quiet, busy, silent} {
+		if strings.Contains(envelope, "stalled") || strings.Contains(envelope, "stuck") {
+			t.Fatalf("the envelope must not diagnose a stall: %q", envelope)
+		}
+		if strings.Count(envelope, "hung") != strings.Count(envelope, "not evidence the provider hung") {
+			t.Fatalf("the only mention of hanging may be the one ruling it out: %q", envelope)
+		}
+	}
+}
 
 // The resume command must carry the settings the turn was dispatched with:
 // a follow-up that silently drops --allow-write turns a write turn read-only,

@@ -3,6 +3,7 @@
 //	envoy turn --provider <claude|codex> --prompt-file <F> [flags]
 //	envoy collect [out-dir]
 //	envoy steer --prompt-file <F> [out-dir]
+//	envoy jobs [--base DIR]
 //	envoy pending [--base DIR]
 //	envoy version
 package main
@@ -38,6 +39,7 @@ USAGE
                               print one job: status, coordinates, result.md
   envoy steer --prompt-file <F> [job-dir]
                               route a supplemental prompt to a dispatched job
+  envoy jobs [--base DIR]     this project's jobs, newest first, with their dirs
   envoy pending [--base DIR]  jobs still needing attention, after a missed completion
   envoy version
 
@@ -188,6 +190,10 @@ EXIT CODES, AND WHAT EACH ONE LICENSES
   between a safe retry and duplicating work that already changed the tree, and
   the job knows which happened. After a crash or restart, `+"`envoy pending`"+` finds
   the jobs whose completion you may have missed.
+
+  Lost the out-dir a dispatch printed? `+"`envoy jobs`"+` lists this project's jobs
+  newest first with the dir each one takes. Never rebuild a job path by hand:
+  the stamp in it is the dispatch second, which nothing else knows.
 `,
 	strings.Join(envoy.Efforts("claude"), " "),
 	strings.Join(envoy.Efforts("codex"), " "))
@@ -210,6 +216,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdCollect(args[1:], stdout, stderr)
 	case "steer":
 		return cmdSteer(args[1:], stdout, stderr)
+	case "jobs":
+		return cmdJobs(args[1:], stdout, stderr)
 	case "pending":
 		return cmdPending(args[1:], stdout, stderr)
 	case "version":
@@ -386,6 +394,19 @@ func cmdSteer(args []string, stdout, stderr io.Writer) int {
 		Stdout:     stdout,
 		Stderr:     stderr,
 	})
+}
+
+func cmdJobs(args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("jobs", stderr)
+	base := fs.String("base", "", "")
+	if proceed, code := parseFlags(fs, args, stdout); !proceed {
+		return code
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintln(stderr, "jobs error: jobs does not take a job dir; use --base to choose the job root")
+		return envoy.ExitUsage
+	}
+	return envoy.Jobs(*base, stdout, stderr)
 }
 
 func cmdPending(args []string, stdout, stderr io.Writer) int {

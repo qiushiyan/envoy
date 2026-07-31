@@ -11,6 +11,7 @@ package prose
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/qiushiyan/envoy/internal/job"
 	"github.com/qiushiyan/envoy/internal/text"
@@ -74,6 +75,43 @@ func (t Turn) resumeCommand(promptArg string) string {
 // path for every turn, healthy or not.
 func CollectCommand(outDir string) string {
 	return "envoy collect " + text.ShellQuote(outDir)
+}
+
+// CapStream is what the engine saw of the provider's stream at the moment a
+// wall-clock cap ended the turn: how much arrived, and how long it had been
+// quiet.
+//
+// It is an observation, never a verdict. The cap stays a deadline rather than
+// a stall detector — envoy still never stops a turn for being quiet — but the
+// caller deciding what to do next needs the difference between a turn that was
+// mid-sentence when time ran out and one that went silent seconds after the
+// prompt was accepted. Without it the caller can only read the cap, and a
+// cap alone reads the same either way.
+type CapStream struct {
+	Events    int64         // provider events observed over the whole turn
+	LastEvent string        // the last event's type; "" when none arrived
+	Quiet     time.Duration // how long the stream had been silent when the cap fired
+}
+
+// TimedOut is the terminal envelope of a turn the wall-clock cap ended: what
+// happened, what reaching the cap does and does not prove, and what the stream
+// itself looked like on the way there.
+func TimedOut(timeoutMin float64, provider string, stream CapStream) string {
+	line := fmt.Sprintf(
+		"The %g-minute wall-clock cap ended this %s turn. The cap counts healthy work too, so reaching it is not evidence the provider hung.",
+		timeoutMin, provider)
+	if stream.Events == 0 || stream.LastEvent == "" {
+		return line + " The provider streamed nothing at all before the cap, so this turn shows no work of its own."
+	}
+	return line + fmt.Sprintf(" When the cap arrived the stream had been quiet for %s, after %s (last: %s).",
+		text.FormatDuration(stream.Quiet), eventCount(stream.Events), stream.LastEvent)
+}
+
+func eventCount(n int64) string {
+	if n == 1 {
+		return "1 event"
+	}
+	return fmt.Sprintf("%d events", n)
 }
 
 // Recovery prescribes the next move from the prompt state alone — the only
@@ -220,6 +258,40 @@ func Stopping() string {
 // an identical retry is provably safe.
 func SpawnFailed(provider string, err error) string {
 	return fmt.Sprintf("envoy could not start %s: %s", provider, err)
+}
+
+// ---------- the job roster ----------
+//
+// The out-dir printed at dispatch stays the retained coordinate. The roster is
+// what answers a caller that no longer has it — before it existed, callers
+// rebuilt job paths by hand from the stamp-and-label convention, and the stamp
+// is the dispatch second nobody knows. It hands back coordinates and nothing
+// else: which job to read, and whether to read it at all, stays the caller's
+// judgment.
+
+// JobsHeader opens the roster: how many jobs it names, of how many the project
+// holds, and where they live.
+func JobsHeader(shown, total int, base string) string {
+	switch {
+	case total == 0:
+		return fmt.Sprintf("jobs: 0 (under %s)", base)
+	case shown < total:
+		return fmt.Sprintf("jobs: %d of %d (under %s, newest first)", shown, total, base)
+	}
+	return fmt.Sprintf("jobs: %d (under %s, newest first)", total, base)
+}
+
+// JobsNext closes the roster. A listing delivers no result, so — like
+// --status-only — it marks nothing collected and every job it names stays owed.
+func JobsNext() string {
+	return "this is a listing only — no result was printed and nothing was marked collected. " +
+		"Print one job in full by passing its dir above: envoy collect <job-dir>"
+}
+
+// JobsNone answers a project that has never dispatched a turn, which is not a
+// lost coordinate but an empty store.
+func JobsNone() string {
+	return "no turn has run in this project yet — dispatch one with envoy turn or envoy fan"
 }
 
 // ---------- continuing a finished job ----------

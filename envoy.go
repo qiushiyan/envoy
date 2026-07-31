@@ -25,7 +25,7 @@ import (
 )
 
 // Version of the engine, reported by `envoy version`.
-const Version = "0.3.0"
+const Version = "0.4.0"
 
 // Exit codes: 0 ok · 1 provider failure · 2 infra · 3 usage · 4 timeout ·
 // 5 interrupted · 6 partial (fan-out only).
@@ -565,6 +565,22 @@ func Pending(base string, stdout, stderr io.Writer) int {
 		base = job.DefaultBase(cwd)
 	}
 	return collect.Pending(absOrSelf(base), stdout)
+}
+
+// Jobs prints this project's job roster for base ("" = the default job root
+// for the current directory), newest first. It is a listing only: no result is
+// printed and nothing is marked collected.
+func Jobs(base string, stdout, stderr io.Writer) int {
+	stdout, stderr = defaultWriters(stdout, stderr)
+	if base == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintf(stderr, "jobs error: cannot determine cwd: %s\n", err)
+			return ExitUsage
+		}
+		base = job.DefaultBase(cwd)
+	}
+	return collect.Jobs(absOrSelf(base), stdout)
 }
 
 func defaultWriters(stdout, stderr io.Writer) (io.Writer, io.Writer) {

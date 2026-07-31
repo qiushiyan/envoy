@@ -21,6 +21,7 @@ envoy fan --prompt-file review.md --with-from <job-dir> --with claude:opus
                               # a continued conversation beside a cold voice
 envoy collect <out-dir>       # print + stamp one job (default: latest for this repo)
 envoy steer --prompt-file more.md [out-dir]   # route a supplement to a dispatched job
+envoy jobs [--base DIR]       # this project's jobs, newest first, with the dir each takes
 envoy pending [--base DIR]    # discovery-only recovery index after a missed notification
 envoy version
 ```
@@ -74,8 +75,9 @@ All jobs live in one central store — nothing is ever written inside the
 project tree: `~/.local/state/envoy/jobs/<project-slug>/<stamp>-<label>/`,
 where the slug identifies the project (git root when in a repo, cwd
 otherwise). Callers never construct that path: dispatch prints the `out-dir:`
-coordinate, and `envoy collect` / `envoy pending` re-derive the project's
-store from the current directory alone. Session locks live in
+coordinate, and `envoy collect` / `envoy jobs` / `envoy pending` re-derive the
+project's store from the current directory alone — `envoy jobs` lists the
+coordinates themselves when a caller no longer has one. Session locks live in
 `~/.local/state/envoy/locks/` — one live turn per session, never auto-reclaimed.
 
 Exit codes: `0` ok · `1` provider failure · `2` infra · `3` usage · `4` timeout

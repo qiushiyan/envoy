@@ -231,9 +231,7 @@ func (r *run) finishAfterStop(exit exitResult) {
 
 	var stopped string
 	if r.term.kind == "timeout" {
-		stopped = fmt.Sprintf(
-			"The %g-minute wall-clock cap ended this %s turn. The cap counts healthy work too, so reaching it is not evidence the provider hung.",
-			r.opts.Turn.TimeoutMin, r.opts.Provider)
+		stopped = prose.TimedOut(r.opts.Turn.TimeoutMin, r.opts.Provider, r.capStream())
 	} else {
 		sig := r.term.signal
 		if sig == "" {
@@ -264,6 +262,25 @@ func (r *run) finishAfterStop(exit exitResult) {
 		hasEvidence:         true,
 		exit:                exit,
 	})
+}
+
+// capStream reports what the run observed of the provider's stream, for the
+// terminal envelope of a capped turn. Every field is read from what actually
+// arrived — the engine does not act on any of it, it only says it, so the
+// cap stays a deadline rather than a stall detector.
+func (r *run) capStream() prose.CapStream {
+	stream := prose.CapStream{Events: r.meta.ProviderEventCount}
+	if r.meta.LastProviderEventType != nil {
+		stream.LastEvent = *r.meta.LastProviderEventType
+	}
+	if r.meta.LastProviderActivityAt != nil {
+		if t, err := time.Parse(time.RFC3339, *r.meta.LastProviderActivityAt); err == nil {
+			if quiet := time.Since(t); quiet > 0 {
+				stream.Quiet = quiet
+			}
+		}
+	}
+	return stream
 }
 
 func capitalize(s string) string {

@@ -311,10 +311,40 @@ func TestCodexTimeoutRecordsAcceptance(t *testing.T) {
 	mustContain(t, "error", meta["error"].(string),
 		"wall-clock cap ended this codex turn",
 		"not evidence the provider hung")
+	// This scenario is the shape two real timeouts took: the provider announced
+	// its thread and then streamed nothing until the cap. The envelope must
+	// carry that observation, because the caller cannot otherwise tell it from
+	// a turn that worked right up to the deadline — and the follow-up each one
+	// deserves is different.
+	mustContain(t, "error", meta["error"].(string),
+		"the stream had been quiet for", "after 1 event (last: thread.started)")
 	mustContain(t, "recoveryAction", meta["recoveryAction"].(string),
 		"--resume fake-session-id", "--timeout-min 0.02",
 		"would repeat work that already happened")
 	mustContain(t, "result.md", readFile(t, filepath.Join(outDir, "result.md")), "# Turn timeout")
+}
+
+// A cap that fires before the provider says anything at all has no quiet
+// interval to report, only the absence of a stream. The envelope says that
+// instead of inventing a duration.
+func TestCodexTimeoutBeforeAnyOutputReportsAnEmptyStream(t *testing.T) {
+	e := newEnv(t).
+		set("ENVOY_FAKE_SCENARIO", "delayed-success").
+		set("ENVOY_FAKE_START_DELAY_MS", "60000")
+	outDir := filepath.Join(t.TempDir(), "job")
+	prompt := writePrompt(t, t.TempDir())
+
+	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "0.02")...)
+	if res.code != 4 {
+		t.Fatalf("exit = %d, want 4\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	meta := readMeta(t, outDir)
+	mustContain(t, "error", meta["error"].(string),
+		"wall-clock cap ended this codex turn",
+		"The provider streamed nothing at all before the cap, so this turn shows no work of its own.")
+	if strings.Contains(meta["error"].(string), "quiet for") {
+		t.Fatalf("no output means no quiet interval to report: %v", meta["error"])
+	}
 }
 
 func TestCodexTerminalEnvelopeWinsDuringCleanup(t *testing.T) {
@@ -530,6 +560,87 @@ func TestCollectStampsAndPendingDiscovers(t *testing.T) {
 
 	pending = runEnvoy(t, e, "pending", "--base", base)
 	mustContain(t, "pending after collect", pending.stdout, "pending jobs: 0", "no recovery action is needed")
+}
+
+// The roster is the recovery path for an out-dir the caller no longer has, so
+// every row must carry the coordinate collect takes, verbatim — a listing that
+// prints job names a caller then has to join to a base reintroduces exactly
+// the hand-built path it exists to retire.
+func TestJobsListsThisProjectsCoordinates(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	base := t.TempDir()
+	prompt := writePrompt(t, t.TempDir())
+
+	empty := runEnvoy(t, e, "jobs", "--base", base)
+	if empty.code != 0 {
+		t.Fatalf("jobs on an empty store = %d\n%s", empty.code, empty.stderr)
+	}
+	mustContain(t, "jobs on an empty store", empty.stdout,
+		"jobs: 0 (under "+base+")",
+		"next: no turn has run in this project yet")
+
+	first := filepath.Join(base, "20260725-120000-consult")
+	if res := runEnvoy(t, e, turnArgs(prompt, first, "--provider", "codex", "--timeout-min", "5")...); res.code != 0 {
+		t.Fatalf("first turn failed: %d\n%s", res.code, res.stderr)
+	}
+	fanDir := filepath.Join(base, "20260725-130000-review")
+	if res := runEnvoy(t, e, fanArgs(prompt, fanDir, "--with", "codex", "--with", "claude:opus", "--timeout-min", "5")...); res.code != 0 {
+		t.Fatalf("fan failed: %d\n%s", res.code, res.stderr)
+	}
+
+	listed := runEnvoy(t, e, "jobs", "--base", base)
+	if listed.code != 0 {
+		t.Fatalf("jobs = %d\n%s", listed.code, listed.stderr)
+	}
+	mustContain(t, "jobs stdout", listed.stdout,
+		"jobs: 2 (under "+base+", newest first)",
+		"[ok] "+fanDir+" · fan-out of 2 ·",
+		"[ok] "+first+" · codex ·",
+		"next: this is a listing only — no result was printed and nothing was marked collected.",
+		"envoy collect <job-dir>")
+
+	// Newest first: the job a caller just dispatched is the one it is looking
+	// for, so it must not be at the bottom of a growing list.
+	if strings.Index(listed.stdout, fanDir) > strings.Index(listed.stdout, first+" ") {
+		t.Fatalf("the newest job must be listed first:\n%s", listed.stdout)
+	}
+
+	// A listing delivers nothing, so — like --status-only — it may not stamp.
+	if meta := readMeta(t, first); meta["collectedAt"] != nil {
+		t.Fatalf("listing a job must not mark it collected: %v", meta["collectedAt"])
+	}
+	mustContain(t, "jobs before collect", listed.stdout, "· owed")
+
+	if res := runEnvoy(t, e, "collect", first); res.code != 0 {
+		t.Fatalf("collect = %d\n%s", res.code, res.stderr)
+	}
+	after := runEnvoy(t, e, "jobs", "--base", base)
+	mustContain(t, "jobs after collect", after.stdout, "[ok] "+first+" · codex · ")
+	if !strings.Contains(after.stdout, "· collected") {
+		t.Fatalf("a delivered result must read as collected:\n%s", after.stdout)
+	}
+
+	// A live turn reads by how long it has been going, not by a duration it
+	// does not have yet — and it is neither collected nor owed, because the
+	// result a caller is owed does not exist until the turn ends.
+	live := filepath.Join(base, "20260725-140000-live")
+	os.MkdirAll(live, 0o755)
+	os.WriteFile(filepath.Join(live, "prompt.md"), []byte("x"), 0o644)
+	liveMeta, _ := json.Marshal(map[string]any{
+		"schemaVersion": 6, "status": "running", "provider": "codex",
+		"startedAt":  time.Now().Add(-7 * time.Minute).UTC().Format(time.RFC3339),
+		"timeoutMin": 30.0, "promptState": "accepted", "runnerPid": 4194304,
+		"nextAction": "wait", "resultKind": "none", "collectedAt": nil,
+	})
+	os.WriteFile(filepath.Join(live, "meta.json"), liveMeta, 0o644)
+
+	withLive := runEnvoy(t, e, "jobs", "--base", base)
+	mustContain(t, "jobs with a live turn", withLive.stdout, "[running] "+live+" · codex · started 7m ago")
+	for _, line := range strings.Split(withLive.stdout, "\n") {
+		if strings.Contains(line, live) && (strings.Contains(line, "owed") || strings.Contains(line, "collected")) {
+			t.Fatalf("a running turn owes nothing yet: %q", line)
+		}
+	}
 }
 
 func TestCollectReconcilesAbandonedJob(t *testing.T) {
