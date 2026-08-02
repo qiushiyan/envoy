@@ -58,8 +58,9 @@ THE LOOP
     envoy collect --result-only # an ok job's result body alone; a job that is
                                 # not ok prints its full block — its status IS
                                 # the result then
-    envoy collect --status-only # everything except the result body; marks
-                                # nothing collected, so the result stays owed
+    envoy collect --status-only # the full preamble — settings, tokens, prompt
+                                # state, log paths — without the result body;
+                                # marks nothing collected, so it stays owed
 
   Tailing the logs shows progress, never completion — a quiet log means the
   model is thinking.

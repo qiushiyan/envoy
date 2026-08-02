@@ -143,6 +143,15 @@ func mustContain(t *testing.T, name, s string, subs ...string) {
 	}
 }
 
+func mustNotContain(t *testing.T, name, s string, subs ...string) {
+	t.Helper()
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			t.Fatalf("%s must not contain %q, got:\n%s", name, sub, s)
+		}
+	}
+}
+
 func turnArgs(prompt, outDir string, extra ...string) []string {
 	args := []string{"turn", "--prompt-file", prompt, "--out-dir", outDir}
 	return append(args, extra...)
@@ -259,9 +268,36 @@ func TestClaudeSuccessWithUnterminatedFinalLine(t *testing.T) {
 	}
 	mustContain(t, "progress.log", readFile(t, filepath.Join(outDir, "progress.log")),
 		"state=provider-initialized session=fake-session-id model=fake-claude-model")
+	// A default that simply resolved is not a substitution: the caller asked
+	// for the provider's own choice and got it, so an ok block says nothing
+	// about it. The observation is still there for anyone who asks.
+	collected := runEnvoy(t, e, "collect", outDir)
+	if strings.Contains(collected.stdout, "provider: claude") {
+		t.Fatalf("an ok block must not restate the settings the caller passed:\n%s", collected.stdout)
+	}
+	status := runEnvoy(t, e, "collect", "--status-only", outDir)
+	mustContain(t, "status-only stdout", status.stdout,
+		"provider: claude · model (provider default, ran fake-claude-model) · effort (provider default)")
+}
+
+// TestCollectOkBlockReportsModelSubstitution pins the one setting that survives
+// into a healthy turn's block: the provider announcing it ran something other
+// than the model the caller asked for. Everything else on that line is the
+// caller's own request read back, but a substitution is an observation the
+// caller does not have, and it changes what the result is worth.
+func TestCollectOkBlockReportsModelSubstitution(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	outDir := filepath.Join(t.TempDir(), "job")
+	prompt := writePrompt(t, t.TempDir())
+
+	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "claude", "--model", "opus", "--timeout-min", "5")...)
+	if res.code != 0 {
+		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
 	collected := runEnvoy(t, e, "collect", outDir)
 	mustContain(t, "collect stdout", collected.stdout,
-		"provider: claude · model (provider default, ran fake-claude-model) · effort (provider default)")
+		"status: ok",
+		"provider: claude · model opus (ran fake-claude-model) · effort (provider default)")
 }
 
 func TestClaudePartialFailure(t *testing.T) {
@@ -593,10 +629,8 @@ func TestCollectStampsAndPendingDiscovers(t *testing.T) {
 	mustContain(t, "collect stdout", collected.stdout,
 		"job: "+outDir,
 		"status: ok",
-		"provider: codex",
-		"tokens: input 13 · cachedInput 5 · output 8 · reasoningOutput 3",
-		"session: fake-session-id",
 		"resume: envoy turn --provider codex --resume fake-session-id",
+		"takeover: codex resume fake-session-id",
 		"--- result.md ---",
 		"fake provider result",
 		"next: result.md above is this turn's return value")
@@ -608,6 +642,78 @@ func TestCollectStampsAndPendingDiscovers(t *testing.T) {
 
 	pending = runEnvoy(t, e, "pending", "--base", base)
 	mustContain(t, "pending after collect", pending.stdout, "pending jobs: 0", "no recovery action is needed")
+}
+
+// The block is read by an agent whose context the result body competes for, so
+// a turn that worked prints what the caller acts on and nothing else. Every
+// field held back here answers a question only a turn that went wrong raises,
+// and none of them is lost: meta.json is the record, and --status-only prints
+// the whole preamble on demand.
+func TestCollectOkBlockHoldsBackDiagnostics(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	outDir := filepath.Join(t.TempDir(), "job")
+	prompt := writePrompt(t, t.TempDir())
+
+	if res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "5")...); res.code != 0 {
+		t.Fatalf("turn failed: %d\n%s", res.code, res.stderr)
+	}
+
+	collected := runEnvoy(t, e, "collect", outDir)
+	mustContain(t, "ok block", collected.stdout,
+		"job: "+outDir,
+		"status: ok",
+		"duration: ",
+		"resume: envoy turn --provider codex --resume fake-session-id",
+		"takeover: codex resume fake-session-id",
+		"fake provider result")
+	mustNotContain(t, "ok block", collected.stdout,
+		"provider: codex",
+		"tokens: ",
+		"prompt: accepted",
+		"result kind: ",
+		"logs: progress ",
+		// The id is in both commands above; a third line of it is one more
+		// chance to hand-assemble a follow-up instead of running the command
+		// that already carries the turn's cwd and write intent.
+		"session: fake-session-id\n")
+
+	status := runEnvoy(t, e, "collect", "--status-only", outDir)
+	mustContain(t, "status-only block", status.stdout,
+		"status: ok",
+		"provider: codex · model (provider default) · effort (provider default)",
+		"tokens: input 13 · cachedInput 5 · output 8 · reasoningOutput 3",
+		"prompt: accepted",
+		"result kind: final",
+		"logs: progress ",
+		"session: fake-session-id\n",
+		"next: this was a status check only")
+}
+
+// The mirror: a turn that did not return a result keeps every diagnostic field,
+// because its recovery prose reasons from them. The log paths in particular
+// must survive — the next line names those three files by name, and a
+// prescription may not point at paths the block withheld.
+func TestCollectFailedBlockCarriesDiagnostics(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "nonzero-final")
+	outDir := filepath.Join(t.TempDir(), "job")
+	prompt := writePrompt(t, t.TempDir())
+
+	if res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "5")...); res.code != 1 {
+		t.Fatalf("turn exit = %d, want 1\n%s", res.code, res.stderr)
+	}
+
+	collected := runEnvoy(t, e, "collect", outDir)
+	mustContain(t, "failed block", collected.stdout,
+		"status: failed — the provider ran and reported a failure",
+		"provider: codex",
+		"tokens: ",
+		"prompt: accepted",
+		"result kind: partial",
+		"logs: progress "+filepath.Join(outDir, "progress.log"),
+		"raw "+filepath.Join(outDir, "raw.log"),
+		"stderr "+filepath.Join(outDir, "stderr.log"),
+		"session: fake-session-id",
+		"next: The provider accepted this prompt")
 }
 
 // The roster is the recovery path for an out-dir the caller no longer has, so

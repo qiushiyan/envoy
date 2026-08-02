@@ -228,6 +228,9 @@ const (
 	ModeResultOnly
 	// ModeStatusOnly prints everything except the result body and stamps
 	// nothing: the result was not delivered, so the job stays uncollected.
+	// It is also the full-preamble read: a healthy turn's own block holds
+	// back the diagnostic fields, and this is the flag that asks for them
+	// without a status having to go wrong first.
 	ModeStatusOnly
 )
 
@@ -284,6 +287,17 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 		}
 	}
 
+	// The diagnostic tier is the half of the block a caller reads only when
+	// working out what happened: the settings it passed itself, the token
+	// counts, the prompt-state evidence recovery reasons from, and the log
+	// paths that recovery prose tells it to open. An ok turn needs none of
+	// them — its deliverable is result.md and its one next action, and every
+	// field here either restates what "ok" already said (prompt accepted,
+	// result kind final) or answers a question nobody asks of a turn that
+	// worked. They are never lost: meta.json stays the authoritative record,
+	// and --status-only prints the whole preamble on demand.
+	diagnostic := meta.Status != job.StatusOK || mode == ModeStatusOnly
+
 	fmt.Fprintf(w, "job: %s\n", outDir)
 	if meta.Status == job.StatusRunning {
 		fmt.Fprintf(w, "status: running (%s — %s; result.md is not final)\n", state.kind, state.detail)
@@ -296,13 +310,14 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 		}
 		return *v
 	}
-	labelSuffix := ""
-	if meta.Label != nil {
-		labelSuffix = " · label " + *meta.Label
-	}
 	// The model column shows the request; when the provider announced what it
-	// actually resolved, show that observation too.
+	// actually resolved, show that observation too. A disagreement between the
+	// two survives into an ok block, alone among the settings: it is the one
+	// thing on this line the caller did not already know, and it changes how
+	// much a result is worth. A default that simply resolved is not a
+	// disagreement — the caller asked for the provider's choice and got it.
 	modelDisplay := display(meta.Model)
+	modelSubstituted := false
 	if meta.ProviderReportedModel != nil {
 		reported := *meta.ProviderReportedModel
 		switch {
@@ -310,9 +325,16 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 			modelDisplay = fmt.Sprintf("(provider default, ran %s)", reported)
 		case *meta.Model != reported:
 			modelDisplay = fmt.Sprintf("%s (ran %s)", *meta.Model, reported)
+			modelSubstituted = true
 		}
 	}
-	fmt.Fprintf(w, "provider: %s · model %s · effort %s%s\n", meta.Provider, modelDisplay, display(meta.Effort), labelSuffix)
+	if diagnostic || modelSubstituted {
+		labelSuffix := ""
+		if meta.Label != nil {
+			labelSuffix = " · label " + *meta.Label
+		}
+		fmt.Fprintf(w, "provider: %s · model %s · effort %s%s\n", meta.Provider, modelDisplay, display(meta.Effort), labelSuffix)
+	}
 	if meta.DurationMs != nil {
 		costSuffix := ""
 		if meta.CostUSD != nil {
@@ -320,46 +342,61 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 		}
 		fmt.Fprintf(w, "duration: %dm%s\n", int64(float64(*meta.DurationMs)/60000+0.5), costSuffix)
 	}
-	tokens := "n/a"
-	if pairs := meta.Tokens.Pairs(); len(pairs) > 0 {
-		var parts []string
-		for _, p := range pairs {
-			parts = append(parts, fmt.Sprintf("%s %s", p[0], groupThousands(p[1].(int64))))
+	if diagnostic {
+		tokens := "n/a"
+		if pairs := meta.Tokens.Pairs(); len(pairs) > 0 {
+			var parts []string
+			for _, p := range pairs {
+				parts = append(parts, fmt.Sprintf("%s %s", p[0], groupThousands(p[1].(int64))))
+			}
+			tokens = strings.Join(parts, " · ")
 		}
-		tokens = strings.Join(parts, " · ")
+		fmt.Fprintf(w, "tokens: %s\n", tokens)
+		prompt := meta.PromptState
+		if prompt == "" {
+			prompt = job.PromptUnknown
+		}
+		if meta.PromptStateEvidence != nil {
+			prompt += " · evidence " + *meta.PromptStateEvidence
+		}
+		fmt.Fprintf(w, "prompt: %s\n", prompt)
+		if meta.ResultKind != "" {
+			fmt.Fprintf(w, "result kind: %s\n", meta.ResultKind)
+		}
+		if meta.Status == job.StatusRunning && meta.WatchCommand != "" {
+			fmt.Fprintf(w, "watch: %s\n", meta.WatchCommand)
+		}
+		// The log paths ship with the recovery prose that names them: every
+		// non-ok next line tells the caller to read progress.log, raw.log, and
+		// stderr.log, and a prescription must not point at paths the block
+		// withheld.
+		fmt.Fprintf(w, "logs: progress %s · raw %s · stderr %s\n",
+			orDefault(meta.ProgressPath, filepath.Join(outDir, "progress.log")),
+			orDefault(meta.RawPath, filepath.Join(outDir, "raw.log")),
+			orDefault(meta.StderrPath, filepath.Join(outDir, "stderr.log")))
 	}
-	fmt.Fprintf(w, "tokens: %s\n", tokens)
-	prompt := meta.PromptState
-	if prompt == "" {
-		prompt = job.PromptUnknown
-	}
-	if meta.PromptStateEvidence != nil {
-		prompt += " · evidence " + *meta.PromptStateEvidence
-	}
-	fmt.Fprintf(w, "prompt: %s\n", prompt)
-	if meta.ResultKind != "" {
-		fmt.Fprintf(w, "result kind: %s\n", meta.ResultKind)
-	}
-	if meta.Status == job.StatusRunning && meta.WatchCommand != "" {
-		fmt.Fprintf(w, "watch: %s\n", meta.WatchCommand)
-	}
-	fmt.Fprintf(w, "logs: progress %s · raw %s · stderr %s\n",
-		orDefault(meta.ProgressPath, filepath.Join(outDir, "progress.log")),
-		orDefault(meta.RawPath, filepath.Join(outDir, "raw.log")),
-		orDefault(meta.StderrPath, filepath.Join(outDir, "stderr.log")))
 	if meta.ResumedFrom != nil {
 		fmt.Fprintf(w, "resumed-from: %s\n", *meta.ResumedFrom)
 	}
 	if meta.SessionID != nil {
-		fmt.Fprintf(w, "session: %s\n", *meta.SessionID)
 		// The follow-up command is advertised only when dispatching it is
 		// licensed — the same eligibility --resume-from applies, so collect
 		// can never offer a continuation dispatch would refuse. A running
 		// turn's session still prints; its next line says to wait.
+		resume := ""
 		if _, blocked := memberResumeBlocker(meta); !blocked {
-			if resume := resumeCommand(meta); resume != "" {
-				fmt.Fprintf(w, "resume: %s\n", resume)
-			}
+			resume = resumeCommand(meta)
+		}
+		// The bare id is printed only when no command below carries it. Both
+		// commands spell the session out, and three lines of one identifier is
+		// three chances for a caller to hand-assemble a follow-up out of the
+		// id instead of running the command that already carries the turn's
+		// cwd and write intent.
+		if diagnostic || (resume == "" && meta.TakeoverCommand == nil) {
+			fmt.Fprintf(w, "session: %s\n", *meta.SessionID)
+		}
+		if resume != "" {
+			fmt.Fprintf(w, "resume: %s\n", resume)
 		}
 		if meta.TakeoverCommand != nil {
 			fmt.Fprintf(w, "takeover: %s\n", *meta.TakeoverCommand)
@@ -502,7 +539,13 @@ func collectGroup(dir string, mode Mode, w, errW io.Writer) int {
 	fmt.Fprintf(w, "fan-out: %s\n", dir)
 	fmt.Fprintf(w, "status: %s\n", prose.FanStatusLine(statuses))
 	fmt.Fprintf(w, "members: %s\n", strings.Join(labels, " · "))
-	fmt.Fprintf(w, "prompt: %s\n", gw.PromptPath())
+	// The prompt this fan-out was given is the caller's own file, and a set
+	// that returned every result raises no question it answers. It joins the
+	// members' diagnostic tier: printed when a member needs a decision, and
+	// whenever the whole preamble was asked for.
+	if prose.FanStatus(statuses) != prose.FanOK || mode == ModeStatusOnly {
+		fmt.Fprintf(w, "prompt: %s\n", gw.PromptPath())
+	}
 	if group.ResumedFrom != nil {
 		fmt.Fprintf(w, "resumed-from: %s\n", *group.ResumedFrom)
 	}

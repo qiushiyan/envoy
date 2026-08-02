@@ -154,3 +154,34 @@ will look anyway.
   window at the reviewer's insistence corrected several figures — the first
   count had measured rows mentioning envoy, not invocations, over a window that
   started a day late.
+- **2026-08-02 — the preamble callers kept `sed`-ing past.** Window
+  `2026-07-25` → `2026-08-01`: 158 `envoy collect` invocations across 40
+  sessions (137 default block, 21 with a selection flag). Thirty-three piped the
+  output into `head`/`tail`/`sed` or redirected it to a file, and fourteen of
+  those jumped straight to the payload — `sed -n '/--- result.md ---/,$p'` and
+  five other spellings of the same idea, in five sessions, several of them in
+  sessions where `--result-only` was used minutes earlier. The default block
+  put thirteen lines of coordinates in front of the answer, so the caller's
+  cheapest reflex was to skip them, and skipping them also threw away the
+  follow-up commands: one session then hand-assembled `envoy turn --resume
+  <id>` without the `--cwd` collect had printed for it.
+
+  The cut is not about size in aggregate — the held-back fields are ~590 bytes
+  against a mean 8.9KB result. It is about where they land: the convergence
+  rounds, where a reviewer answers "integrated, no new findings" in 87 bytes and
+  the preamble ran seven times longer than the payload. **A field that only a
+  failure makes actionable is noise on a success**, so the block is now tiered
+  by status: settings, tokens, prompt-state evidence, result kind, and the log
+  paths print on every non-ok turn — whose recovery prose reasons from them and
+  names those three files — and on `--status-only`, which became the
+  full-preamble read. Whole-output cut over 60 stored jobs: 6.4%, and 32–35% on
+  the short later rounds.
+
+  Two fields earned their exception rather than a rule. A provider-announced
+  model that *disagrees* with the requested one stays in a healthy block — it is
+  the only thing on that line the caller did not already know. And the bare
+  `session:` line went away wherever `resume:` or `takeover:` already spells the
+  id out: three copies of one identifier is three invitations to rebuild a
+  follow-up by hand, which the logs show a caller doing, minus the `--cwd`.
+  Checked and not changed: a fan-out cannot render a lone member header —
+  `envoy fan` refuses a roster below two.

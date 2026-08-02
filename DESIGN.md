@@ -167,6 +167,25 @@ other than an ok turn prints the full block, because a non-ok turn's status
 and next action *are* its result, and handing back silence in their place
 would manufacture a payload that does not exist.
 
+**The block itself is tiered by status, for the same reason.** Half the
+preamble — the settings the caller passed, the token counts, the prompt-state
+evidence, the three log paths — is diagnostic: it answers questions only a turn
+that went wrong raises, and on a healthy turn it restates what `ok` already
+said. So a turn that returned a result prints what the caller acts on (its
+coordinate, status, duration, the follow-up commands, the payload, the one next
+action) and holds the rest back; every non-ok turn prints all of it, because its
+recovery prose reasons from exactly those fields and names those files by name.
+Nothing is hidden: `meta.json` stays the authoritative record and `--status-only`
+prints the whole preamble on demand — which is what makes the tiering safe,
+since **stdout is the convenience view and the files are the truth.** The one
+setting that survives into a healthy block is a model the provider announced
+that disagrees with the model requested: alone on that line, it is an
+observation the caller does not already have, and it changes what the result is
+worth. The bare `session:` line is likewise held back whenever a command below
+already spells the id out — three copies of one identifier is three invitations
+to hand-assemble a follow-up instead of running the one that carries the turn's
+cwd and write intent.
+
 ## Storage
 
 Jobs live in one central store, `~/.local/state/envoy/jobs/<slug>/`, never in
