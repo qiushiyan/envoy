@@ -167,35 +167,32 @@ other than an ok turn prints the full block, because a non-ok turn's status
 and next action *are* its result, and handing back silence in their place
 would manufacture a payload that does not exist.
 
-**The block itself is tiered, and the tier is decided by delivery — not by
-status.** Half the preamble — the settings the caller passed, the token counts,
-the prompt-state evidence, the result kind, the three log paths — is diagnostic:
-it answers questions only a turn the caller must now investigate raises. A turn
-*delivers* when it reports ok **and** its `result.md` actually reads; only then
-is the caller done, and only then does the block hold that half back, printing
-what remains to act on (coordinate, status, duration, the follow-up commands,
-the payload, the one next action). Everything else prints the whole preamble.
+**The block itself is tiered on a narrower question: did the payload land?**
+Half the preamble — the settings the caller passed, the token counts, the
+prompt-state evidence, the result kind, the three log paths — is diagnostic,
+answering only what a turn the caller must now investigate raises. A turn that
+reports ok *and* whose `result.md` reads holds that half back and prints what
+remains to act on (coordinate, status, duration, the follow-up commands, the
+payload, the next action); everything else prints the whole preamble, and
+`--status-only` prints it on demand. Note the asymmetry with the stamp above: a
+non-ok turn's block *is* a delivered deliverable and gets stamped, yet it still
+prints in full, because what it delivers is the diagnosis. Keying the tier on
+status instead was tried and is wrong at both edges — the undelivered ok turn
+above is sent to `raw.log` by its own next line, and `--status-only` delivers
+nothing by construction. Nothing is hidden either way, which is what makes the
+tiering safe: **stdout is the convenience view and the files are the truth.**
 
-Status alone was tried first and is wrong at both edges, which is the reason
-this is stated as delivery: an ok turn whose `result.md` will not read is sent
-to `raw.log` by its own next line and must be handed the paths, and
-`--status-only` delivers nothing at all by construction. The log paths in
-particular are one affordance, not three — which recovery branch names which
-file is emphasis, not eligibility, so they travel together.
-
-Nothing is hidden: `meta.json` stays the authoritative record and
-`--status-only` prints the whole preamble on demand — which is what makes the
-tiering safe, since **stdout is the convenience view and the files are the
-truth.** Two temptations were rejected. Printing the settings line when the
-provider's reported model differs from the requested one *looks* like reporting
-a substitution, but `opus` against `claude-opus-5` is the provider's own alias
-resolution — the mapping this engine refuses to own — so string inequality
-cannot tell a resolution from a substitution, and calling one a surprise would
-be inferring on the most ordinary dispatch there is. And the bare `session:`
-line is held back whenever a command below already spells the id out, in every
-mode: three copies of one identifier is three invitations to hand-assemble a
-follow-up instead of running the one that carries the turn's cwd and write
-intent.
+Several temptations were rejected, each a rule that would fire on the wrong
+cases. Gating the individual log paths on which recovery branch names them:
+the three streams are one affordance, and which one a branch emphasises is not
+eligibility. Printing the settings line when the provider's reported model
+differs from the requested one, which *looks* like reporting a substitution —
+but `opus` against `claude-opus-5` is the provider's own alias resolution, the
+mapping this engine refuses to own, so inequality cannot tell resolution from
+substitution and the "exception" fires on the most ordinary dispatch there is.
+And keeping the bare `session:` line beside the commands that already spell the
+id out: three copies of one identifier is three invitations to hand-assemble a
+follow-up instead of running the one carrying the turn's cwd and write intent.
 
 ## Storage
 

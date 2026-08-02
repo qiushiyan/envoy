@@ -154,65 +154,45 @@ will look anyway.
   window at the reviewer's insistence corrected several figures — the first
   count had measured rows mentioning envoy, not invocations, over a window that
   started a day late.
-- **2026-08-02 — the preamble callers kept `sed`-ing past.** Window
-  `2026-07-25` → `2026-08-01`: 158 `envoy collect` invocations across 40
-  sessions (137 default block, 21 with a selection flag). Thirty-three piped the
-  output into `head`/`tail`/`sed` or redirected it to a file, and fourteen of
-  those jumped straight to the payload — `sed -n '/--- result.md ---/,$p'` and
-  five other spellings of the same idea, in five sessions, several of them in
-  sessions where `--result-only` was used minutes earlier. The default block
-  put thirteen lines of coordinates in front of the answer, so the caller's
-  cheapest reflex was to skip them, and skipping them also threw away the
-  follow-up commands: one session then hand-assembled `envoy turn --resume
-  <id>` without the `--cwd` collect had printed for it.
+- **2026-08-02 — the preamble callers kept `sed`-ing past.** Window `2026-07-25`
+  → `2026-08-01`: of 158 `envoy collect` invocations across 40 sessions, 33
+  piped the output into `head`/`tail`/`sed`, and 14 of those jumped straight to
+  the payload — `sed -n '/--- result.md ---/,$p'` and five other spellings of
+  one idea, some in sessions that had used `--result-only` minutes earlier.
+  Thirteen lines of coordinates stood in front of every answer, so the cheapest
+  reflex was to skip them — which also discarded the follow-up commands: one
+  session then hand-assembled `envoy turn --resume <id>` without the `--cwd`
+  collect had printed for it. The aggregate saving is small (~590 bytes against
+  a mean 8.9KB result); the case is where it lands, on the convergence rounds
+  where a reviewer answers in 87 bytes and the preamble ran seven times longer
+  than the payload. **A field that only a failure makes actionable is noise on
+  a success.**
 
-  The cut is not about size in aggregate — the held-back fields are ~590 bytes
-  against a mean 8.9KB result. It is about where they land: the convergence
-  rounds, where a reviewer answers "integrated, no new findings" in 87 bytes and
-  the preamble ran seven times longer than the payload. **A field that only a
-  failure makes actionable is noise on a success**, so the block is now tiered
-  by status: settings, tokens, prompt-state evidence, result kind, and the log
-  paths print on every non-ok turn — whose recovery prose reasons from them and
-  names those three files — and on `--status-only`, which became the
-  full-preamble read. Whole-output cut over 60 stored jobs: 6.4%, and 32–35% on
-  the short later rounds.
-
-  The bare `session:` line went away wherever `resume:` or `takeover:` already
-  spells the id out: three copies of one identifier is three invitations to
-  rebuild a follow-up by hand, which the logs show a caller doing, minus the
-  `--cwd`. Checked and not changed: a fan-out cannot render a lone member header
-  — `envoy fan` refuses a roster below two.
-
-  **The cold review caught the seam being keyed on the wrong thing.** The first
-  cut gated on `status != ok`, which reads as obviously right and is wrong at
-  both edges: an ok turn whose `result.md` will not read is sent to `raw.log` by
-  its own next line, and the block had just withheld the paths — the exact
-  "prescription pointing at files the block withheld" the change was written to
-  prevent. The tier is now decided by **delivery** (ok *and* the payload reads),
-  which costs one extra read hoisted above the printing. The same round killed
-  an exception that had looked like a principled carve-out: printing the
-  settings line when the reported model differed from the requested one. `opus`
-  against `claude-opus-5` is the provider's own alias resolution — the mapping
-  this engine refuses to own — so inequality cannot separate resolution from
-  substitution, and the "exception" would have fired on every ordinary claude
-  dispatch. **A gate that cannot be computed from an observation is inference
-  wearing a condition.** Rebutted in the same pass: gating each log path on
-  which recovery branch named it. The three streams are one affordance; which
-  one a branch emphasises is not eligibility, and the per-branch rule buys one
-  line on a job already in trouble at the price of an unpredictable block.
-- **2026-08-02 — the suite was 85% race-runtime exit sleep.** `make test` took
-  ~105s and nobody had asked why. Not the code: the integration harness builds
-  the CLI with `-race` (deliberately — the runner's goroutines live in the
-  subprocess, so a race-built *test* process would not see them), and the race
-  runtime sleeps `atexit_sleep_ms=1000` before every process exit to catch
-  races in threads still running at shutdown. Every one of the 59 tests spawns
-  at least one envoy, so the suite was paying that second ~100 times. Setting
-  `GORACE=atexit_sleep_ms=0` in the harness's subprocess environment: **105s →
-  17s**, same tests, same race build, detection during the run untouched.
-  The first diagnosis in-session measured the symptom correctly (~1.1s per
-  race-built invocation against ~0.1s plain, at 5% CPU) and named the cause
-  vaguely as "teardown"; the reviewer named the knob. **A per-process cost
-  multiplied by a serial suite is worth one measurement before it is worth an
-  architecture** — the alternatives considered and dropped were splitting the
-  target, race-building only the concurrency tests, and `t.Parallel()`, all of
-  which trade coverage or determinism for a problem that was one env var.
+  The first cut gated on `status != ok` and a cold review found it wrong at
+  both edges: an ok turn whose `result.md` will not read is sent to `raw.log`
+  by its own next line, from a block that had just withheld the paths — the
+  exact "prescription pointing at files the block withheld" this change existed
+  to prevent. The tier follows **delivery** (ok *and* the payload reads). The
+  same round killed a carve-out that had looked principled — printing the
+  settings line when the reported model differed from the requested one — since
+  `opus` against `claude-opus-5` is the provider's own alias resolution, so
+  inequality cannot separate resolution from substitution and the exception
+  would have fired on every ordinary claude dispatch. **A gate that cannot be
+  computed from an observation is inference wearing a condition.** Rebutted the
+  same round: gating each log path on the recovery branch that names it. The
+  three streams are one affordance, and per-branch rules buy one line on a job
+  already in trouble at the price of a block whose shape you cannot predict.
+- **2026-08-02 — the suite was mostly race-runtime exit sleep.** `make test`
+  took ~105s and nobody had asked why. Not the code: the harness builds the CLI
+  with `-race` deliberately — the runner's goroutines live in that subprocess,
+  so a race-built *test* process would not see them — and the race runtime
+  sleeps `atexit_sleep_ms=1000` before every process exit. Every test spawns at
+  least one envoy, so the suite paid that second ~100 times. `GORACE=atexit_sleep_ms=0`
+  in the harness's subprocess environment: **105s → 17s**, same tests, same race
+  build, detection during the run untouched. The in-session diagnosis measured
+  the symptom right (~1.1s per race-built invocation against ~0.1s plain, at 5%
+  CPU) and named the cause only as "teardown"; the review named the knob.
+  **A per-process cost multiplied by a serial suite is worth one measurement
+  before it is worth an architecture** — splitting the target, race-building
+  only the concurrency tests, and `t.Parallel()` were all considered, and all
+  trade coverage or determinism for what was one env var.

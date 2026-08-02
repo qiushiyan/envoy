@@ -20,6 +20,7 @@ envoy fan --prompt-file brief.md --with codex --with claude:opus   # one prompt,
 envoy fan --prompt-file review.md --with-from <job-dir> --with claude:opus
                               # a continued conversation beside a cold voice
 envoy collect <out-dir>       # print + stamp one job (default: latest for this repo)
+envoy collect --status-only <out-dir>   # the full preamble, no result body, no stamp
 envoy steer --prompt-file more.md [out-dir]   # route a supplement to a dispatched job
 envoy jobs [--all] [--base DIR]   # this project's jobs, newest first, with the dir each takes
 envoy pending [--base DIR]    # discovery-only recovery index after a missed notification
@@ -30,7 +31,11 @@ envoy version
 session, takeover), runs the provider to terminal state, then prints a
 terminal block. Its stdout is written for the agent driving it: every status
 carries what it rules out, and every failure ends in one runnable next
-command. The durable files in the job dir are authoritative:
+command. `envoy collect` follows the same economy — a turn that reports ok and
+whose result reads prints its payload and the commands to continue it, while a
+turn you now have to investigate also prints the settings, counts, prompt-state
+evidence, and log paths that diagnosis needs (`--status-only` prints that
+preamble on demand). The durable files in the job dir are authoritative:
 
 | File               | Meaning                                                         |
 | ------------------ | --------------------------------------------------------------- |
@@ -91,8 +96,10 @@ and others did not).
 - **No model substitution.** Omitted `--model`/`--effort` means the provider's
   own config governs; the runner reports `(provider default)`, never a guess.
   When the provider itself announces the model it resolved (claude's init
-  event), that is recorded as the `providerReportedModel` observation and
-  shown by collect — observed, never inferred.
+  event), that is recorded as the `providerReportedModel` observation —
+  observed, never inferred. The request and the observation are never compared
+  to conclude anything: `opus` resolving to `claude-opus-5` is the provider's
+  own aliasing, not a substitution to report.
 - **The timeout is a hard wall-clock safety cap**, compared against a fixed
   deadline (laptop sleep cannot stretch it). It is not a stall detector.
 - **The terminal envelope wins.** If the cap fires while an already-complete
