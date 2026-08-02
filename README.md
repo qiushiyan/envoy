@@ -21,7 +21,7 @@ envoy fan --prompt-file review.md --with-from <job-dir> --with claude:opus
                               # a continued conversation beside a cold voice
 envoy collect <out-dir>       # print + stamp one job (default: latest for this repo)
 envoy steer --prompt-file more.md [out-dir]   # route a supplement to a dispatched job
-envoy jobs [--base DIR]       # this project's jobs, newest first, with the dir each takes
+envoy jobs [--all] [--base DIR]   # this project's jobs, newest first, with the dir each takes
 envoy pending [--base DIR]    # discovery-only recovery index after a missed notification
 envoy version
 ```
@@ -110,7 +110,7 @@ and others did not).
   outcome licenses nothing about another.
 - **Steer answers, never delivers.** No provider accepts input into a live
   turn, so `envoy steer` hands over the follow-up command that carries the
-  supplement instead of pretending to inject it (DESIGN.md, 2026-07-28, has
+  supplement instead of pretending to inject it (EVIDENCE.md, 2026-07-28, has
   the verified provider research behind this).
 
 ## Library

@@ -9,7 +9,7 @@ disable-model-invocation: true
 envoy's own job store is its usage lab: every dispatch leaves durable
 artifacts, and every caller was an agent whose transcript survives. This
 skill mines both for evidence, then routes each finding to the place that
-retires it. DESIGN.md's evidence log is the cursor — mine from its last
+retires it. EVIDENCE.md is the cursor — mine from its last
 dated entry forward, and end by advancing it.
 
 ## 1. The store pass
@@ -79,7 +79,21 @@ evidence didn't pay for.
 
 ## 5. Advance the cursor
 
-Write the dated evidence-log entry in DESIGN.md — what the logs showed,
-what it cost, what changed — and give any new caller-facing behavior its
-exact-string integration test. Done when the log's newest entry covers this
-pass.
+Write the dated entry in EVIDENCE.md — what the logs showed, what it cost,
+what changed — and give any new caller-facing behavior its exact-string
+integration test.
+
+**Write the lesson, not the session.** The entry is read years later by
+someone deciding whether to revisit a settled question, and what they need is
+the incident, its cost, and what survived — not the per-finding narrative, the
+round-by-round account, or numbers reproducible from the store. Match the
+altitude of the entries already there; if yours is several times their length,
+it is a session report and needs cutting. A durable rule belongs one level up,
+in DESIGN.md's commitments, with the entry pointing at it — the log records why
+a position was paid for, DESIGN.md states the position.
+
+Every number in an entry carries the window it was counted over and what
+exactly was counted; a count of *log rows mentioning envoy* is not a count of
+invocations, and the difference has already survived one pass undetected.
+
+Done when the newest entry covers this pass at the altitude of its neighbours.

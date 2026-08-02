@@ -1,11 +1,15 @@
 # Design — why envoy is shaped this way
 
 CLAUDE.md and the code say what envoy does; this file records **why** — the
-assumptions, rejected alternatives, and paid-for lessons a future redesign
-needs but can't see in the code. Update the evidence log when usage teaches
-something new. envoy descends from `sidekick-runtime` (a Node engine living
-in the author's Claude Code skills); the lessons below were bought there and
-carry over undiminished.
+assumptions, rejected alternatives, and settled non-goals a future redesign
+needs but can't see in the code. envoy descends from `sidekick-runtime` (a
+Node engine living in the author's Claude Code skills); its lessons were
+bought there and carry over undiminished.
+
+**[EVIDENCE.md](EVIDENCE.md) is the log of what those lessons cost** — one
+entry per incident or mining pass, in date order. Read it when a change would
+revisit a settled question here; add to it when usage teaches something new.
+This file states the position, that one records why it was paid for.
 
 ## Origin and the governing lesson
 
@@ -59,7 +63,12 @@ sandbox once broke the calling session's own tooling).
   provider's, changes under the engine's feet, and the first disagreement is
   a silent model substitution. Same rule for effort: native provider
   vocabulary only, validated pre-spawn because the providers fail differently
-  (claude silently degrades, codex burns a turn on an API 400).
+  (claude silently degrades, codex burns a turn on an API 400). The same rule
+  binds every sentence the engine says about itself: **an observation is
+  pinned to the instant and the channel it was read on.** A stream read after
+  teardown describes envoy's own cleanup, not the provider; raw bytes are not
+  parseable events; and a store that could not be read is not an empty store,
+  so discovery refuses instead of reporting a project with no jobs.
 - **Durable artifacts over stdout — but stdout still programs the caller.**
   Files are authoritative; stdout is a convenience view of them. The
   convenience view is read by an agent, so startup lines, progress
@@ -70,14 +79,19 @@ sandbox once broke the calling session's own tooling).
 - **Background is the default posture.** Collection is notification-driven;
   polling a live job is a smell. The one sanctioned read after dispatch is
   the startup coordinate block; `watch:` is observation, never a completion
-  or acceptance signal (a lesson paid for in a real incident — see the log).
+  or acceptance signal (a lesson paid for in a real incident — EVIDENCE.md,
+  2026-07-11).
 - **Recovery reasons from evidence, not silence.** Prompt state has three
   values with distinct actions: `accepted` → resume, never redispatch (work
   may exist); `not_started` → one identical retry is safe; `unknown` →
   absence of output is not proof of no work. Every failure path in the
   engine routes to one of these; the timeout is a wall-clock safety cap and
   deliberately not a stall detector, because healthy deep work and a hang
-  are indistinguishable from outside.
+  are indistinguishable from outside — the engine never *acts* on quiet, but a
+  capped turn's envelope *reports* the stream it saw, since a cap alone reads
+  the same either way. Eligibility to continue a conversation likewise has
+  exactly one definition, consulted by every surface that advertises or
+  dispatches one, so collect can never offer a continuation dispatch refuses.
 - **Locks are refused, never reclaimed.** A dead runner can leave a live
   orphan provider, and automatic stale takeover cannot be made race-free
   with a plain lock file — so the engine only ever says no and points at the
@@ -114,7 +128,7 @@ Consequences that are load-bearing, not incidental:
   it. Cherry-picking voices stays a caller move, via the per-member
   `turn --resume` commands collect prints. (The feature was paid for before it
   was built: agents hand-rolled the round three different ways in three days —
-  see the log, 2026-07-28.)
+  EVIDENCE.md, 2026-07-28.)
 - **Exit code 6 (`partial`) earned a new code** rather than overloading an
   existing one. A fan-out where one member answered and one timed out is not a
   failure (results exist) and not a success (a member needs a decision);
@@ -144,10 +158,11 @@ marks a delivered deliverable — an ok turn's printed result body, or a non-ok
 turn's full diagnostic block, whose status and recovery are its result — and
 is never set by `--status-only` or `pending`, which read coordinates without
 delivering anything, nor for an ok turn whose `result.md` would not read: in
-both cases the result stays owed and pending keeps listing the job. The two selection flags exist because the block is
-read by an agent whose context the result body and the status preamble
-compete for (the logs showed nearly every collect piped through `sed`/`head`).
-They select sections, never soften the contract: `--result-only` on anything
+both cases the result stays owed and pending keeps listing the job.
+
+The two selection flags exist because the block is read by an agent whose
+context the result body and the status preamble compete for. They select
+sections, never soften the contract: `--result-only` on anything
 other than an ok turn prints the full block, because a non-ok turn's status
 and next action *are* its result, and handing back silence in their place
 would manufacture a payload that does not exist.
@@ -163,12 +178,15 @@ from a subdirectory belongs to the project. The store is an implementation
 detail by contract: dispatch prints the out-dir, collect and pending
 re-derive it from cwd, and no caller constructs the path. Creating a job dir
 is atomic — `Mkdir`, not stat-then-create — because two turns dispatched in
-the same second once shared one (see the log, 2026-07-27).
+the same second once shared one (EVIDENCE.md, 2026-07-27).
 
 ## Deliberately not built
 
-- No daemon, status command, cancel service, or job listing — the caller's
-  background-task layer is the live-job layer.
+- No daemon, status command, or cancel service — the caller's background-task
+  layer is the live-job layer. `envoy jobs` is not an exception to that: it
+  lists the durable store, never live work, and it stayed a non-goal until the
+  logs showed callers rebuilding job paths by hand (EVIDENCE.md, 2026-07-31).
+  The coordinate a caller keeps is still the out-dir printed at dispatch.
 - No alias translation, effort aliases, model fallbacks, or provider
   auto-selection.
 - No group-wide retry, and no partial resume of a fan-out: recovery is per
@@ -176,230 +194,9 @@ the same second once shared one (see the log, 2026-07-27).
 - No live steering of a running turn: no provider accepts input into one —
   claude's streaming input queues a NEW turn (a multi-turn job in disguise),
   codex exec has no channel at all. `envoy steer` answers with the follow-up
-  command instead; the verified research is in the log (2026-07-28).
+  command instead; the verified research is in EVIDENCE.md (2026-07-28).
 - No sandbox flag for codex, ever; no permission machinery beyond claude's
   own `--permission-mode`.
 - No activity-based hang detector; no timeout that resets on output.
 - No prompt templating; prompts arrive as files, whole.
 - No Windows support; no migration from sidekick-era state.
-
-## Evidence log
-
-Engine-relevant history, distilled from the predecessor and continued here.
-
-- **2026-07-03 — engine born** from the `/pair-coding` screen-scraping
-  postmortem: headless turns, files as return values.
-- **2026-07-06 — the close-hang.** A timed-out provider left grandchildren
-  holding the stdio pipes; the stream-close event never fired and the runner
-  hung. Fix: process exit and stream EOF are separate observations, with an
-  exit → grace → SIGKILL escalation. This is why the Go port passes raw pipe
-  fds instead of exec's managed pipes.
-- **2026-07-10 — lifecycle hardening.** Provider turns moved into their own
-  process group; atomic metadata gained runner/provider PIDs and prompt
-  state; collection became idempotent; pending discovery learned to
-  distinguish orphaned from abandoned work.
-- **2026-07-11 — the buffered-watch incident.** A consult burned 20 minutes
-  on a false hang diagnosis because `--output-format json` emitted one
-  buffered result while `tail -f raw.log` implied live evidence. Fixes that
-  stand: realtime `stream-json`, runner-owned heartbeats in `progress.log`,
-  watch demoted to observation, transcript-evidence recovery for the window
-  before the first stream event. Two boundary races closed the same day:
-  stale locks are never auto-reclaimed over a possible orphan, and an
-  observed terminal envelope beats a cap that fires during cleanup.
-- **2026-07-25 — Go port (this repo).** Contract preserved against the JS
-  reference; the old integration scenarios re-expressed against the built
-  binary, race-instrumented. Same day: jobs moved to the central hidden
-  store, and the first dogfood dispatch (an opus review of this repo)
-  exercised the claude driver, central storage, and the coordinate block on
-  a real provider.
-- **2026-07-25 — resolved-model observation.** `--model opus` provably ran
-  `claude-opus-5`, but only `raw.log` knew: the alias is a rolling "latest"
-  pointer and the engine echoed only the request. Added
-  `providerReportedModel` — the provider's own init-event statement,
-  surfaced in progress and collect. The boundary it sharpened: *observed* is
-  recordable, *inferred* stays forbidden.
-- **2026-07-26 — the caller-facing prose became a package.** A prompt-
-  engineering pass found the same recovery rule written twelve ways across
-  the runner, both drivers, and collect, already drifting; a resume
-  *fragment* that made the caller assemble a command and silently dropped
-  the original turn's `--allow-write`; status words with no gloss; and
-  dispatch prose naming one specific caller harness. `internal/steer` now
-  owns every sentence: drivers report causes, steer prescribes. The rule
-  that generalizes — **a recovery line may prescribe only what the engine
-  observed, and must hand over a runnable command, not a fragment.**
-- **2026-07-26 — fan-out.** Real use wanted one prompt on two models ~10% of
-  the time, and doing it with two dispatches made the caller hold a two-job
-  ledger and answer a question the engine should have absorbed ("one voice is
-  back, synthesize now or wait?"). `envoy fan` collapses it to one dispatch,
-  one completion, one collect. It cost no lifecycle change — the runner was
-  already instance-clean — which is exactly the test of whether a feature
-  belongs in this engine: *supervision and presentation, yes; new turn
-  semantics, no.*
-- **2026-07-26 — the stale-binary dispatch.** The skills learned `envoy fan`
-  hours before the binary on PATH did; the dispatch failed and the calling
-  agent silently fell back to two separate turns — the exact two-job ledger
-  fan exists to absorb. No engine change: the lesson is operational. A
-  contract taught to callers ships when the installed binary does, so
-  `make install` comes before the skill edit, not after the next incident.
-- **2026-07-27 — the same-second collision.** Two round-2 resumes dispatched
-  with `&` in one command started in the same second, derived the same
-  stamp+label job dir, and ran in it together: both runners overwrote one
-  `meta.json` and `result.md`, and one member's answer survived only in
-  `last-message.txt`. Root cause: stat-then-`MkdirAll`, where `MkdirAll`
-  succeeds on a dir that already exists. Fix: `Mkdir` with a random suffix on
-  `EEXIST` — creation itself is the collision check, and a concurrency test
-  races eight same-second dispatches to keep it that way.
-- **2026-07-28 — four days of dogfood logs read back.** All 37 archived turns
-  had ended ok; every friction lived in how agents drove the CLI, not in the
-  lifecycle. Three findings, each paid for in real time: the round-2-after-fan
-  pattern was hand-rolled three ways in three days (`;`-chained resumes that
-  silently serialized, `&`-chained ones that hit the collision above, then two
-  background tasks with hand-invented labels) → `fan --resume-from`; agents
-  trimmed nearly every collect through `sed`/`head` because the result body
-  and the preamble compete for caller context → `collect --result-only` /
-  `--status-only`; the group watch command shipped its glob inside shell
-  quotes and could never run as printed → member paths spelled out, pinned by
-  an exact-line test. The lesson that generalizes: **the engine's own job
-  store is its usage lab — read it before inventing features, and after
-  shipping them.** The same-day review round then caught the new features'
-  own gaps, each fixed against a red test: a resumed round could dispatch
-  partially when a member's session was held by another live turn (the round
-  now reserves every member's session before any turn spawns), "resumable"
-  had grown two contradictory definitions across collect and the facade
-  (collapsed into one typed inspection, blockers worded by steer), and
-  collect stamped `collectedAt` even when an ok turn's result body never
-  reached the caller (the stamp now follows delivery).
-- **2026-07-28 — steer, and the live-input research it banked.** "I forgot to
-  mention X" wanted a supplement delivered into a running job. Verified live
-  (claude 2.1.220, codex 0.144.6): claude's `--input-format stream-json`
-  accepts further user messages but **queues each as its own turn** — the
-  in-flight turn never sees it — one result envelope per message, delivery
-  ack via `--replay-user-messages`, input shape undocumented; and when stdin
-  EOF arrives after an idle result (the exact teardown order steering needs),
-  the CLI lingers for minutes, while EOF before work exits in seconds. codex
-  exec reads stdin once at dispatch and has no channel at all; injection
-  lives only in experimental servers. So "steering" a live turn is really
-  scheduling a second turn, and building delivery would make the job
-  multi-turn — per-message prompt state, aggregate statuses, kill-based
-  teardown for the linger; the meta schema's singular
-  `promptState`/`providerTerminalAt` stop being honest. A design-blind codex
-  consult reached the same verdict and named the admission test this fails:
-  fan cost zero lifecycle change, this reshapes driver, runner, schema, and
-  collect. Shipped instead: `envoy steer` as pure state inspection — always
-  "not delivered", plus the one runnable follow-up with the supplement file
-  filled into the prompt slot (the single place the placeholder closes), per
-  member on a fan-out. `internal/steer` was renamed `internal/prose` so the
-  command could take the name. If steer refusals ever pile up in the job
-  store, that is the usage-lab evidence an opt-in streaming turn would need
-  to justify its cost.
-- **2026-07-29 — cross-phase continuation: `turn --resume-from`,
-  `fan --with-from`.** Real usage runs consult at the top of a host session
-  and review at the bottom, and the consult session — the voice's whole
-  built mental model of the plan — died at the skill boundary: every review
-  dispatched cold and re-derived its context from scratch. The primitives
-  for continuing a conversation existed (`turn --resume`,
-  `fan --resume-from`), but not the shape that workflow needs: a follow-up
-  anchored on a *job dir* hours later, and a fan whose members mix one
-  continued conversation with cold ones. Two additions, no new turn
-  semantics (the fan admission test passes): `turn --resume-from <job-dir>`
-  reads the session and unspecified settings from the job's records — the
-  job dir is the correct anchor because a resumed claude conversation
-  continues under a fresh id, so a remembered session id silently forks the
-  conversation at a stale point, while the records always name the current
-  head — and `fan --with-from <job-dir>` makes one member of a fresh roster
-  continue a finished job's session (`fan.Member.Resume` already existed;
-  only the spelling was missing). Both route through the one typed
-  inspection collect's resume line uses, so dispatch and collect cannot
-  disagree about which jobs may continue. Decisions banked: the timeout
-  never inherits (the cap is phase policy — a 30-minute consult continues
-  into a 60-minute review); write intent inherits and can only widen (a
-  follow-up must not silently go read-only); the provider is not
-  overridable (a conversation cannot change model family — carrying context
-  to another family is prompt authorship, per the no-templating non-goal);
-  a warm reviewer is a *follow-through* check, not an independent one — the
-  mixed roster exists precisely so callers can put a cold voice beside it,
-  and that judgment stays with callers. Deliberately not built: job
-  discovery ("the newest consult for this project") — the retained
-  coordinate stays the out-dir printed at dispatch, and a listing command
-  waits for usage-lab evidence of callers actually fumbling to find old
-  jobs. The same-day review round caught the feature's own gaps, each
-  pinned red before its fix: collect's turn-level resume line advertised a
-  continuation `--resume-from` would refuse (eligibility now has the one
-  definition, `memberResumeBlocker`, consulted by every surface that
-  advertises or dispatches one — the round-2 pass caught the third
-  consumer, the fan redirect for a single-turn dir, still bypassing it —
-  so a running turn's session prints without its resume command
-  everywhere); `--with-from` silently
-  narrowed a write-recorded source (now refused with the single-turn
-  alternative, which keeps the intent) and dropped a warm source's recorded
-  baseline (now inherited like cwd, agreeing across sources or refused);
-  and a lone invalid `--with-from` was redirected to a `turn --resume-from`
-  that could only fail identically (inspection now precedes the redirect).
-  One finding was rebutted: the resumed round's dispatch block keeps its
-  single group-level `resumed-from:` line instead of a per-member suffix —
-  the report-once precedent that already governs the group baseline.
-- **2026-07-31 — three days of logs: the cap that lied, and the coordinate
-  callers kept rebuilding.** 78 turns since the last pass, 118 envoy
-  invocations across 14 host sessions. Read with the caveat that the calling
-  skills changed underneath the window (the consult and review briefs were
-  edited three times in it), so caller-side friction dates to a skill version,
-  not only to the engine. Cross-phase continuation was adopted immediately and
-  without a single refusal — 7 `turn --resume-from`, 5 `fan --resume-from`,
-  3 `fan --with-from`, every warm-plus-cold roster shaped as designed — which
-  is the strongest evidence yet that the 07-29 shapes were the missing ones.
-  Two findings, both paid for:
-
-  **The cap's envelope contradicted the job's own record.** Both timeouts in
-  the window were the same shape: the provider announced its thread and then
-  streamed *nothing* — 2 events, 258 bytes — for the entire cap, 60 minutes
-  once and 30 the next day. The engine saw it the whole time; every heartbeat
-  wrote `last_provider_activity=29m_ago events=2`. But the terminal envelope
-  dropped that and said only "the cap counts healthy work too, so reaching it
-  is not evidence the provider hung" — a true generality that, in 2 of 2 real
-  cases, pointed away from what had happened. It cost: one caller diagnosed it
-  by hand from `stderr.log` and redispatched; the next, a day later, believed
-  the envelope and wrote "your previous turn hit the cap before you emitted
-  output — do not restart the reading, write up what you have" into a session
-  that had produced no work at all. Fixed by carrying the observation the
-  engine already held: a capped turn's envelope now reports how long the
-  stream had been quiet, after how many events and which one last, or that
-  nothing arrived at all. Nothing about the cap's *behavior* changed — it stays
-  a wall-clock deadline, never a stall detector, and the recovery still follows
-  prompt state alone; `accepted` still means resume, never redispatch. The
-  boundary this sharpens: **not acting on an observation is not a reason to
-  withhold it.** A generality that is true of the mechanism can still be the
-  wrong sentence for the run, and the fix is the specific fact, not a verdict.
-  The same pass moved the cap sentence out of the runner, where it had been
-  written inline while `StatusGloss` and the help page carried two more
-  wordings of it — the drift `internal/prose` exists to prevent.
-
-  **Callers rebuilt job paths by hand, 13 times, six different ways.** Guessing
-  the stamp-and-label dir (`20260730-113745-review-r2` for a job actually at
-  `112124`) — wrong all five times it was tried, because the stamp is the
-  dispatch second and nothing but the dispatch knows it; `ls -td … | head -1`;
-  `envoy collect … 2>/dev/null || envoy pending`; and five times reaching into
-  the *host harness's* private background-task output file to grep back the
-  `out-dir:` envoy had printed there. This is exactly the evidence 07-28 and
-  07-29 deferred a listing command for ("a listing command waits for usage-lab
-  evidence of callers actually fumbling to find old jobs"), so `envoy jobs`
-  ships: this project's jobs newest first, each row carrying the full dir
-  `collect` takes, with status, shape, duration, and whether the result was
-  ever delivered. It passes the admission test — no lifecycle change, no turn
-  semantics, a read beside `pending` over the same store — and it keeps every
-  judgment with the caller: it names coordinates and prints no result, so like
-  `--status-only` it stamps nothing and an owed job stays owed. The retained
-  coordinate is still the one printed at dispatch; the roster is what answers
-  a caller that lost it. Two owed jobs the store had quietly buried since
-  07-29 (a cap that was never collected, an interrupted review) showed up in
-  the first listing run against the real store.
-
-  Two findings routed without code. `envoy collect` with no argument already
-  resolves to this project's newest job and was used that way **zero** times in
-  118 invocations — the affordance existed and the caller docs never taught it,
-  which is a skill fix, not an engine one. And the resume command collect hands
-  out still names `--resume <session-id>`, so the seven continuations dispatched
-  from it recorded no `resumedFrom` lineage while every `--resume-from` one did;
-  the continuation is still recoverable from `providerArgv`, so this pass paid
-  almost nothing for it, but a future pass that wants lineage as a first-class
-  field should switch the printed command to `--resume-from <job-dir>` — the
-  anchor this design already argues for — and pay the contract churn then.

@@ -8,11 +8,11 @@ envoy runs **one headless AI-session turn** (the `claude` or `codex` CLI) as a s
 
 `envoy fan` runs one prompt on several turns as a single job, and `fan --resume-from` continues a finished fan-out as a new round. Either way it is **a supervisor over unchanged turns, not a second engine**: each member is an ordinary turn in its own subdirectory, and the group adds only supervision and presentation. Anything that would give a fan-out its own turn semantics belongs in a caller.
 
-`envoy steer` routes a supplemental prompt ("forgot to mention X") for a dispatched job. It never delivers into a live turn — no provider accepts input into one: claude's streaming input queues it as a separate turn, codex exec reads stdin once at dispatch (both verified live, see DESIGN.md 2026-07-28) — so its whole contract is the honest report: "not delivered", why, and the runnable follow-up command with the supplement file already filled into the prompt slot. It reads without mutating anything.
+`envoy steer` routes a supplemental prompt ("forgot to mention X") for a dispatched job. It never delivers into a live turn — no provider accepts input into one: claude's streaming input queues it as a separate turn, codex exec reads stdin once at dispatch (both verified live, see EVIDENCE.md 2026-07-28) — so its whole contract is the honest report: "not delivered", why, and the runnable follow-up command with the supplement file already filled into the prompt slot. It reads without mutating anything.
 
 It ships as a library (root package `envoy`) and a thin CLI (`cmd/envoy`). **Zero third-party dependencies is a deliberate constraint** — the Go stdlib covers this domain; keep `go.mod` empty.
 
-[DESIGN.md](DESIGN.md) records the why — rejected alternatives, settled non-goals, and the evidence log of paid-for lessons. Read it before proposing a behavior change; update its log when an incident teaches something new. The `/usage-lab` skill mines real usage for the next improvements.
+[DESIGN.md](DESIGN.md) records the why — rejected alternatives and settled non-goals; [EVIDENCE.md](EVIDENCE.md) is the dated log of what each one cost. Read DESIGN.md before proposing a behavior change, and add to EVIDENCE.md when usage teaches something new. The `/usage-lab` skill mines real usage for the next improvements.
 
 ## Commands
 
