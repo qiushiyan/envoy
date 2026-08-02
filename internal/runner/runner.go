@@ -75,6 +75,11 @@ type termination struct {
 	kind        string // "timeout" | "interrupted" | "lock_conflict"
 	signal      string
 	requestedAt time.Time
+	// stream is the provider's stream as it stood the instant the stop was
+	// requested, captured before any signal goes out. Tearing a turn down can
+	// itself shake loose more output, and reporting that back as what the cap
+	// found would describe envoy's own cleanup as provider work.
+	stream prose.CapStream
 }
 
 type exitResult struct {

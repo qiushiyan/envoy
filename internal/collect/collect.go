@@ -7,8 +7,10 @@ package collect
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,10 +25,18 @@ import (
 
 // JobDirs lists job directories under base, oldest first (stamped names make
 // lexical order chronological). A dir counts as a job once prompt.md exists.
-func JobDirs(base string) []string {
+//
+// It is the only discovery function, and it returns the read error rather than
+// swallowing it: a store that could not be read is not an empty store. Which
+// errors are benign is the caller's call, not this one's — a derived default
+// store that does not exist yet is simply a project before its first dispatch,
+// while the same error on a --base the caller typed means the caller named
+// something that isn't there. Only the caller knows which it passed, so only
+// the caller can tell those apart (see FirstRun).
+func JobDirs(base string) ([]string, error) {
 	entries, err := os.ReadDir(base)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var dirs []string
 	for _, e := range entries {
@@ -36,16 +46,29 @@ func JobDirs(base string) []string {
 		}
 	}
 	sort.Strings(dirs)
-	return dirs
+	return dirs, nil
 }
 
-// LatestJobDir returns the newest job under base, or "" when there is none.
-func LatestJobDir(base string) string {
-	dirs := JobDirs(base)
-	if len(dirs) == 0 {
-		return ""
+// FirstRun reports whether a discovery error is just a store that has not been
+// created yet — which only a *derived* base may be, since the first dispatch
+// creates it. A base the caller named and got wrong raises the same error and
+// must not be waved through as an empty project.
+func FirstRun(err error, baseWasDerived bool) bool {
+	return baseWasDerived && errors.Is(err, fs.ErrNotExist)
+}
+
+// LatestJobDir returns the newest job under base. It reports the read error so
+// callers resolving a default job dir refuse on an unreadable store instead of
+// reporting it as a project with no jobs.
+func LatestJobDir(base string) (string, error) {
+	dirs, err := JobDirs(base)
+	if err != nil {
+		return "", err
 	}
-	return dirs[len(dirs)-1]
+	if len(dirs) == 0 {
+		return "", nil
+	}
+	return dirs[len(dirs)-1], nil
 }
 
 // runningState classifies a status:"running" meta by process liveness.
@@ -534,9 +557,9 @@ type pendingItem struct {
 	meta   *job.Meta
 }
 
-func pendingJobs(base string) []pendingItem {
+func pendingJobs(dirs []string) []pendingItem {
 	var pending []pendingItem
-	for _, dir := range JobDirs(base) {
+	for _, dir := range dirs {
 		if job.IsGroupDir(dir) {
 			if item, ok := pendingGroup(dir); ok {
 				pending = append(pending, item)
@@ -614,8 +637,15 @@ func hasNullCollectedAt(raw map[string]json.RawMessage) bool {
 
 // Pending prints the discovery-only recovery index: it skips provably live
 // jobs, does not print full results, and does not mark anything collected.
-func Pending(base string, w io.Writer) int {
-	pending := pendingJobs(base)
+func Pending(base string, baseWasDerived bool, w, errW io.Writer) int {
+	// "no recovery action is needed" over a store that could not be read is the
+	// most reassuring thing this command can say and the least earned.
+	dirs, err := JobDirs(base)
+	if err != nil && !FirstRun(err, baseWasDerived) {
+		fmt.Fprintf(errW, "pending error: %s\n", prose.UnreadableStore(base, err))
+		return job.ExitInfra
+	}
+	pending := pendingJobs(dirs)
 	fmt.Fprintf(w, "pending jobs: %d (under %s)\n", len(pending), base)
 	if len(pending) == 0 {
 		fmt.Fprintln(w, "next: no recovery action is needed")

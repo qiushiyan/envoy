@@ -89,6 +89,7 @@ func CollectCommand(outDir string) string {
 // cap alone reads the same either way.
 type CapStream struct {
 	Events    int64         // provider events observed over the whole turn
+	Bytes     int64         // raw bytes across the provider's stdout and stderr
 	LastEvent string        // the last event's type; "" when none arrived
 	Quiet     time.Duration // how long the stream had been silent when the cap fired
 }
@@ -96,15 +97,27 @@ type CapStream struct {
 // TimedOut is the terminal envelope of a turn the wall-clock cap ended: what
 // happened, what reaching the cap does and does not prove, and what the stream
 // itself looked like on the way there.
+//
+// The stream clause reports and stops. It never concludes that no work
+// happened: bytes can arrive that yield no event envoy can parse, a provider
+// can work for minutes between events, and work can exist in the session and
+// the tree that never reached this process at all. Saying otherwise would
+// contradict the recovery line printed beside it, which is the part that
+// actually licenses the caller's next move.
 func TimedOut(timeoutMin float64, provider string, stream CapStream) string {
 	line := fmt.Sprintf(
 		"The %g-minute wall-clock cap ended this %s turn. The cap counts healthy work too, so reaching it is not evidence the provider hung.",
 		timeoutMin, provider)
-	if stream.Events == 0 || stream.LastEvent == "" {
-		return line + " The provider streamed nothing at all before the cap, so this turn shows no work of its own."
+	switch {
+	case stream.Events > 0 && stream.LastEvent != "":
+		return line + fmt.Sprintf(" When the cap arrived the stream had been quiet for %s, after %s (last: %s).",
+			text.FormatDuration(stream.Quiet), eventCount(stream.Events), stream.LastEvent)
+	case stream.Bytes > 0:
+		return line + fmt.Sprintf(" The provider wrote %d bytes before the cap but no event envoy could parse, so nothing here records what it was doing.",
+			stream.Bytes)
+	default:
+		return line + " The provider wrote nothing at all before the cap — no output on either stream, and no events."
 	}
-	return line + fmt.Sprintf(" When the cap arrived the stream had been quiet for %s, after %s (last: %s).",
-		text.FormatDuration(stream.Quiet), eventCount(stream.Events), stream.LastEvent)
 }
 
 func eventCount(n int64) string {
@@ -283,15 +296,31 @@ func JobsHeader(shown, total int, base string) string {
 
 // JobsNext closes the roster. A listing delivers no result, so — like
 // --status-only — it marks nothing collected and every job it names stays owed.
-func JobsNext() string {
-	return "this is a listing only — no result was printed and nothing was marked collected. " +
+// truncated adds the way to reach the jobs this listing left out, so an old
+// coordinate never becomes unrecoverable.
+func JobsNext(truncated bool) string {
+	line := "this is a listing only — no result was printed and nothing was marked collected. " +
 		"Print one job in full by passing its dir above: envoy collect <job-dir>"
+	if truncated {
+		line += " · older jobs than these: envoy jobs --all"
+	}
+	return line
 }
 
 // JobsNone answers a project that has never dispatched a turn, which is not a
 // lost coordinate but an empty store.
 func JobsNone() string {
 	return "no turn has run in this project yet — dispatch one with envoy turn or envoy fan"
+}
+
+// UnreadableStore refuses to report an unreadable job root as an empty one.
+// The two look identical from the outside and mean opposite things: a mistyped
+// --base and a project that has never dispatched both print zero jobs, and
+// only one of them is a fact the engine observed.
+func UnreadableStore(base string, err error) string {
+	return fmt.Sprintf("the job store at %s could not be read: %s. "+
+		"This is not the same as an empty store, so nothing here says whether that project has jobs — "+
+		"check the path and its permissions.", base, err)
 }
 
 // ---------- continuing a finished job ----------

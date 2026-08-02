@@ -324,9 +324,35 @@ func TestCodexTimeoutRecordsAcceptance(t *testing.T) {
 	mustContain(t, "result.md", readFile(t, filepath.Join(outDir, "result.md")), "# Turn timeout")
 }
 
+// "When the cap arrived" has to mean the cap, not the end of cleanup. A
+// provider that streams one more event while being torn down would otherwise
+// be reported as busier and more recently active than it was at the deadline —
+// the engine describing its own teardown back to the caller as provider work.
+func TestCodexTimeoutReportsTheStreamAsOfTheCap(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "quiet-then-emits-on-term")
+	outDir := filepath.Join(t.TempDir(), "job")
+	prompt := writePrompt(t, t.TempDir())
+
+	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "0.02")...)
+	if res.code != 4 {
+		t.Fatalf("exit = %d, want 4\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	meta := readMeta(t, outDir)
+	mustContain(t, "error", meta["error"].(string), "after 1 event (last: thread.started)")
+	// The teardown event still belongs in the record — it happened — it just
+	// may not be dressed up as the state the cap found.
+	if got := meta["providerEventCount"].(float64); got != 2 {
+		t.Fatalf("the drained teardown event must still be counted: providerEventCount = %v", got)
+	}
+	if got := meta["lastProviderEventType"]; got != "item.updated" {
+		t.Fatalf("meta must record the last event actually seen: %v", got)
+	}
+}
+
 // A cap that fires before the provider says anything at all has no quiet
 // interval to report, only the absence of a stream. The envelope says that
-// instead of inventing a duration.
+// instead of inventing a duration — and it reports the absence, without
+// concluding from it that no work happened anywhere.
 func TestCodexTimeoutBeforeAnyOutputReportsAnEmptyStream(t *testing.T) {
 	e := newEnv(t).
 		set("ENVOY_FAKE_SCENARIO", "delayed-success").
@@ -341,9 +367,31 @@ func TestCodexTimeoutBeforeAnyOutputReportsAnEmptyStream(t *testing.T) {
 	meta := readMeta(t, outDir)
 	mustContain(t, "error", meta["error"].(string),
 		"wall-clock cap ended this codex turn",
-		"The provider streamed nothing at all before the cap, so this turn shows no work of its own.")
+		"The provider wrote nothing at all before the cap — no output on either stream, and no events.")
 	if strings.Contains(meta["error"].(string), "quiet for") {
 		t.Fatalf("no output means no quiet interval to report: %v", meta["error"])
+	}
+}
+
+// Bytes on the wire are not events envoy can read, and the envelope must not
+// collapse the two: a provider that writes a diagnostic and then stalls did
+// stream something, and reporting "nothing at all" there is false — the shape
+// a real stalled codex turn takes on a machine with a corrupt models cache.
+func TestCodexTimeoutSeparatesBytesFromEvents(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "stderr-noise-then-silence")
+	outDir := filepath.Join(t.TempDir(), "job")
+	prompt := writePrompt(t, t.TempDir())
+
+	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "0.02")...)
+	if res.code != 4 {
+		t.Fatalf("exit = %d, want 4\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	errText := readMeta(t, outDir)["error"].(string)
+	mustContain(t, "error", errText, "bytes before the cap but no event envoy could parse")
+	for _, forbidden := range []string{"nothing at all", "no work of its own"} {
+		if strings.Contains(errText, forbidden) {
+			t.Fatalf("output did arrive, so %q is false here: %s", forbidden, errText)
+		}
 	}
 }
 
@@ -640,6 +688,134 @@ func TestJobsListsThisProjectsCoordinates(t *testing.T) {
 		if strings.Contains(line, live) && (strings.Contains(line, "owed") || strings.Contains(line, "collected")) {
 			t.Fatalf("a running turn owes nothing yet: %q", line)
 		}
+	}
+}
+
+// A store that could not be read is not an empty one. Reporting a mistyped
+// --base as "no turn has run" — or, worse, as "no recovery action is needed" —
+// states as fact something the engine never observed. A base that simply does
+// not exist yet is the opposite case: that is exactly how a project looks
+// before its first dispatch, and it must stay quiet and successful.
+func TestJobsAndPendingSeparateAnUnreadableStoreFromAnEmptyOne(t *testing.T) {
+	e := newEnv(t)
+
+	// A base the caller *named* and got wrong raises the same "not found" as a
+	// store awaiting its first dispatch, and the two mean opposite things. Only
+	// the derived default may be waved through: a typo must refuse, or the
+	// listing answers a question about a project the caller never asked about.
+	absent := filepath.Join(t.TempDir(), "never-dispatched")
+	for _, cmd := range []string{"jobs", "pending"} {
+		res := runEnvoy(t, e, cmd, "--base", absent)
+		if res.code != 2 {
+			t.Fatalf("%s on an explicit --base that does not exist must refuse, got exit %d\nstdout:\n%s", cmd, res.code, res.stdout)
+		}
+		mustContain(t, cmd+" stderr", res.stderr, "could not be read", "not the same as an empty store")
+	}
+
+	// The derived default store is created by the first dispatch, so its
+	// absence is exactly how a project looks before it has ever run a turn.
+	project := t.TempDir()
+	for _, cmd := range []string{"jobs", "pending"} {
+		res := runEnvoyIn(t, e, project, cmd)
+		if res.code != 0 {
+			t.Fatalf("%s in a project that never dispatched is a normal first run: exit %d\n%s", cmd, res.code, res.stderr)
+		}
+	}
+
+	sealed := filepath.Join(t.TempDir(), "sealed")
+	if err := os.Mkdir(sealed, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(sealed, 0o755) })
+	for _, cmd := range []string{"jobs", "pending"} {
+		res := runEnvoy(t, e, cmd, "--base", sealed)
+		if res.code != 2 {
+			t.Fatalf("%s over an unreadable store must fail as infra, got exit %d\nstdout:\n%s", cmd, res.code, res.stdout)
+		}
+		mustContain(t, cmd+" stderr", res.stderr, "could not be read", "not the same as an empty store")
+		for _, forbidden := range []string{"no turn has run", "no recovery action is needed"} {
+			if strings.Contains(res.stdout, forbidden) {
+				t.Fatalf("%s must not claim %q over a store it could not read:\n%s", cmd, forbidden, res.stdout)
+			}
+		}
+	}
+}
+
+// Resolving "the newest job for this project" runs through the same discovery,
+// so an unreadable store must refuse there too rather than degrade into "no
+// job dirs" — which reads as an empty project and sends the caller looking for
+// a coordinate instead of at their filesystem.
+func TestDefaultJobDirRefusesAnUnreadableStore(t *testing.T) {
+	e := newEnv(t)
+	project := t.TempDir()
+
+	// The store the project derives, made unreadable rather than absent.
+	base := runEnvoyIn(t, e, project, "jobs").stdout
+	start := strings.Index(base, "(under ") + len("(under ")
+	base = base[start : start+strings.Index(base[start:], ")")]
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(base, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(base, 0o755) })
+
+	supplement := filepath.Join(t.TempDir(), "more.md")
+	os.WriteFile(supplement, []byte("x"), 0o644)
+	for _, args := range [][]string{{"collect"}, {"steer", "--prompt-file", supplement}} {
+		res := runEnvoyIn(t, e, project, args...)
+		if res.code != 2 {
+			t.Fatalf("%v over an unreadable store must fail as infra, got exit %d\n%s", args[0], res.code, res.stderr)
+		}
+		mustContain(t, args[0]+" stderr", res.stderr, "could not be read", "not the same as an empty store")
+		if strings.Contains(res.stderr, "no job dirs under") {
+			t.Fatalf("%s must not report an unreadable store as an empty one: %s", args[0], res.stderr)
+		}
+	}
+}
+
+// The roster is advertised as the way back to a coordinate you lost. A default
+// display cap is fine; a cap with no way past it would make an old coordinate
+// unrecoverable by exactly the command that exists to recover it.
+func TestJobsReachesPastTheDisplayCap(t *testing.T) {
+	// Mirrors the engine's default cap; the number is part of what a caller
+	// sees, so a change to it should surface here.
+	const displayCap, total = 20, 23
+	e := newEnv(t)
+	base := t.TempDir()
+	for i := 0; i < total; i++ {
+		dir := filepath.Join(base, fmt.Sprintf("20260725-%06d-consult", i))
+		os.MkdirAll(dir, 0o755)
+		os.WriteFile(filepath.Join(dir, "prompt.md"), []byte("x"), 0o644)
+		meta, _ := json.Marshal(map[string]any{
+			"schemaVersion": 6, "status": "ok", "provider": "codex",
+			"startedAt": "2026-07-25T12:00:00Z", "durationMs": 60000, "timeoutMin": 30.0,
+			"promptState": "accepted", "runnerPid": 1, "nextAction": "n",
+			"resultKind": "final", "collectedAt": "2026-07-25T12:01:00Z",
+		})
+		os.WriteFile(filepath.Join(dir, "meta.json"), meta, 0o644)
+	}
+
+	capped := runEnvoy(t, e, "jobs", "--base", base)
+	mustContain(t, "capped listing", capped.stdout,
+		fmt.Sprintf("jobs: %d of %d (under %s, newest first)", displayCap, total, base),
+		"older jobs than these: envoy jobs --all")
+	if got := strings.Count(capped.stdout, "[ok] "); got != displayCap {
+		t.Fatalf("capped listing printed %d rows, want %d", got, displayCap)
+	}
+	// The cap takes the newest, so the oldest job is the one it drops.
+	if strings.Contains(capped.stdout, "20260725-000000-consult") {
+		t.Fatalf("the cap must drop the oldest, not the newest:\n%s", capped.stdout)
+	}
+
+	all := runEnvoy(t, e, "jobs", "--all", "--base", base)
+	if got := strings.Count(all.stdout, "[ok] "); got != total {
+		t.Fatalf("--all printed %d rows, want %d", got, total)
+	}
+	mustContain(t, "--all listing", all.stdout, "20260725-000000-consult")
+	if strings.Contains(all.stdout, "envoy jobs --all") {
+		t.Fatalf("an uncapped listing has nothing older to point at:\n%s", all.stdout)
 	}
 }
 

@@ -11,20 +11,26 @@ import (
 	"github.com/qiushiyan/envoy/internal/text"
 )
 
-// jobsListLimit caps how many jobs one listing names. A project accumulates
-// turns for as long as it is worked on, and the caller reading this is almost
-// always looking for a recent one; the header says how many were left out so
-// the cap never hides that older jobs exist.
+// jobsListLimit caps how many jobs one listing names by default. A project
+// accumulates turns for as long as it is worked on, and the caller reading
+// this is almost always looking for a recent one. The cap is presentation
+// only: the header says how many were left out, and --all reaches them, so a
+// coordinate can never become unrecoverable by being old — which would defeat
+// the command.
 const jobsListLimit = 20
 
 // Jobs prints this project's job roster, newest first — the recovery path for
-// an out-dir a caller no longer has.
+// an out-dir a caller no longer has. all disables the display cap.
 //
 // It is a read, like pending: nothing is stamped, nothing is reconciled, and
 // no job's result is printed. Each row names the one coordinate collect takes,
 // which is the whole point of the command.
-func Jobs(base string, w io.Writer) int {
-	dirs := JobDirs(base)
+func Jobs(base string, baseWasDerived, all bool, w, errW io.Writer) int {
+	dirs, err := JobDirs(base)
+	if err != nil && !FirstRun(err, baseWasDerived) {
+		fmt.Fprintf(errW, "jobs error: %s\n", prose.UnreadableStore(base, err))
+		return job.ExitInfra
+	}
 	total := len(dirs)
 	if total == 0 {
 		fmt.Fprintf(w, "%s\n", prose.JobsHeader(0, 0, base))
@@ -37,7 +43,7 @@ func Jobs(base string, w io.Writer) int {
 	for i := len(dirs) - 1; i >= 0; i-- {
 		newest = append(newest, dirs[i])
 	}
-	if len(newest) > jobsListLimit {
+	if !all && len(newest) > jobsListLimit {
 		newest = newest[:jobsListLimit]
 	}
 	fmt.Fprintln(w, prose.JobsHeader(len(newest), total, base))
@@ -45,7 +51,7 @@ func Jobs(base string, w io.Writer) int {
 	for _, dir := range newest {
 		fmt.Fprintln(w, jobRow(dir, now))
 	}
-	fmt.Fprintf(w, "next: %s\n", prose.JobsNext())
+	fmt.Fprintf(w, "next: %s\n", prose.JobsNext(len(newest) < total))
 	return 0
 }
 

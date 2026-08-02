@@ -31,15 +31,34 @@ func TestTimedOutCarriesTheStreamItObserved(t *testing.T) {
 	}
 
 	silent := TimedOut(30, "codex", CapStream{})
-	if !strings.Contains(silent, "streamed nothing at all before the cap") {
+	if !strings.Contains(silent, "wrote nothing at all before the cap") {
 		t.Fatalf("a turn with no events must say so plainly: %q", silent)
 	}
 	if strings.Contains(silent, "quiet for") {
 		t.Fatalf("no output means no quiet interval to report: %q", silent)
 	}
+
+	// Bytes are not events. A provider that writes a diagnostic and then never
+	// emits anything parseable did stream something, and "nothing at all"
+	// there is simply false.
+	noisy := TimedOut(30, "codex", CapStream{Bytes: 157})
+	if !strings.Contains(noisy, "wrote 157 bytes before the cap but no event envoy could parse") {
+		t.Fatalf("bytes without events must be reported as such: %q", noisy)
+	}
+	if strings.Contains(noisy, "nothing at all") {
+		t.Fatalf("output arrived, so nothing-at-all is false: %q", noisy)
+	}
+
+	// The clause reports; it never concludes no work happened. That verdict
+	// belongs to the recovery line, which prompt state governs.
+	for _, envelope := range []string{quiet, busy, silent, noisy} {
+		if strings.Contains(envelope, "no work") {
+			t.Fatalf("the stream clause may not rule out work: %q", envelope)
+		}
+	}
 	// The observation is evidence for the caller, never a verdict the engine
 	// acts on: the cap stays a deadline, so no wording may call the turn hung.
-	for _, envelope := range []string{quiet, busy, silent} {
+	for _, envelope := range []string{quiet, busy, silent, noisy} {
 		if strings.Contains(envelope, "stalled") || strings.Contains(envelope, "stuck") {
 			t.Fatalf("the envelope must not diagnose a stall: %q", envelope)
 		}

@@ -226,6 +226,22 @@ if (provider === 'claude') {
   emitCodexStart();
   emitCodexResult();
   setInterval(() => {}, 60_000);
+} else if (scenario === 'stderr-noise-then-silence') {
+  // The real shape of a stalled codex turn on a machine whose models cache is
+  // corrupt: a diagnostic on stderr, then no parseable event, ever. Bytes
+  // arrived; nothing envoy can read from them did.
+  process.stderr.write('ERROR provider_models_cache: failed to load models cache\n');
+  setInterval(() => {}, 60_000);
+} else if (scenario === 'quiet-then-emits-on-term') {
+  // Accepts, goes silent until the cap, then streams one more event while
+  // being torn down — the race that decides whether a capped turn's reported
+  // stream describes the moment the cap arrived or the moment cleanup ended.
+  emitCodexStart();
+  process.on('SIGTERM', () => {
+    emit({ type: 'item.updated' });
+    setTimeout(() => process.exit(0), 40);
+  });
+  setInterval(() => {}, 60_000);
 } else if (scenario === 'hang-with-stubborn-grandchild-only') {
   emitCodexStart();
   startGrandchild({ ignoreSigterm: true });

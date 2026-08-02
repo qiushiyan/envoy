@@ -3,7 +3,7 @@
 //	envoy turn --provider <claude|codex> --prompt-file <F> [flags]
 //	envoy collect [out-dir]
 //	envoy steer --prompt-file <F> [out-dir]
-//	envoy jobs [--base DIR]
+//	envoy jobs [--all] [--base DIR]
 //	envoy pending [--base DIR]
 //	envoy version
 package main
@@ -39,7 +39,8 @@ USAGE
                               print one job: status, coordinates, result.md
   envoy steer --prompt-file <F> [job-dir]
                               route a supplemental prompt to a dispatched job
-  envoy jobs [--base DIR]     this project's jobs, newest first, with their dirs
+  envoy jobs [--all] [--base DIR]
+                              this project's jobs, newest first, with their dirs
   envoy pending [--base DIR]  jobs still needing attention, after a missed completion
   envoy version
 
@@ -399,6 +400,7 @@ func cmdSteer(args []string, stdout, stderr io.Writer) int {
 func cmdJobs(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("jobs", stderr)
 	base := fs.String("base", "", "")
+	all := fs.Bool("all", false, "")
 	if proceed, code := parseFlags(fs, args, stdout); !proceed {
 		return code
 	}
@@ -406,7 +408,7 @@ func cmdJobs(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "jobs error: jobs does not take a job dir; use --base to choose the job root")
 		return envoy.ExitUsage
 	}
-	return envoy.Jobs(*base, stdout, stderr)
+	return envoy.Jobs(*base, *all, stdout, stderr)
 }
 
 func cmdPending(args []string, stdout, stderr io.Writer) int {

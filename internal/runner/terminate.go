@@ -38,7 +38,12 @@ func (r *run) requestTermination(kind, signalName string) {
 		return
 	}
 	requestedAt := time.Now()
-	r.term = &termination{kind: kind, signal: signalName, requestedAt: requestedAt}
+	r.term = &termination{
+		kind:        kind,
+		signal:      signalName,
+		requestedAt: requestedAt,
+		stream:      r.capStream(requestedAt),
+	}
 	r.writeMeta(func(m *job.Meta) {
 		m.TerminationRequestedAt = job.Ptr(job.ISO(requestedAt))
 		if kind == "interrupted" {
@@ -231,7 +236,7 @@ func (r *run) finishAfterStop(exit exitResult) {
 
 	var stopped string
 	if r.term.kind == "timeout" {
-		stopped = prose.TimedOut(r.opts.Turn.TimeoutMin, r.opts.Provider, r.capStream())
+		stopped = prose.TimedOut(r.opts.Turn.TimeoutMin, r.opts.Provider, r.term.stream)
 	} else {
 		sig := r.term.signal
 		if sig == "" {
@@ -264,18 +269,26 @@ func (r *run) finishAfterStop(exit exitResult) {
 	})
 }
 
-// capStream reports what the run observed of the provider's stream, for the
-// terminal envelope of a capped turn. Every field is read from what actually
-// arrived — the engine does not act on any of it, it only says it, so the
-// cap stays a deadline rather than a stall detector.
-func (r *run) capStream() prose.CapStream {
-	stream := prose.CapStream{Events: r.meta.ProviderEventCount}
+// capStream reports what the run had observed of the provider's stream as of
+// asOf — the instant the caller cares about, which is when the stop was
+// requested, not whenever cleanup happens to finish. Every field is read from
+// what actually arrived; the engine does not act on any of it, it only says
+// it, so the cap stays a deadline rather than a stall detector.
+//
+// Bytes and events are separate observations because they answer different
+// questions: a provider can write to stdout or stderr without producing one
+// event envoy can parse, so "no events" never licenses "nothing arrived".
+func (r *run) capStream(asOf time.Time) prose.CapStream {
+	stream := prose.CapStream{
+		Events: r.meta.ProviderEventCount,
+		Bytes:  r.meta.ProviderOutputBytes,
+	}
 	if r.meta.LastProviderEventType != nil {
 		stream.LastEvent = *r.meta.LastProviderEventType
 	}
 	if r.meta.LastProviderActivityAt != nil {
 		if t, err := time.Parse(time.RFC3339, *r.meta.LastProviderActivityAt); err == nil {
-			if quiet := time.Since(t); quiet > 0 {
+			if quiet := asOf.Sub(t); quiet > 0 {
 				stream.Quiet = quiet
 			}
 		}

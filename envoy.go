@@ -505,10 +505,16 @@ func Collect(req CollectRequest) int {
 			return ExitUsage
 		}
 		base := job.DefaultBase(cwd)
-		if outDir = collect.LatestJobDir(base); outDir == "" {
+		latest, err := collect.LatestJobDir(base)
+		if err != nil && !collect.FirstRun(err, true) {
+			fmt.Fprintf(stderr, "collect error: %s\n", prose.UnreadableStore(base, err))
+			return ExitInfra
+		}
+		if latest == "" {
 			fmt.Fprintf(stderr, "collect error: no job dirs under %s; pass an out-dir explicitly\n", base)
 			return ExitUsage
 		}
+		outDir = latest
 	}
 	return collect.Collect(absOrSelf(outDir), mode, stdout, stderr)
 }
@@ -542,10 +548,16 @@ func Steer(req SteerRequest) int {
 			return ExitUsage
 		}
 		base := job.DefaultBase(cwd)
-		if outDir = collect.LatestJobDir(base); outDir == "" {
+		latest, err := collect.LatestJobDir(base)
+		if err != nil && !collect.FirstRun(err, true) {
+			fmt.Fprintf(stderr, "steer error: %s\n", prose.UnreadableStore(base, err))
+			return ExitInfra
+		}
+		if latest == "" {
 			fmt.Fprintf(stderr, "steer error: no job dirs under %s; pass an out-dir explicitly\n", base)
 			return ExitUsage
 		}
+		outDir = latest
 	}
 	// Both paths are printed into commands that may run from any directory,
 	// so they must survive leaving this one.
@@ -556,6 +568,7 @@ func Steer(req SteerRequest) int {
 // job root for the current directory).
 func Pending(base string, stdout, stderr io.Writer) int {
 	stdout, stderr = defaultWriters(stdout, stderr)
+	derived := base == ""
 	if base == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -564,14 +577,15 @@ func Pending(base string, stdout, stderr io.Writer) int {
 		}
 		base = job.DefaultBase(cwd)
 	}
-	return collect.Pending(absOrSelf(base), stdout)
+	return collect.Pending(absOrSelf(base), derived, stdout, stderr)
 }
 
 // Jobs prints this project's job roster for base ("" = the default job root
-// for the current directory), newest first. It is a listing only: no result is
-// printed and nothing is marked collected.
-func Jobs(base string, stdout, stderr io.Writer) int {
+// for the current directory), newest first. all disables the display cap. It
+// is a listing only: no result is printed and nothing is marked collected.
+func Jobs(base string, all bool, stdout, stderr io.Writer) int {
 	stdout, stderr = defaultWriters(stdout, stderr)
+	derived := base == ""
 	if base == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -580,7 +594,7 @@ func Jobs(base string, stdout, stderr io.Writer) int {
 		}
 		base = job.DefaultBase(cwd)
 	}
-	return collect.Jobs(absOrSelf(base), stdout)
+	return collect.Jobs(absOrSelf(base), derived, all, stdout, stderr)
 }
 
 func defaultWriters(stdout, stderr io.Writer) (io.Writer, io.Writer) {
