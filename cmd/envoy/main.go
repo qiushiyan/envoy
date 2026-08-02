@@ -153,7 +153,9 @@ BEFORE YOU DISPATCH
   Model and effort. Leaving --model or --effort off puts the provider's own
   configuration in charge; envoy never substitutes a model of its own, and
   reports `+"`(provider default)`"+` rather than guessing. What the provider says it
-  actually ran shows up in collect.
+  actually ran is recorded either way, and `+"`collect --status-only`"+` prints it.
+  Where the two differ, read it as the provider's own naming — an alias like
+  `+"`opus`"+` resolving to a dated model id — rather than a substitution.
 
   Write intent, not a sandbox. --allow-write lets the turn edit files and run
   commands unattended. Without it the turn is effectively read-only, and
@@ -172,6 +174,12 @@ BEFORE YOU DISPATCH
   it when a later phase builds on an earlier phase's session (a review that
   continues a consult, say): the records always name the conversation's
   current id, where a remembered session id goes stale.
+
+  Two ways in, for different hands. A finished job's block prints `+"`resume:`"+`
+  and `+"`takeover:`"+`. Run `+"`resume:`"+` — it is the headless follow-up, and it comes
+  back as data like any other turn. Pass `+"`takeover:`"+` to the person you are
+  working with: it is the provider's own interactive command, and it opens a
+  session that sits waiting for a human at a keyboard.
 
   The cap. --timeout-min bounds wall-clock time as a safety net, not a stall
   detector — it counts healthy work, so reaching it never proves a hang.

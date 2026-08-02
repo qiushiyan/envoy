@@ -1460,6 +1460,13 @@ func TestHelpIsSelfSufficient(t *testing.T) {
 		"recovery stays per member",
 		"A fan-out is read-only",
 		"6 partial",
+		// Two facts a caller reads off every finished block and cannot
+		// otherwise derive: which of the two follow-up commands is the one to
+		// run, and that a request/report model difference is the provider's
+		// own aliasing rather than something to report as a substitution.
+		"Two ways in, for different hands",
+		"waiting for a human at a keyboard",
+		"the provider's own naming",
 	)
 }
 
