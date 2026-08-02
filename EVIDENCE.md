@@ -177,11 +177,42 @@ will look anyway.
   full-preamble read. Whole-output cut over 60 stored jobs: 6.4%, and 32–35% on
   the short later rounds.
 
-  Two fields earned their exception rather than a rule. A provider-announced
-  model that *disagrees* with the requested one stays in a healthy block — it is
-  the only thing on that line the caller did not already know. And the bare
-  `session:` line went away wherever `resume:` or `takeover:` already spells the
-  id out: three copies of one identifier is three invitations to rebuild a
-  follow-up by hand, which the logs show a caller doing, minus the `--cwd`.
-  Checked and not changed: a fan-out cannot render a lone member header —
-  `envoy fan` refuses a roster below two.
+  The bare `session:` line went away wherever `resume:` or `takeover:` already
+  spells the id out: three copies of one identifier is three invitations to
+  rebuild a follow-up by hand, which the logs show a caller doing, minus the
+  `--cwd`. Checked and not changed: a fan-out cannot render a lone member header
+  — `envoy fan` refuses a roster below two.
+
+  **The cold review caught the seam being keyed on the wrong thing.** The first
+  cut gated on `status != ok`, which reads as obviously right and is wrong at
+  both edges: an ok turn whose `result.md` will not read is sent to `raw.log` by
+  its own next line, and the block had just withheld the paths — the exact
+  "prescription pointing at files the block withheld" the change was written to
+  prevent. The tier is now decided by **delivery** (ok *and* the payload reads),
+  which costs one extra read hoisted above the printing. The same round killed
+  an exception that had looked like a principled carve-out: printing the
+  settings line when the reported model differed from the requested one. `opus`
+  against `claude-opus-5` is the provider's own alias resolution — the mapping
+  this engine refuses to own — so inequality cannot separate resolution from
+  substitution, and the "exception" would have fired on every ordinary claude
+  dispatch. **A gate that cannot be computed from an observation is inference
+  wearing a condition.** Rebutted in the same pass: gating each log path on
+  which recovery branch named it. The three streams are one affordance; which
+  one a branch emphasises is not eligibility, and the per-branch rule buys one
+  line on a job already in trouble at the price of an unpredictable block.
+- **2026-08-02 — the suite was 85% race-runtime exit sleep.** `make test` took
+  ~105s and nobody had asked why. Not the code: the integration harness builds
+  the CLI with `-race` (deliberately — the runner's goroutines live in the
+  subprocess, so a race-built *test* process would not see them), and the race
+  runtime sleeps `atexit_sleep_ms=1000` before every process exit to catch
+  races in threads still running at shutdown. Every one of the 59 tests spawns
+  at least one envoy, so the suite was paying that second ~100 times. Setting
+  `GORACE=atexit_sleep_ms=0` in the harness's subprocess environment: **105s →
+  17s**, same tests, same race build, detection during the run untouched.
+  The first diagnosis in-session measured the symptom correctly (~1.1s per
+  race-built invocation against ~0.1s plain, at 5% CPU) and named the cause
+  vaguely as "teardown"; the reviewer named the knob. **A per-process cost
+  multiplied by a serial suite is worth one measurement before it is worth an
+  architecture** — the alternatives considered and dropped were splitting the
+  target, race-building only the concurrency tests, and `t.Parallel()`, all of
+  which trade coverage or determinism for a problem that was one env var.

@@ -66,9 +66,10 @@ func TestTurnResumeFromContinuesSession(t *testing.T) {
 		t.Fatalf("prompt.md = %q, want the NEW prompt", got)
 	}
 
-	// Collect surfaces the lineage next to the session coordinates.
+	// Collect surfaces the lineage next to the session coordinates — the
+	// session itself arriving inside the follow-up command that carries it.
 	col := runEnvoy(t, e, "collect", "--status-only", r2)
-	mustContain(t, "collect stdout", col.stdout, "resumed-from: "+r1, "session: sess-consult")
+	mustContain(t, "collect stdout", col.stdout, "resumed-from: "+r1, "--resume sess-consult")
 
 	// An explicit flag overrides the record; the rest still inherits.
 	r3 := filepath.Join(t.TempDir(), "review-xhigh")

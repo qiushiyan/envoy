@@ -61,6 +61,14 @@ func (e *env) build() []string {
 	out := []string{
 		"HOME=" + e.home,
 		"PATH=" + fakeBin + ":" + os.Getenv("PATH"),
+		// The race runtime sleeps a full second before exiting by default, to
+		// give still-running threads a chance to trip the detector on the way
+		// out. Every test here spawns at least one envoy, so that second was
+		// most of the suite's wall time — ~105s down to ~17s without it. It
+		// costs nothing this suite was buying: detection during the run is
+		// unaffected, and the runner tears its own goroutines down before
+		// exit, which the lifecycle tests assert on directly.
+		"GORACE=atexit_sleep_ms=0",
 		"ENVOY_HEARTBEAT_MS=100",
 		"ENVOY_TIMEOUT_POLL_MS=25",
 		"ENVOY_SIGKILL_AFTER_MS=400",
@@ -280,24 +288,37 @@ func TestClaudeSuccessWithUnterminatedFinalLine(t *testing.T) {
 		"provider: claude · model (provider default, ran fake-claude-model) · effort (provider default)")
 }
 
-// TestCollectOkBlockReportsModelSubstitution pins the one setting that survives
-// into a healthy turn's block: the provider announcing it ran something other
-// than the model the caller asked for. Everything else on that line is the
-// caller's own request read back, but a substitution is an observation the
-// caller does not have, and it changes what the result is worth.
-func TestCollectOkBlockReportsModelSubstitution(t *testing.T) {
+// A reported model that differs from the requested one is not evidence of a
+// substitution: `opus` against `claude-opus-5` is the provider's own alias
+// resolution, the mapping envoy refuses to own because it is the provider's to
+// change. String inequality cannot tell that apart from a real substitution, so
+// the block does not try — treating the difference as a surprise would be
+// inferring, and would fire on the most ordinary claude dispatch there is. The
+// observation stays in meta.json and --status-only, where it is provable.
+func TestCollectOkBlockDoesNotGuessAtModelSubstitution(t *testing.T) {
 	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "claude", "--model", "opus", "--timeout-min", "5")...)
+	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "claude", "--model", "opus",
+		"--timeout-min", "5", "--label", "review")...)
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
 	}
+	if got := readMeta(t, outDir)["providerReportedModel"]; got != "fake-claude-model" {
+		t.Fatalf("the reported model must still be recorded, got %v", got)
+	}
+
+	// The resume command legitimately carries `--model opus` — it replays the
+	// dispatch — so the assertion is on the settings line itself.
 	collected := runEnvoy(t, e, "collect", outDir)
-	mustContain(t, "collect stdout", collected.stdout,
-		"status: ok",
-		"provider: claude · model opus (ran fake-claude-model) · effort (provider default)")
+	mustContain(t, "collect stdout", collected.stdout, "status: ok")
+	mustNotContain(t, "ok block", collected.stdout,
+		"provider: claude · model", "fake-claude-model", "label review")
+
+	status := runEnvoy(t, e, "collect", "--status-only", outDir)
+	mustContain(t, "status-only stdout", status.stdout,
+		"provider: claude · model opus (ran fake-claude-model) · effort (provider default) · label review")
 }
 
 func TestClaudePartialFailure(t *testing.T) {
@@ -685,8 +706,11 @@ func TestCollectOkBlockHoldsBackDiagnostics(t *testing.T) {
 		"prompt: accepted",
 		"result kind: final",
 		"logs: progress ",
-		"session: fake-session-id\n",
 		"next: this was a status check only")
+	// Asking for the whole preamble asks for every field, not for the same
+	// identifier three times: the bare line stays suppressed wherever a
+	// command below already spells the session out.
+	mustNotContain(t, "status-only block", status.stdout, "session: fake-session-id\n")
 }
 
 // The mirror: a turn that did not return a result keeps every diagnostic field,
@@ -712,8 +736,10 @@ func TestCollectFailedBlockCarriesDiagnostics(t *testing.T) {
 		"logs: progress "+filepath.Join(outDir, "progress.log"),
 		"raw "+filepath.Join(outDir, "raw.log"),
 		"stderr "+filepath.Join(outDir, "stderr.log"),
-		"session: fake-session-id",
+		"resume: envoy turn --provider codex --resume fake-session-id",
 		"next: The provider accepted this prompt")
+	// Even here the id is not repeated: the resume command carries it.
+	mustNotContain(t, "failed block", collected.stdout, "session: fake-session-id\n")
 }
 
 // The roster is the recovery path for an out-dir the caller no longer has, so
@@ -1620,7 +1646,6 @@ func TestCollectStatusOnlyLeavesTheResultOwed(t *testing.T) {
 	}
 	mustContain(t, "stdout", res.stdout,
 		"status: ok",
-		"session: fake-session-id",
 		"resume: envoy turn --provider codex --resume fake-session-id",
 		"next: this was a status check only",
 	)
@@ -1813,6 +1838,15 @@ func TestCollectDoesNotStampAnOkTurnWithoutItsResult(t *testing.T) {
 			t.Fatalf("%v exit = %d\nstderr:\n%s", args, res.code, res.stderr)
 		}
 		mustContain(t, fmt.Sprintf("stdout of %v", args), res.stdout, "result.md could not be read")
+		// The next line printed here sends the caller to raw.log to recover the
+		// payload, so the block must carry the paths: a prescription may not
+		// point at files the block withheld. Status alone cannot decide this —
+		// this turn is ok and still needs its logs, because its result never
+		// reached anyone.
+		mustContain(t, fmt.Sprintf("stdout of %v", args), res.stdout,
+			"logs: progress "+filepath.Join(dir, "progress.log"),
+			"raw "+filepath.Join(dir, "raw.log"),
+			"stderr "+filepath.Join(dir, "stderr.log"))
 		if readMeta(t, dir)["collectedAt"] != nil {
 			t.Fatalf("%v stamped a result it never delivered", args)
 		}

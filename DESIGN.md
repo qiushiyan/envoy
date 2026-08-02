@@ -167,24 +167,35 @@ other than an ok turn prints the full block, because a non-ok turn's status
 and next action *are* its result, and handing back silence in their place
 would manufacture a payload that does not exist.
 
-**The block itself is tiered by status, for the same reason.** Half the
-preamble — the settings the caller passed, the token counts, the prompt-state
-evidence, the three log paths — is diagnostic: it answers questions only a turn
-that went wrong raises, and on a healthy turn it restates what `ok` already
-said. So a turn that returned a result prints what the caller acts on (its
-coordinate, status, duration, the follow-up commands, the payload, the one next
-action) and holds the rest back; every non-ok turn prints all of it, because its
-recovery prose reasons from exactly those fields and names those files by name.
-Nothing is hidden: `meta.json` stays the authoritative record and `--status-only`
-prints the whole preamble on demand — which is what makes the tiering safe,
-since **stdout is the convenience view and the files are the truth.** The one
-setting that survives into a healthy block is a model the provider announced
-that disagrees with the model requested: alone on that line, it is an
-observation the caller does not already have, and it changes what the result is
-worth. The bare `session:` line is likewise held back whenever a command below
-already spells the id out — three copies of one identifier is three invitations
-to hand-assemble a follow-up instead of running the one that carries the turn's
-cwd and write intent.
+**The block itself is tiered, and the tier is decided by delivery — not by
+status.** Half the preamble — the settings the caller passed, the token counts,
+the prompt-state evidence, the result kind, the three log paths — is diagnostic:
+it answers questions only a turn the caller must now investigate raises. A turn
+*delivers* when it reports ok **and** its `result.md` actually reads; only then
+is the caller done, and only then does the block hold that half back, printing
+what remains to act on (coordinate, status, duration, the follow-up commands,
+the payload, the one next action). Everything else prints the whole preamble.
+
+Status alone was tried first and is wrong at both edges, which is the reason
+this is stated as delivery: an ok turn whose `result.md` will not read is sent
+to `raw.log` by its own next line and must be handed the paths, and
+`--status-only` delivers nothing at all by construction. The log paths in
+particular are one affordance, not three — which recovery branch names which
+file is emphasis, not eligibility, so they travel together.
+
+Nothing is hidden: `meta.json` stays the authoritative record and
+`--status-only` prints the whole preamble on demand — which is what makes the
+tiering safe, since **stdout is the convenience view and the files are the
+truth.** Two temptations were rejected. Printing the settings line when the
+provider's reported model differs from the requested one *looks* like reporting
+a substitution, but `opus` against `claude-opus-5` is the provider's own alias
+resolution — the mapping this engine refuses to own — so string inequality
+cannot tell a resolution from a substitution, and calling one a surprise would
+be inferring on the most ordinary dispatch there is. And the bare `session:`
+line is held back whenever a command below already spells the id out, in every
+mode: three copies of one identifier is three invitations to hand-assemble a
+follow-up instead of running the one that carries the turn's cwd and write
+intent.
 
 ## Storage
 

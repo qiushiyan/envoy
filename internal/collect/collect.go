@@ -276,27 +276,31 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 	meta = reconcileAbandoned(outDir, meta, state)
 	state = classifyRunning(meta)
 
+	// The payload is read once, before anything is printed, because whether it
+	// reads is what the rest of the block is shaped around — not a detail
+	// discovered on the way past.
+	resultBody, resultErr := os.ReadFile(resultPath)
+
 	// The result-only shortcut applies only when the payload actually reads:
 	// an ok turn whose result.md is unreadable falls through to the full
 	// block, which diagnoses the missing payload and leaves the job owed.
-	if mode == ModeResultOnly && meta.Status == job.StatusOK {
-		if data, err := os.ReadFile(resultPath); err == nil {
-			fmt.Fprintln(w, string(data))
-			stampCollected(metaPath, meta, prose.CollectedOK())
-			return meta, false, 0
-		}
+	if mode == ModeResultOnly && meta.Status == job.StatusOK && resultErr == nil {
+		fmt.Fprintln(w, string(resultBody))
+		stampCollected(metaPath, meta, prose.CollectedOK())
+		return meta, false, 0
 	}
 
-	// The diagnostic tier is the half of the block a caller reads only when
-	// working out what happened: the settings it passed itself, the token
-	// counts, the prompt-state evidence recovery reasons from, and the log
-	// paths that recovery prose tells it to open. An ok turn needs none of
-	// them — its deliverable is result.md and its one next action, and every
-	// field here either restates what "ok" already said (prompt accepted,
-	// result kind final) or answers a question nobody asks of a turn that
-	// worked. They are never lost: meta.json stays the authoritative record,
-	// and --status-only prints the whole preamble on demand.
-	diagnostic := meta.Status != job.StatusOK || mode == ModeStatusOnly
+	// What the block holds back is decided by delivery, not by status. A turn
+	// delivers when it reports ok *and* its payload actually reads; only then
+	// is the caller done, and only then is the rest of the preamble — the
+	// settings it passed itself, the token counts, the prompt-state evidence,
+	// the result kind, the log paths — answering a question nobody asked.
+	// Status alone would get the two cases at the edges wrong: an ok turn
+	// whose result.md will not read is sent to raw.log by its own next line
+	// and must be given the paths, and --status-only delivers nothing at all.
+	// Nothing is lost either way: meta.json stays the authoritative record.
+	delivered := meta.Status == job.StatusOK && resultErr == nil
+	diagnostic := !delivered || mode == ModeStatusOnly
 
 	fmt.Fprintf(w, "job: %s\n", outDir)
 	if meta.Status == job.StatusRunning {
@@ -311,13 +315,18 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 		return *v
 	}
 	// The model column shows the request; when the provider announced what it
-	// actually resolved, show that observation too. A disagreement between the
-	// two survives into an ok block, alone among the settings: it is the one
-	// thing on this line the caller did not already know, and it changes how
-	// much a result is worth. A default that simply resolved is not a
-	// disagreement — the caller asked for the provider's choice and got it.
+	// actually resolved, show that observation too.
+	//
+	// The two are deliberately NOT compared to decide whether to print. A
+	// requested `opus` against a reported `claude-opus-5` is the provider's own
+	// alias resolution — the mapping envoy refuses to own precisely because it
+	// is the provider's and moves under the engine's feet — so string
+	// inequality cannot tell an honest resolution from a substitution. Calling
+	// one a surprise would be inferring, not observing, and would fire on the
+	// most ordinary claude dispatch there is. The whole line therefore belongs
+	// to the diagnostic tier, and the observation stays where it is provable:
+	// meta.json's providerReportedModel, and --status-only.
 	modelDisplay := display(meta.Model)
-	modelSubstituted := false
 	if meta.ProviderReportedModel != nil {
 		reported := *meta.ProviderReportedModel
 		switch {
@@ -325,10 +334,9 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 			modelDisplay = fmt.Sprintf("(provider default, ran %s)", reported)
 		case *meta.Model != reported:
 			modelDisplay = fmt.Sprintf("%s (ran %s)", *meta.Model, reported)
-			modelSubstituted = true
 		}
 	}
-	if diagnostic || modelSubstituted {
+	if diagnostic {
 		labelSuffix := ""
 		if meta.Label != nil {
 			labelSuffix = " · label " + *meta.Label
@@ -366,10 +374,14 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 		if meta.Status == job.StatusRunning && meta.WatchCommand != "" {
 			fmt.Fprintf(w, "watch: %s\n", meta.WatchCommand)
 		}
-		// The log paths ship with the recovery prose that names them: every
-		// non-ok next line tells the caller to read progress.log, raw.log, and
-		// stderr.log, and a prescription must not point at paths the block
-		// withheld.
+		// The three streams are one affordance — "here is what the turn
+		// actually emitted" — and a turn that did not deliver is the case that
+		// wants it. Which of the three a given recovery line names varies (an
+		// unprovable turn names all three, an accepted one names progress.log,
+		// a never-started one names none), but that is emphasis, not
+		// eligibility: gating each path on the branch that happened to fire
+		// would make the block's shape unpredictable to save one line on a job
+		// already in trouble.
 		fmt.Fprintf(w, "logs: progress %s · raw %s · stderr %s\n",
 			orDefault(meta.ProgressPath, filepath.Join(outDir, "progress.log")),
 			orDefault(meta.RawPath, filepath.Join(outDir, "raw.log")),
@@ -387,12 +399,14 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 		if _, blocked := memberResumeBlocker(meta); !blocked {
 			resume = resumeCommand(meta)
 		}
-		// The bare id is printed only when no command below carries it. Both
-		// commands spell the session out, and three lines of one identifier is
-		// three chances for a caller to hand-assemble a follow-up out of the
-		// id instead of running the command that already carries the turn's
-		// cwd and write intent.
-		if diagnostic || (resume == "" && meta.TakeoverCommand == nil) {
+		// The bare id is printed only when no command below carries it —
+		// independently of status and mode, because redundancy is never what
+		// the fuller reads are asking for. Both commands spell the session
+		// out, and a third line of the same identifier is one more chance for
+		// a caller to hand-assemble a follow-up out of the id instead of
+		// running the command that already carries the turn's cwd and write
+		// intent.
+		if resume == "" && meta.TakeoverCommand == nil {
 			fmt.Fprintf(w, "session: %s\n", *meta.SessionID)
 		}
 		if resume != "" {
@@ -413,11 +427,13 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 		printGitSinceBaseline(w, meta.Cwd, *meta.GitBaseline)
 	}
 
+	// The same read the tier decision was made from, so the block cannot
+	// describe one payload and print another.
 	resultDelivered := false
 	if mode != ModeStatusOnly {
 		fmt.Fprintln(w, "\n--- result.md ---")
-		if data, err := os.ReadFile(resultPath); err == nil {
-			fmt.Fprintln(w, string(data))
+		if resultErr == nil {
+			fmt.Fprintln(w, string(resultBody))
 			resultDelivered = true
 		} else {
 			fmt.Fprintln(w, "(no result.md yet)")
