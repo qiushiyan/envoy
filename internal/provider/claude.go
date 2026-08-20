@@ -479,7 +479,7 @@ func claudeTranscript(sessionID string, since time.Time) *transcriptResult {
 
 	var records []map[string]any
 	result := &transcriptResult{}
-	for _, raw := range strings.Split(text, "\n") {
+	for raw := range strings.SplitSeq(text, "\n") {
 		if !strings.HasPrefix(strings.TrimSpace(raw), "{") {
 			continue
 		}

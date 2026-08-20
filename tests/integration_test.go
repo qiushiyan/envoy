@@ -816,7 +816,7 @@ func TestJobsListsThisProjectsCoordinates(t *testing.T) {
 
 	withLive := runEnvoy(t, e, "jobs", "--base", base)
 	mustContain(t, "jobs with a live turn", withLive.stdout, "[running] "+live+" · codex · started 7m ago")
-	for _, line := range strings.Split(withLive.stdout, "\n") {
+	for line := range strings.SplitSeq(withLive.stdout, "\n") {
 		if strings.Contains(line, live) && (strings.Contains(line, "owed") || strings.Contains(line, "collected")) {
 			t.Fatalf("a running turn owes nothing yet: %q", line)
 		}
@@ -916,7 +916,7 @@ func TestJobsReachesPastTheDisplayCap(t *testing.T) {
 	const displayCap, total = 20, 23
 	e := newEnv(t)
 	base := t.TempDir()
-	for i := 0; i < total; i++ {
+	for i := range total {
 		dir := filepath.Join(base, fmt.Sprintf("20260725-%06d-consult", i))
 		os.MkdirAll(dir, 0o755)
 		os.WriteFile(filepath.Join(dir, "prompt.md"), []byte("x"), 0o644)
@@ -1013,7 +1013,7 @@ func TestDefaultStorageIsCentralAndHidden(t *testing.T) {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
 	var outDir string
-	for _, line := range strings.Split(res.stdout, "\n") {
+	for line := range strings.SplitSeq(res.stdout, "\n") {
 		if after, ok := strings.CutPrefix(line, "out-dir: "); ok {
 			outDir = after
 			break

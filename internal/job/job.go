@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"uuid"
 
 	"github.com/qiushiyan/envoy/internal/gitx"
 	"github.com/qiushiyan/envoy/internal/text"
@@ -96,17 +97,8 @@ func RandomHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-// UUID4 returns a random RFC 4122 version-4 UUID string.
-func UUID4() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	h := hex.EncodeToString(b)
-	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
-}
+// UUID4 returns a random RFC 9562 version-4 UUID string.
+func UUID4() string { return uuid.NewV4().String() }
 
 // WriteFileAtomic replaces path by writing a sibling temp file and renaming it,
 // so a kill can never leave a half-written document.

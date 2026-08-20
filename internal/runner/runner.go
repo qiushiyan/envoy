@@ -295,10 +295,7 @@ func (r *run) execute(promptText string) Result {
 		heartbeatC = t.C
 	}
 	if !r.deadline.IsZero() {
-		poll := timeoutPoll
-		if poll < time.Millisecond {
-			poll = time.Millisecond
-		}
+		poll := max(timeoutPoll, time.Millisecond)
 		t := time.NewTicker(poll)
 		defer t.Stop()
 		timeoutC = t.C

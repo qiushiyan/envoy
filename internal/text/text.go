@@ -18,10 +18,7 @@ func ShellQuote(v string) string {
 func FormatDuration(d time.Duration) string {
 	ms := d.Milliseconds()
 	if ms < 90_000 {
-		s := ms / 1000
-		if s < 0 {
-			s = 0
-		}
+		s := max(ms/1000, 0)
 		return fmt.Sprintf("%ds", s)
 	}
 	totalMinutes := ms / 60_000

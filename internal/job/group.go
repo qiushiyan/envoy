@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/qiushiyan/envoy/internal/text"
@@ -42,10 +43,8 @@ func ExitCodeForGroup(codes []int) int {
 		return ExitPartial
 	}
 	for _, want := range groupExitPrecedence {
-		for _, c := range codes {
-			if c == want {
-				return want
-			}
+		if slices.Contains(codes, want) {
+			return want
 		}
 	}
 	return ExitInfra

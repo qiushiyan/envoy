@@ -7,6 +7,7 @@ package provider
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -143,10 +144,8 @@ func ValidateEffort(providerName, effort string) error {
 	if effort == "" {
 		return nil
 	}
-	for _, v := range valid {
-		if v == effort {
-			return nil
-		}
+	if slices.Contains(valid, effort) {
+		return nil
 	}
 	hint := ""
 	if providerName == "claude" && (effort == "none" || effort == "minimal") {
@@ -163,7 +162,7 @@ func EffortList(providerName string) []string { return efforts[providerName] }
 // stderrDetail condenses a stderr tail into the last three non-empty lines.
 func stderrDetail(tail string) string {
 	var lines []string
-	for _, l := range strings.Split(strings.TrimSpace(tail), "\n") {
+	for l := range strings.SplitSeq(strings.TrimSpace(tail), "\n") {
 		if strings.TrimSpace(l) != "" {
 			lines = append(lines, l)
 		}
