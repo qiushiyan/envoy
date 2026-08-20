@@ -196,3 +196,23 @@ will look anyway.
   before it is worth an architecture** — splitting the target, race-building
   only the concurrency tests, and `t.Parallel()` were all considered, and all
   trade coverage or determinism for what was one env var.
+- **2026-08-03 — the mid-turn codex stall is codex's, and the rollout proves
+  it.** A headroom consult round 2 accepted its prompt, streamed 7 events in
+  14s, then sat silent for 23 minutes with the process alive until the caller
+  SIGTERMed it and finished the round by hand in interactive `codex resume` —
+  raising the question of whether envoy's stdin/pipe mechanics had wedged the
+  turn. The arbiter is codex's own rollout file, which writes independently of
+  envoy's pipes: it shows the delivered prompt, the same last reasoning item,
+  one lone `token_count` 15 minutes into the silence (348 output tokens for the
+  hung response; rate limits at 7%), and nothing else — the client stalled
+  mid-turn between API responses, and the manual resume of the same session
+  proceeded instantly, so session state was undamaged. Not a one-off: of all
+  store jobs started since 2026-07-25, six codex turns (no claude turns) ended
+  more than 2 minutes after their last provider output, and a second rollout
+  read showed the identical signature — a reasoning item, then nothing for 50
+  minutes. Codex-cli 0.144.x client/stream defect; nothing to fix in the
+  engine, and the incident validates two paid-for positions: the progress line's
+  `last_provider_activity` climbing against a frozen event count is what let the
+  caller see the stall, and recovery's `accepted → resume` was exactly the
+  action that worked. **When a codex turn goes quiet, read the rollout before
+  suspecting the harness — it is the one channel envoy cannot block.**
