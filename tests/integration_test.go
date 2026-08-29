@@ -1974,14 +1974,15 @@ func TestCoordinateFileMirrorsTheStartupBlock(t *testing.T) {
 	if err := os.WriteFile(bad, []byte("file"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	refused := runEnvoy(t, e, turnArgs(prompt, filepath.Join(t.TempDir(), "never"), "--provider", "codex",
+	refusedOutDir := filepath.Join(t.TempDir(), "never")
+	refused := runEnvoy(t, e, turnArgs(prompt, refusedOutDir, "--provider", "codex",
 		"--coordinate-file", filepath.Join(bad, "x.coords"))...)
 	if refused.code != 3 {
 		t.Fatalf("unwritable coordinate path: exit = %d, want 3\nstderr:\n%s", refused.code, refused.stderr)
 	}
 	mustContain(t, "refusal", refused.stderr, "--coordinate-file", "nothing was dispatched")
-	if _, err := os.Stat(filepath.Join(t.TempDir(), "never")); err == nil {
-		t.Fatalf("no job dir may exist after a refused dispatch")
+	if _, err := os.Stat(refusedOutDir); err == nil {
+		t.Fatalf("no job dir may exist after a refused dispatch: %s", refusedOutDir)
 	}
 }
 
