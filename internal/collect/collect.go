@@ -371,7 +371,7 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 		if meta.ResultKind != "" {
 			fmt.Fprintf(w, "result kind: %s\n", meta.ResultKind)
 		}
-		if line := prose.ProviderStream(connectionErrors(meta)); line != "" {
+		if line := prose.ProviderStream(meta.ConnectionErrors); line != "" {
 			fmt.Fprintln(w, line)
 		}
 		if meta.Status == job.StatusRunning && meta.WatchCommand != "" {
@@ -733,20 +733,4 @@ func Pending(base string, baseWasDerived bool, w, errW io.Writer) int {
 		}
 	}
 	return 0
-}
-
-// connectionErrors lifts meta's tally into prose's vocabulary; nil stays nil
-// so an older meta prints no line rather than a false zero.
-func connectionErrors(meta *job.Meta) *prose.ConnectionErrors {
-	if meta.ConnectionErrors == nil {
-		return nil
-	}
-	ce := &prose.ConnectionErrors{Count: meta.ConnectionErrors.Count}
-	if meta.ConnectionErrors.FirstAt != nil {
-		ce.FirstAt = *meta.ConnectionErrors.FirstAt
-	}
-	if meta.ConnectionErrors.LastAt != nil {
-		ce.LastAt = *meta.ConnectionErrors.LastAt
-	}
-	return ce
 }

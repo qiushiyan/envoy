@@ -142,7 +142,7 @@ func (c *codex) Feed(line string) []Event {
 		if m := str(event, "message"); m != "" {
 			c.lastErrorText = job.Ptr(m)
 			if isConnectionError(m) {
-				events = append(events, Event{Kind: KindConnectionError, Message: m})
+				events = append(events, Event{Kind: KindConnectionError})
 			}
 		}
 	}
@@ -237,6 +237,8 @@ func (c *codex) Conclude(exit ExitInfo) Outcome {
 	}
 	return out
 }
+
+func (c *codex) ObservesConnectionErrors() bool { return true }
 
 func (c *codex) Takeover() string {
 	if c.sessionID == "" {

@@ -1966,4 +1966,38 @@ func TestCoordinateFileMirrorsTheStartupBlock(t *testing.T) {
 		t.Fatalf("fan coordinate file must be the exact head of stdout\nfile:\n%s\nstdout:\n%s", fblock, fres.stdout)
 	}
 	mustContain(t, "fan coordinate file", fblock, "out-dir: "+fanDir, "fan-out: 2 turns", "member codex:", "member claude:")
+
+	// An unwritable handoff path is refused before anything spawns: the caller
+	// is about to block on that file, so a warning after launch would leave it
+	// waiting on a job that is already running.
+	bad := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(bad, []byte("file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	refused := runEnvoy(t, e, turnArgs(prompt, filepath.Join(t.TempDir(), "never"), "--provider", "codex",
+		"--coordinate-file", filepath.Join(bad, "x.coords"))...)
+	if refused.code != 3 {
+		t.Fatalf("unwritable coordinate path: exit = %d, want 3\nstderr:\n%s", refused.code, refused.stderr)
+	}
+	mustContain(t, "refusal", refused.stderr, "--coordinate-file", "nothing was dispatched")
+	if _, err := os.Stat(filepath.Join(t.TempDir(), "never")); err == nil {
+		t.Fatalf("no job dir may exist after a refused dispatch")
+	}
+}
+
+// A driver that does not observe connection errors gets no tally: a claude
+// block prints no provider-stream line, so a zero can never claim a link held
+// that nothing watched.
+func TestClaudeBlockCarriesNoConnectionTally(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	outDir := filepath.Join(t.TempDir(), "job")
+	prompt := writePrompt(t, t.TempDir())
+	if res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "claude", "--model", "opus", "--timeout-min", "5")...); res.code != 0 {
+		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	if v, has := readMeta(t, outDir)["connectionErrors"]; !has || v != nil {
+		t.Fatalf("claude meta must record connectionErrors: null, got %v (present %v)", v, has)
+	}
+	status := runEnvoy(t, e, "collect", "--status-only", outDir)
+	mustNotContain(t, "claude status block", status.stdout, "provider stream:")
 }

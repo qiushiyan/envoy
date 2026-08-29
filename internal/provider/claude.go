@@ -283,6 +283,10 @@ func (c *claude) Conclude(exit ExitInfo) Outcome {
 	}
 }
 
+// ObservesConnectionErrors: claude's network failures arrive as the result
+// envelope's own error text, and no classification of them has been built.
+func (c *claude) ObservesConnectionErrors() bool { return false }
+
 func (c *claude) Takeover() string {
 	if c.sessionID == "" {
 		return ""

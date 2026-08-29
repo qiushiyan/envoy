@@ -11,6 +11,7 @@ import (
 	"github.com/qiushiyan/envoy/internal/gitx"
 	"github.com/qiushiyan/envoy/internal/job"
 	"github.com/qiushiyan/envoy/internal/prose"
+	"github.com/qiushiyan/envoy/internal/provider"
 	"github.com/qiushiyan/envoy/internal/text"
 )
 
@@ -33,7 +34,7 @@ func (r *run) initMeta() {
 	r.argv = r.driver.Argv()
 	r.meta = &job.Meta{
 		SchemaVersion:    job.MetaSchemaVersion,
-		ConnectionErrors: &job.ConnectionErrors{}, // zero is an observation; nil would mean "never looked"
+		ConnectionErrors: connectionTally(r.driver),
 		Status:           job.StatusRunning,
 		Provider:         r.opts.Provider,
 		Model:            ptrIfNonEmpty(r.opts.Turn.Model),
@@ -214,4 +215,14 @@ func (r *run) finish(f finishArgs) {
 
 func elapsed(since time.Time) string {
 	return text.FormatDuration(time.Since(since))
+}
+
+// connectionTally starts the connection-error tally only for a driver that
+// recognizes such events: for it, zero is an observation; for any other, a
+// zero would claim a link held that nothing watched, so the field stays nil.
+func connectionTally(d provider.Driver) *job.ConnectionErrors {
+	if d != nil && d.ObservesConnectionErrors() {
+		return &job.ConnectionErrors{}
+	}
+	return nil
 }

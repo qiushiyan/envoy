@@ -98,9 +98,10 @@ type CapStream struct {
 // events, as a diagnostic line beside the block — never inside the timeout
 // gloss, because status and recovery follow from terminal and prompt evidence
 // alone. It reports and stops: "connection-error events" is what the provider
-// said, and "offline" would be the engine's inference. nil (an older engine
-// never counted) prints nothing; zero is a real observation and prints.
-func ProviderStream(ce *ConnectionErrors) string {
+// said, and "offline" would be the engine's inference. nil (the driver does
+// not observe them, or an older engine never counted) prints nothing; zero is
+// a real observation and prints.
+func ProviderStream(ce *job.ConnectionErrors) string {
 	if ce == nil {
 		return ""
 	}
@@ -108,18 +109,10 @@ func ProviderStream(ce *ConnectionErrors) string {
 		return "provider stream: no connection-error events recognized by this engine version"
 	}
 	line := fmt.Sprintf("provider stream: %d recognized connection-error event%s", ce.Count, plural(ce.Count))
-	if ce.FirstAt != "" && ce.LastAt != "" {
-		line += fmt.Sprintf("; first observed %s, last observed %s", clockOf(ce.FirstAt), clockOf(ce.LastAt))
+	if ce.FirstAt != nil && ce.LastAt != nil {
+		line += fmt.Sprintf("; first observed %s, last observed %s", clockOf(*ce.FirstAt), clockOf(*ce.LastAt))
 	}
 	return line
-}
-
-// ConnectionErrors is the observation ProviderStream words; timestamps are
-// RFC 3339 as meta.json records them.
-type ConnectionErrors struct {
-	Count   int64
-	FirstAt string
-	LastAt  string
 }
 
 func plural(n int64) string {
@@ -422,55 +415,69 @@ func ResumeFromNoTurn(flag, dir string, cause error) string {
 }
 
 // FanMemberCandidate is one member of the fan-out a job-dir flag was aimed
-// at: the coordinate the caller can name instead of the group, or the
-// observation that blocks it (Blocked is "" when the member may continue).
+// at: the coordinate the caller can name instead of the group, with the
+// eligibility observation still structured — Blocked, and the kind and
+// detail that word it — so rendering happens here, once.
 type FanMemberCandidate struct {
 	Name    string
 	Dir     string
-	Blocked string
+	Blocked bool
+	Kind    ResumeBlockerKind
+	Detail  string
 }
 
-// ResumeFromIsFanOut redirects a job-dir flag aimed at a fan-out directory: a
-// group holds several conversations, so the caller names one member or — on
-// a round — the set. The two flags want different next actions, so each gets
-// its own: --with-from continues one member beside cold ones and is handed
-// copy-ready member flags, never the whole-set round (that continues every
-// member and starts nobody cold); --resume-from on a turn is handed the
-// round first and the per-member turn commands after. Only members the
-// shared eligibility check clears are offered as commands; the rest print
-// their blocker, so nothing here advertises what dispatch would refuse.
-// roundCmd is the runnable set-level round, "" when the manifest is unreadable.
-func ResumeFromIsFanOut(flag, dir string, members []FanMemberCandidate, roundCmd string) string {
-	head := fmt.Sprintf("%s %s: this is a fan-out, and its members hold their own sessions.", flag, dir)
-	var offered, blocked []string
+// fanOutRedirectHead opens both refusals for a job-dir flag aimed at a group.
+func fanOutRedirectHead(flag, dir string) string {
+	return fmt.Sprintf("%s %s: this is a fan-out, and its members hold their own sessions.", flag, dir)
+}
+
+// fanOutOffers splits the roster into the members offered (rendered by
+// offer) and the blockers, worded once in the shared vocabulary.
+func fanOutOffers(members []FanMemberCandidate, offer func(FanMemberCandidate) string) (offered, blocked []string) {
 	for _, m := range members {
-		if m.Blocked != "" {
-			blocked = append(blocked, "  "+m.Blocked)
+		if m.Blocked {
+			blocked = append(blocked, "  "+FanResumeBlockerLine(m.Name, m.Kind, m.Detail))
 			continue
 		}
-		if flag == "--with-from" {
-			offered = append(offered, fmt.Sprintf("  --with-from %s  (%s)", text.ShellQuote(m.Dir), m.Name))
-		} else {
-			offered = append(offered, fmt.Sprintf("  %s  (%s)", TurnResumeFromCommand(m.Dir), m.Name))
-		}
+		offered = append(offered, "  "+offer(m))
 	}
+	return offered, blocked
+}
+
+// WithFromIsFanOut refuses fan --with-from aimed at a group: that flag seats
+// one continued member beside cold ones, so it is handed copy-ready member
+// flags for the eligible members and the whole-set round only as an aside —
+// a round continues every member and starts nobody cold. roundCmd is "" when
+// the manifest is unreadable.
+func WithFromIsFanOut(dir string, members []FanMemberCandidate, roundCmd string) string {
+	offered, blocked := fanOutOffers(members, func(m FanMemberCandidate) string {
+		return fmt.Sprintf("--with-from %s  (%s)", text.ShellQuote(m.Dir), m.Name)
+	})
 	var b strings.Builder
-	b.WriteString(head)
-	if flag == "--with-from" {
-		if len(offered) > 0 {
-			b.WriteString(" Continue one member's session beside cold members by naming its directory:\n")
-			b.WriteString(strings.Join(offered, "\n"))
-		} else {
-			b.WriteString(" Name one member's directory to continue that session beside cold members.")
-		}
-		if len(blocked) > 0 {
-			b.WriteString("\nNot continuable:\n" + strings.Join(blocked, "\n"))
-		}
-		if roundCmd != "" {
-			b.WriteString("\n(To continue every member as one round, with no cold member: " + roundCmd + ")")
-		}
-		return b.String()
+	b.WriteString(fanOutRedirectHead("--with-from", dir))
+	if len(offered) > 0 {
+		b.WriteString(" Continue one member's session beside cold members by naming its directory:\n" + strings.Join(offered, "\n"))
+	} else {
+		b.WriteString(" Name one member's directory to continue that session beside cold members.")
 	}
+	if len(blocked) > 0 {
+		b.WriteString("\nNot continuable:\n" + strings.Join(blocked, "\n"))
+	}
+	if roundCmd != "" {
+		b.WriteString("\n(To continue every member as one round, with no cold member: " + roundCmd + ")")
+	}
+	return b.String()
+}
+
+// ResumeFromIsFanOut refuses turn --resume-from aimed at a group: the round
+// that continues the whole set comes first, then each eligible member's own
+// turn command. roundCmd is "" when the manifest is unreadable.
+func ResumeFromIsFanOut(dir string, members []FanMemberCandidate, roundCmd string) string {
+	offered, blocked := fanOutOffers(members, func(m FanMemberCandidate) string {
+		return fmt.Sprintf("%s  (%s)", TurnResumeFromCommand(m.Dir), m.Name)
+	})
+	var b strings.Builder
+	b.WriteString(fanOutRedirectHead("--resume-from", dir))
 	if roundCmd != "" {
 		b.WriteString(" Continue every member as one round:\n  " + roundCmd)
 	}

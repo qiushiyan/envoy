@@ -61,7 +61,6 @@ type Event struct {
 	State     string   // KindNote: progress state name
 	Fields    []job.KV // KindNote
 	Model     string   // KindModelReported
-	Message   string   // KindConnectionError: the provider's own message
 }
 
 // Evidence is what a driver can prove about an abnormally ended turn.
@@ -120,6 +119,11 @@ type Driver interface {
 	// Takeover is the provider's own command for continuing this session
 	// interactively, once the turn is terminal.
 	Takeover() string
+	// ObservesConnectionErrors reports whether this driver recognizes its
+	// provider's connection-error events at all. A driver that does not is
+	// never given a tally — a zero it could not have counted would read as
+	// "the link held".
+	ObservesConnectionErrors() bool
 }
 
 // New constructs the named provider's driver.

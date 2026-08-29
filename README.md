@@ -27,10 +27,12 @@ envoy pending [--base DIR]    # discovery-only recovery index after a missed not
 envoy version
 ```
 
-`envoy turn` prints a startup coordinate block (out-dir, watch command,
-session, takeover) — and lands the same block at `--coordinate-file` for a
-caller whose background task hides stdout — runs the provider to terminal
-state, then prints a terminal block. Its stdout is written for the agent driving it: every status
+`envoy turn` prints a startup coordinate block (out-dir, watch command, and —
+when the session id is known before spawn — session and takeover), lands the
+same block at `--coordinate-file` for a caller whose background task hides
+stdout, runs the provider to terminal state, then prints a terminal block. A
+fresh codex thread learns its session id mid-stream, so that line follows on
+stdout and in `meta.json`, not in the coordinate file. Its stdout is written for the agent driving it: every status
 carries what it rules out, and every failure ends in one runnable next
 command. `envoy collect` follows the same economy — a turn that reports ok and
 whose result reads prints its payload and the commands to continue it, while a

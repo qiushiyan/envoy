@@ -192,6 +192,10 @@ func Turn(req TurnRequest) int {
 	if outDir != "" {
 		outDir = absOrSelf(outDir)
 	}
+	coordinate, err := prepareCoordinateFile(req.CoordinateFile)
+	if err != nil {
+		return usageError(stderr, "%s", err)
+	}
 	return runner.Run(runner.Options{
 		Provider:       req.Provider,
 		PromptFile:     req.PromptFile,
@@ -200,7 +204,7 @@ func Turn(req TurnRequest) int {
 		Label:          req.Label,
 		OutDir:         outDir,
 		ResumedFrom:    resumedFrom,
-		CoordinateFile: coordinateFile(req.CoordinateFile),
+		CoordinateFile: coordinate,
 		Turn: provider.Options{
 			Model:        req.Model,
 			Effort:       req.Effort,
@@ -382,6 +386,10 @@ func Fan(req FanRequest) int {
 	if outDir != "" {
 		outDir = absOrSelf(outDir)
 	}
+	coordinate, err := prepareCoordinateFile(req.CoordinateFile)
+	if err != nil {
+		return usageError(stderr, "%s", err)
+	}
 	return fan.Run(fan.Options{
 		Members:        members,
 		PromptFile:     req.PromptFile,
@@ -391,7 +399,7 @@ func Fan(req FanRequest) int {
 		OutDir:         outDir,
 		ResumedFrom:    resumedFrom,
 		TimeoutMin:     timeoutMin,
-		CoordinateFile: coordinateFile(req.CoordinateFile),
+		CoordinateFile: coordinate,
 		Stdout:         stdout,
 		Stderr:         stderr,
 	})
@@ -408,19 +416,22 @@ func resumableTurn(flag, dir string) (*collect.ResumableTurn, string) {
 		var candidates []prose.FanMemberCandidate
 		if state, err := collect.InspectFanResume(dir); err == nil {
 			round = prose.FanResumeCommand(dir, state.Group.TimeoutMin)
-			// Offer members in roster order, each through the one eligibility
+			// Members in roster order, each through the one eligibility
 			// definition, so the refusal never names a member dispatch refuses.
 			for _, m := range state.Group.Members {
 				c := prose.FanMemberCandidate{Name: m.Name, Dir: m.OutDir}
 				for _, b := range state.Blockers {
 					if b.Member == m.Name {
-						c.Blocked = prose.FanResumeBlockerLine(b.Member, b.Kind, b.Detail)
+						c.Blocked, c.Kind, c.Detail = true, b.Kind, b.Detail
 					}
 				}
 				candidates = append(candidates, c)
 			}
 		}
-		return nil, prose.ResumeFromIsFanOut(flag, dir, candidates, round)
+		if flag == "--with-from" {
+			return nil, prose.WithFromIsFanOut(dir, candidates, round)
+		}
+		return nil, prose.ResumeFromIsFanOut(dir, candidates, round)
 	}
 	source, blocker, err := collect.InspectTurnResume(dir)
 	if err != nil {
@@ -639,10 +650,17 @@ func absOrSelf(p string) string {
 	return abs
 }
 
-// coordinateFile resolves the caller's coordinate-file path; "" stays "".
-func coordinateFile(path string) string {
+// prepareCoordinateFile proves the caller's coordinate path writable before
+// anything spawns — a handoff the caller is about to block on must not fail
+// after the provider is already running — by landing an empty file there
+// (the caller waits for a non-empty one). "" stays "".
+func prepareCoordinateFile(path string) (string, error) {
 	if path == "" {
-		return ""
+		return "", nil
 	}
-	return absOrSelf(path)
+	path = absOrSelf(path)
+	if err := job.WriteCoordinateFile(path, nil); err != nil {
+		return "", fmt.Errorf("--coordinate-file %s: cannot write there (%s); nothing was dispatched", path, err)
+	}
+	return path, nil
 }
