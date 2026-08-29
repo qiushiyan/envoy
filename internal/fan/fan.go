@@ -56,8 +56,11 @@ type Options struct {
 	OutDir      string // "" = derive from cwd/label
 	ResumedFrom string // "" = a fresh fan-out; else the fan-out whose sessions this one continues
 	TimeoutMin  float64
-	Stdout      io.Writer
-	Stderr      io.Writer
+	// CoordinateFile, when set, receives the exact dispatch block that stdout
+	// prints, written atomically before any member spawns.
+	CoordinateFile string
+	Stdout         io.Writer
+	Stderr         io.Writer
 }
 
 // outcome is one member's terminal state as the group reports it.
@@ -250,7 +253,8 @@ func releaseAll(handles []*lock.Handle) {
 }
 
 func printDispatchBlock(opts Options, gw job.GroupWorkspace, members []job.GroupMember) {
-	w := opts.Stdout
+	var block bytes.Buffer
+	w := &block
 	fmt.Fprintf(w, "out-dir: %s\n", gw.Dir)
 	fmt.Fprintf(w, "fan-out: %d turns · one prompt · hard cap %s each\n", len(members), text.HardCap(opts.TimeoutMin))
 	if opts.ResumedFrom != "" {
@@ -273,6 +277,12 @@ func printDispatchBlock(opts Options, gw job.GroupWorkspace, members []job.Group
 	}
 	fmt.Fprintf(w, "watch: %s\n", gw.WatchCommand(members))
 	fmt.Fprintf(w, "next: %s\n", prose.FanDispatchNext(gw.Dir))
+	opts.Stdout.Write(block.Bytes())
+	if opts.CoordinateFile != "" {
+		if err := job.WriteCoordinateFile(opts.CoordinateFile, block.Bytes()); err != nil {
+			fmt.Fprintf(opts.Stderr, "coordinate file warning: %s\n", err)
+		}
+	}
 }
 
 func printTerminalBlock(opts Options, dir string, outcomes []outcome, statuses []string) {

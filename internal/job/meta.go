@@ -7,6 +7,14 @@ import (
 
 // Tokens carries provider usage in whichever fields the provider reports.
 // Field order fixes the display order in collect.
+// ConnectionErrors is the observed tally of a provider's connection-error
+// events: how many, and when the first and last arrived.
+type ConnectionErrors struct {
+	Count   int64   `json:"count"`
+	FirstAt *string `json:"firstAt"`
+	LastAt  *string `json:"lastAt"`
+}
+
 type Tokens struct {
 	Input           *int64 `json:"input,omitempty"`
 	CacheRead       *int64 `json:"cacheRead,omitempty"`
@@ -86,18 +94,22 @@ type Meta struct {
 	LastProviderActivityAt    *string  `json:"lastProviderActivityAt"`
 	LastProviderEventType     *string  `json:"lastProviderEventType"`
 	ProviderReportedModel     *string  `json:"providerReportedModel"` // the provider's own announcement; never inferred
-	Tokens                    *Tokens  `json:"tokens"`
-	CostUSD                   *float64 `json:"costUsd"`
-	Error                     *string  `json:"error"`
-	ResultKind                string   `json:"resultKind"`
-	NextAction                string   `json:"nextAction"`
-	RecoveryAction            *string  `json:"recoveryAction"`
-	CollectedAt               *string  `json:"collectedAt"`
-	ReconciledAt              *string  `json:"reconciledAt,omitempty"`
+	// ConnectionErrors counts the provider's own connection-error events over
+	// the turn. Non-nil from schema 7 on (a zero count is a real observation);
+	// nil means an older engine wrote this meta and never looked.
+	ConnectionErrors *ConnectionErrors `json:"connectionErrors"`
+	Tokens           *Tokens           `json:"tokens"`
+	CostUSD          *float64          `json:"costUsd"`
+	Error            *string           `json:"error"`
+	ResultKind       string            `json:"resultKind"`
+	NextAction       string            `json:"nextAction"`
+	RecoveryAction   *string           `json:"recoveryAction"`
+	CollectedAt      *string           `json:"collectedAt"`
+	ReconciledAt     *string           `json:"reconciledAt,omitempty"`
 }
 
 // SchemaVersion for meta.json written by this engine.
-const MetaSchemaVersion = 6
+const MetaSchemaVersion = 7
 
 // Marshal renders the canonical on-disk form.
 func (m *Meta) Marshal() ([]byte, error) {

@@ -274,3 +274,47 @@ func TestCodexNoResultUsesStderrTail(t *testing.T) {
 		t.Fatalf("prompt state = %s", out.PromptState)
 	}
 }
+
+// A transient `error` event is an observation, not a verdict: codex emits
+// one per reconnect attempt and carries on, and a turn that then completes is
+// a success. Only turn.failed fails a turn. (A real job once recorded
+// `failed` over a full result because the reconnect messages overwrote the
+// error text — EVIDENCE.md 2026-08-28.)
+func TestCodexTransientErrorDoesNotOverrideCompletion(t *testing.T) {
+	ws := job.Workspace{Dir: t.TempDir()}
+	c := newCodex(Options{TimeoutMin: 30}, ws)
+	c.Feed(`{"type":"thread.started","thread_id":"tid-4"}`)
+	events := c.Feed(`{"type":"error","message":"Reconnecting... waiting for network (Connection failed: error sending request)"}`)
+	var conn int
+	for _, e := range events {
+		if e.Kind == KindConnectionError {
+			conn++
+		}
+	}
+	if conn != 1 {
+		t.Fatalf("a reconnect message must surface as one connection-error observation, got %+v", events)
+	}
+	if events := c.Feed(`{"type":"error","message":"some other transient thing"}`); len(events) != 1 || events[0].Kind != KindActivity {
+		t.Fatalf("an unrecognized error is activity only, got %+v", events)
+	}
+	c.Feed(`{"type":"item.completed","item":{"type":"agent_message","text":"the answer"}}`)
+	c.Feed(`{"type":"turn.completed","usage":{"input_tokens":1}}`)
+
+	out := c.Conclude(ExitInfo{Code: job.Ptr(0)})
+	if out.Status != job.StatusOK || out.Text != "the answer" {
+		t.Fatalf("turn.completed with a result must win over earlier transient errors, got %+v", out)
+	}
+}
+
+// With no verdict and no result, the last transient error is detail on the
+// infra outcome — the caller reads what the provider last said.
+func TestCodexTransientErrorIsDetailWithoutResult(t *testing.T) {
+	ws := job.Workspace{Dir: t.TempDir()}
+	c := newCodex(Options{TimeoutMin: 30}, ws)
+	c.Feed(`{"type":"thread.started","thread_id":"tid-5"}`)
+	c.Feed(`{"type":"error","message":"Reconnecting... 5/5 (stream disconnected before completion)"}`)
+	out := c.Conclude(ExitInfo{Code: job.Ptr(1), StderrTail: "tail"})
+	if out.Status != job.StatusInfra || !strings.Contains(out.ErrorText, "stream disconnected") {
+		t.Fatalf("outcome = %+v", out)
+	}
+}

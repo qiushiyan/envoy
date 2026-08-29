@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,6 +33,7 @@ func (r *run) initMeta() {
 	r.argv = r.driver.Argv()
 	r.meta = &job.Meta{
 		SchemaVersion:    job.MetaSchemaVersion,
+		ConnectionErrors: &job.ConnectionErrors{}, // zero is an observation; nil would mean "never looked"
 		Status:           job.StatusRunning,
 		Provider:         r.opts.Provider,
 		Model:            ptrIfNonEmpty(r.opts.Turn.Model),
@@ -72,7 +74,8 @@ func (r *run) writeMeta(mutate func(*job.Meta)) {
 }
 
 func (r *run) printStartupBlock() {
-	w := r.opts.Stdout
+	var block bytes.Buffer
+	w := &block
 	display := func(v string) string {
 		if v == "" {
 			return "(provider default)"
@@ -96,6 +99,12 @@ func (r *run) printStartupBlock() {
 		fmt.Fprintf(w, "takeover-after-terminal: %s\n", r.driver.Takeover())
 	}
 	fmt.Fprintf(w, "next: %s\n", prose.DispatchNext(r.ws.Dir))
+	r.opts.Stdout.Write(block.Bytes())
+	if r.opts.CoordinateFile != "" {
+		if err := job.WriteCoordinateFile(r.opts.CoordinateFile, block.Bytes()); err != nil {
+			fmt.Fprintf(r.opts.Stderr, "coordinate file warning: %s\n", err)
+		}
+	}
 }
 
 type finishArgs struct {

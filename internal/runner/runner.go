@@ -67,8 +67,11 @@ type Options struct {
 	// so a held session refuses the whole round instead of one member. The
 	// runner takes ownership and releases it however the turn ends.
 	SessionLock *lock.Handle
-	Stdout      io.Writer
-	Stderr      io.Writer
+	// CoordinateFile, when set, receives the exact startup block that stdout
+	// prints, written atomically before the provider spawns.
+	CoordinateFile string
+	Stdout         io.Writer
+	Stderr         io.Writer
 }
 
 type termination struct {
@@ -443,6 +446,22 @@ func (r *run) noteOutput(n int) {
 	r.meta.LastProviderOutputAt = job.Ptr(job.ISO(time.Now()))
 }
 
+// noteConnectionError tallies one provider connection-error event. Recorded
+// only; the cap, the heartbeat and the recovery prescription all ignore it.
+func (r *run) noteConnectionError() {
+	now := job.ISO(time.Now())
+	if r.meta.ConnectionErrors == nil {
+		r.meta.ConnectionErrors = &job.ConnectionErrors{}
+	}
+	ce := r.meta.ConnectionErrors
+	ce.Count++
+	if ce.FirstAt == nil {
+		ce.FirstAt = job.Ptr(now)
+	}
+	ce.LastAt = job.Ptr(now)
+	r.progress.Append("provider-connection-error", job.KV{K: "count", V: fmt.Sprint(ce.Count)})
+}
+
 // handleEvents applies a driver's semantic events. A session-lock conflict
 // drops the remaining events of that batch (the acceptance that would have
 // followed the session id is recorded as a conflict instead), but later
@@ -461,6 +480,8 @@ func (r *run) handleEvents(events []provider.Event) {
 			// an observation, never inferred.
 			model := ev.Model
 			r.writeMeta(func(m *job.Meta) { m.ProviderReportedModel = job.Ptr(model) })
+		case provider.KindConnectionError:
+			r.noteConnectionError()
 		case provider.KindAccepted:
 			r.markPromptAccepted(ev.Evidence)
 		case provider.KindTerminal:

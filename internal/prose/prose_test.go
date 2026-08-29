@@ -250,11 +250,29 @@ func TestResumeFromVocabulary(t *testing.T) {
 		}
 	}
 
-	fanned := ResumeFromIsFanOut("--resume-from", "/jobs/fan", "envoy fan --resume-from '/jobs/fan' --timeout-min 30 --prompt-file <your-follow-up.md>")
-	for _, want := range []string{"this is a fan-out", "envoy fan --resume-from '/jobs/fan'", "one member's directory"} {
+	members := []FanMemberCandidate{
+		{Name: "codex", Dir: "/jobs/fan/codex"},
+		{Name: "claude-opus", Dir: "/jobs/fan/claude-opus", Blocked: "member claude-opus is still running"},
+	}
+	round := "envoy fan --resume-from '/jobs/fan' --timeout-min 30 --prompt-file <your-follow-up.md>"
+	fanned := ResumeFromIsFanOut("--resume-from", "/jobs/fan", members, round)
+	for _, want := range []string{"this is a fan-out", "envoy fan --resume-from '/jobs/fan'", "one member's directory",
+		"envoy turn --resume-from '/jobs/fan/codex'", "member claude-opus is still running"} {
 		if !strings.Contains(fanned, want) {
 			t.Fatalf("fan redirect %q is missing %q", fanned, want)
 		}
+	}
+	// --with-from seats one voice warm: copy-ready member flags, the eligible
+	// member only, and the whole-set round demoted to a parenthetical — it
+	// continues every member warm and starts no cold member.
+	warm := ResumeFromIsFanOut("--with-from", "/jobs/fan", members, round)
+	for _, want := range []string{"--with-from '/jobs/fan/codex'  (codex)", "member claude-opus is still running", "no cold member"} {
+		if !strings.Contains(warm, want) {
+			t.Fatalf("with-from redirect %q is missing %q", warm, want)
+		}
+	}
+	if strings.Contains(warm, "--with-from '/jobs/fan/claude-opus'") || strings.Index(warm, "--with-from '/jobs/fan/codex'") > strings.Index(warm, round) {
+		t.Fatalf("with-from redirect must offer only eligible members, before the round: %q", warm)
 	}
 
 	single := FanSingleWithFrom("/jobs/consult")

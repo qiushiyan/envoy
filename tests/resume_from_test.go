@@ -113,7 +113,7 @@ func TestTurnResumeFromRefusals(t *testing.T) {
 		{[]string{"turn", "--resume-from", filepath.Join(t.TempDir(), "nowhere"), "--prompt-file", prompt},
 			[]string{"no turn found there"}},
 		{[]string{"turn", "--resume-from", fanDir, "--prompt-file", prompt},
-			[]string{"this is a fan-out", "envoy fan --resume-from"}},
+			[]string{"this is a fan-out", "envoy fan --resume-from", "envoy turn --resume-from '" + filepath.Join(fanDir, "codex") + "'"}},
 		{[]string{"turn", "--resume-from", noSession, "--prompt-file", prompt},
 			[]string{"never published a session id", "envoy collect"}},
 	}
@@ -224,8 +224,11 @@ func TestFanWithFromRefusals(t *testing.T) {
 			[]string{"at least two members", "envoy turn --resume-from"}},
 		{[]string{"fan", "--with-from", r1, "--with-from", r1, "--prompt-file", prompt},
 			[]string{"same conversation twice"}},
+		// Aimed at the group, --with-from is handed the members it may seat
+		// warm, as copy-ready flags, and the whole-set round only as an aside.
 		{[]string{"fan", "--with-from", fanDir, "--with", "codex", "--prompt-file", prompt},
-			[]string{"this is a fan-out"}},
+			[]string{"this is a fan-out", "--with-from '" + filepath.Join(fanDir, "codex") + "'  (codex)",
+				"--with-from '" + filepath.Join(fanDir, "claude") + "'  (claude)", "no cold member"}},
 		// A lone --with-from that names no job must report that, not hand
 		// over a turn command that would only fail the same way.
 		{[]string{"fan", "--with-from", filepath.Join(t.TempDir(), "nowhere"), "--prompt-file", prompt},

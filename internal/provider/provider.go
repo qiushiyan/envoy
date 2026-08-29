@@ -45,6 +45,11 @@ const (
 	// this turn. An observation of the provider's own statement — the engine
 	// still never infers what an alias or an omitted --model means.
 	KindModelReported
+	// KindConnectionError: the provider's stream carried one of its own
+	// connection-error events (a reconnect attempt, a dropped stream). An
+	// observation the runner counts and stamps; the engine never acts on it
+	// and never concludes from it that the machine was offline.
+	KindConnectionError
 )
 
 type Event struct {
@@ -56,6 +61,7 @@ type Event struct {
 	State     string   // KindNote: progress state name
 	Fields    []job.KV // KindNote
 	Model     string   // KindModelReported
+	Message   string   // KindConnectionError: the provider's own message
 }
 
 // Evidence is what a driver can prove about an abnormally ended turn.

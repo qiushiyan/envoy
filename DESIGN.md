@@ -81,6 +81,25 @@ sandbox once broke the calling session's own tooling).
   the startup coordinate block; `watch:` is observation, never a completion
   or acceptance signal (a lesson paid for in a real incident — EVIDENCE.md,
   2026-07-11).
+- **The coordinate handoff is a file the caller names, not "the newest job".**
+  A harness that runs the dispatch in the background hides its stdout until
+  the process exits, and the log showed 159 of 221 caller sessions guessing
+  at the block with `sleep N; cat` (EVIDENCE.md, 2026-08-28). `--coordinate-file`
+  lands the exact startup block, atomically, before the provider spawns, at a
+  path only that dispatch uses. Reprinting the store's newest job was rejected:
+  `jobs` orders by name, the block prints before the first meta write, and a
+  second session in the same project can dispatch in between — a plausible
+  wrong out-dir is worse than an empty read. A `--detach` was rejected because
+  the process exiting is the completion signal.
+- **A provider's transient error is an observation; only its verdict fails a
+  turn.** codex emits a bare `error` event per reconnect attempt and then
+  carries on; a driver that let the last one stand as the outcome recorded
+  `failed` over a completed turn with a full result (EVIDENCE.md, 2026-08-28).
+  `turn.failed` is the verdict. The reconnect events themselves are tallied
+  (`connectionErrors` in meta, `provider stream:` in the diagnostic tier) and
+  worded as what the provider said — never "offline", which the engine cannot
+  know — and nothing acts on the tally: the cap does not pause, recovery still
+  follows prompt state alone.
 - **Recovery reasons from evidence, not silence.** Prompt state has three
   values with distinct actions: `accepted` → resume, never redispatch (work
   may exist); `not_started` → one identical retry is safe; `unknown` →

@@ -216,3 +216,34 @@ will look anyway.
   caller see the stall, and recovery's `accepted → resume` was exactly the
   action that worked. **When a codex turn goes quiet, read the rollout before
   suspecting the harness — it is the one channel envoy cannot block.**
+- **2026-08-28 — 221 caller sessions: the engine held, the handoff did not.**
+  An obelisk sweep of every host session that ran envoy (1,970 invocations;
+  926 jobs on disk, 96% ok; codex median 6.1m, p90 10.7m; first collect
+  landing within 2 minutes of `endedAt` in 495 of 513 joins) found the friction
+  almost entirely in the seam between the skills and the harness. **Coordinate
+  fetch:** the skills said "relay the coordinate block", the harness hides a
+  background task's stdout, so 159 sessions ran `sleep N; cat <task-output>`
+  359 times, 36% of them empty and retried with longer sleeps — the single
+  largest round-loser. Fixed by `--coordinate-file`; a codex consult rejected
+  `jobs --newest` for lacking dispatch correlation (same-project concurrent
+  dispatch, name-ordered listing, block printed before the first meta write).
+  **Warm-voice refusal:** review's default `fan --with-from <consult-out-dir>`
+  is refused when the consult was itself a fan-out (3 refusals, 20 sessions
+  that found `…/codex` themselves) and the refusal offered the whole-set
+  round, which seats no cold voice. Now flag-specific: `--with-from` gets
+  copy-ready member flags through the one eligibility check. **Two causes,
+  one envelope:** of 9 timeouts, 4 were the laptop leaving its network (the
+  provider still streaming until 1–17m before the cap, then `Reconnecting…`
+  events) and 5 were genuine stalls (2–3 events, silent for the whole cap).
+  The consult also found what the analysis missed: the codex driver let a
+  bare `error` event overwrite the outcome, so a turn that reconnected and
+  completed (exit 0, `turn.completed`, 9 KB result — 08-26 review-r3) was
+  recorded `failed`. Fixed: only `turn.failed` is a verdict; reconnects are a
+  tallied observation printed as `provider stream:`. **Collect bypass:** 14
+  direct `result.md` reads before any collect, driven by the harness
+  persisting outputs over ~30 KB — 87 of 260 fan-outs exceed that from member
+  results alone, so no baseline trimming can fix it; the skill line "collect
+  once, read afterwards" is the fix. **Rollout:** the installed binary was
+  from 08-02 against source from 08-20, both `0.4.0` — the stale-binary
+  incident's shape again; the version is now bumped with every contract
+  change and the skills edited only after `make install`.

@@ -25,7 +25,7 @@ import (
 )
 
 // Version of the engine, reported by `envoy version`.
-const Version = "0.4.0"
+const Version = "0.5.0"
 
 // Exit codes: 0 ok · 1 provider failure · 2 infra · 3 usage · 4 timeout ·
 // 5 interrupted · 6 partial (fan-out only).
@@ -67,6 +67,9 @@ type TurnRequest struct {
 	NoTimeout    bool    // explicitly disable the cap (leave TimeoutMin zero)
 	MaxBudgetUSD *float64
 	Label        string
+	// CoordinateFile receives the startup block a background dispatch's
+	// stdout cannot show the caller; "" writes none.
+	CoordinateFile string
 
 	Stdout io.Writer // coordinate blocks; defaults to os.Stdout
 	Stderr io.Writer // errors and warnings; defaults to os.Stderr
@@ -145,6 +148,10 @@ func Turn(req TurnRequest) int {
 		return usageError(stderr, "--provider <claude|codex> is required")
 	}
 	if req.Provider != "claude" && req.Provider != "codex" {
+		if p, model, ok := strings.Cut(req.Provider, ":"); ok && (p == "claude" || p == "codex") {
+			// The fan member spec, aimed at a turn: teach the turn's own flags.
+			return usageError(stderr, "--provider must be claude or codex, got '%s'; on a turn the model is its own flag: --provider %s --model %s", req.Provider, p, strings.SplitN(model, ":", 2)[0])
+		}
 		return usageError(stderr, "--provider must be claude or codex, got '%s'", req.Provider)
 	}
 	if req.PromptFile == "" {
@@ -186,13 +193,14 @@ func Turn(req TurnRequest) int {
 		outDir = absOrSelf(outDir)
 	}
 	return runner.Run(runner.Options{
-		Provider:    req.Provider,
-		PromptFile:  req.PromptFile,
-		Cwd:         cwd,
-		Baseline:    req.Baseline,
-		Label:       req.Label,
-		OutDir:      outDir,
-		ResumedFrom: resumedFrom,
+		Provider:       req.Provider,
+		PromptFile:     req.PromptFile,
+		Cwd:            cwd,
+		Baseline:       req.Baseline,
+		Label:          req.Label,
+		OutDir:         outDir,
+		ResumedFrom:    resumedFrom,
+		CoordinateFile: coordinateFile(req.CoordinateFile),
 		Turn: provider.Options{
 			Model:        req.Model,
 			Effort:       req.Effort,
@@ -233,6 +241,9 @@ type FanRequest struct {
 	TimeoutMin float64
 	NoTimeout  bool
 	Label      string
+	// CoordinateFile receives the dispatch block a background dispatch's
+	// stdout cannot show the caller; "" writes none.
+	CoordinateFile string
 
 	Stdout io.Writer
 	Stderr io.Writer
@@ -372,16 +383,17 @@ func Fan(req FanRequest) int {
 		outDir = absOrSelf(outDir)
 	}
 	return fan.Run(fan.Options{
-		Members:     members,
-		PromptFile:  req.PromptFile,
-		Cwd:         cwd,
-		Baseline:    req.Baseline,
-		Label:       req.Label,
-		OutDir:      outDir,
-		ResumedFrom: resumedFrom,
-		TimeoutMin:  timeoutMin,
-		Stdout:      stdout,
-		Stderr:      stderr,
+		Members:        members,
+		PromptFile:     req.PromptFile,
+		Cwd:            cwd,
+		Baseline:       req.Baseline,
+		Label:          req.Label,
+		OutDir:         outDir,
+		ResumedFrom:    resumedFrom,
+		TimeoutMin:     timeoutMin,
+		CoordinateFile: coordinateFile(req.CoordinateFile),
+		Stdout:         stdout,
+		Stderr:         stderr,
 	})
 }
 
@@ -393,10 +405,22 @@ func Fan(req FanRequest) int {
 func resumableTurn(flag, dir string) (*collect.ResumableTurn, string) {
 	if job.IsGroupDir(dir) {
 		round := ""
-		if group, err := job.ReadGroupFile(job.GroupWorkspace{Dir: dir}.GroupPath()); err == nil {
-			round = prose.FanResumeCommand(dir, group.TimeoutMin)
+		var candidates []prose.FanMemberCandidate
+		if state, err := collect.InspectFanResume(dir); err == nil {
+			round = prose.FanResumeCommand(dir, state.Group.TimeoutMin)
+			// Offer members in roster order, each through the one eligibility
+			// definition, so the refusal never names a member dispatch refuses.
+			for _, m := range state.Group.Members {
+				c := prose.FanMemberCandidate{Name: m.Name, Dir: m.OutDir}
+				for _, b := range state.Blockers {
+					if b.Member == m.Name {
+						c.Blocked = prose.FanResumeBlockerLine(b.Member, b.Kind, b.Detail)
+					}
+				}
+				candidates = append(candidates, c)
+			}
 		}
-		return nil, prose.ResumeFromIsFanOut(flag, dir, round)
+		return nil, prose.ResumeFromIsFanOut(flag, dir, candidates, round)
 	}
 	source, blocker, err := collect.InspectTurnResume(dir)
 	if err != nil {
@@ -613,4 +637,12 @@ func absOrSelf(p string) string {
 		return p
 	}
 	return abs
+}
+
+// coordinateFile resolves the caller's coordinate-file path; "" stays "".
+func coordinateFile(path string) string {
+	if path == "" {
+		return ""
+	}
+	return absOrSelf(path)
 }

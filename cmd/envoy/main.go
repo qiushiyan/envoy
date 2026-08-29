@@ -48,7 +48,8 @@ THE LOOP
   1. Write the whole prompt to a file. The turn starts cold — it has none of
      your conversation — so that file carries every fact it needs.
   2. Dispatch, and let the command run to completion: minutes to hours. Run it
-     as a background job; the process exiting is the completion signal.
+     as a background job; the process exiting is the completion signal, and
+     --coordinate-file hands a background caller the out-dir before then.
   3. Collect. That prints the result and, when something went wrong, the one
      action to take next.
 
@@ -131,9 +132,14 @@ TURN FLAGS
   --timeout-min N   wall-clock safety cap in minutes, 0 = off (default 30)
   --max-budget-usd  per-turn cost cap (claude only)
   --label TEXT      names the job dir (default: provider name)
+  --coordinate-file F
+                    also land the startup block — the same bytes stdout
+                    prints — at F, atomically, before the provider spawns,
+                    for a caller whose background task hides stdout until
+                    the process exits
 
-  envoy fan takes --prompt-file, --baseline, --cwd, --out-dir, --timeout-min
-  and --label with the same meaning, plus --with once per cold member and
+  envoy fan takes --prompt-file, --baseline, --cwd, --out-dir, --timeout-min,
+  --label and --coordinate-file with the same meaning, plus --with once per cold member and
   --with-from once per continued member. The cap applies to each member
   separately. --resume-from <fan-out-dir> replaces both entirely: the members
   come from that fan-out's manifest.
@@ -230,7 +236,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdJobs(args[1:], stdout, stderr)
 	case "pending":
 		return cmdPending(args[1:], stdout, stderr)
-	case "version":
+	case "version", "--version", "-v":
 		fmt.Fprintf(stdout, "envoy %s\n", envoy.Version)
 		return 0
 	case "help", "-h", "--help":
@@ -278,6 +284,7 @@ func cmdTurn(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&req.AllowWrite, "allow-write", false, "")
 	fs.StringVar(&req.Cwd, "cwd", "", "")
 	fs.StringVar(&req.OutDir, "out-dir", "", "")
+	fs.StringVar(&req.CoordinateFile, "coordinate-file", "", "")
 	timeoutMin := fs.Float64("timeout-min", 30, "")
 	budget := fs.Float64("max-budget-usd", math.NaN(), "")
 	fs.StringVar(&req.Label, "label", "", "")
@@ -321,6 +328,7 @@ func cmdFan(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&req.Baseline, "baseline", "", "")
 	fs.StringVar(&req.Cwd, "cwd", "", "")
 	fs.StringVar(&req.OutDir, "out-dir", "", "")
+	fs.StringVar(&req.CoordinateFile, "coordinate-file", "", "")
 	fs.StringVar(&req.Label, "label", "", "")
 	timeoutMin := fs.Float64("timeout-min", 30, "")
 	// The turn-only flags are accepted here just to be refused in the fan-out's

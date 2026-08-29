@@ -209,6 +209,14 @@ if (provider === 'claude') {
   emitCodexStart();
   emitCodexResult();
   process.exitCode = 7;
+} else if (scenario === 'reconnect-then-success') {
+  // The link dropped and came back: codex-cli emits one bare `error` per
+  // reconnect attempt and then finishes the turn normally.
+  emitCodexStart();
+  emit({ type: 'error', message: 'Reconnecting... 1/5 (stream disconnected before completion: failed to lookup address information: nodename nor servname provided, or not known)' });
+  emit({ type: 'error', message: 'Reconnecting... waiting for network (Connection failed: error sending request)' });
+  emit({ type: 'error', message: 'something unrelated and transient' });
+  emitCodexResult();
 } else if (scenario === 'delayed-success') {
   await sleep(Number(process.env.ENVOY_FAKE_START_DELAY_MS ?? 0));
   emitCodexStart();

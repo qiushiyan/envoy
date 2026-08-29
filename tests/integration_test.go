@@ -1900,3 +1900,70 @@ func TestFanCollectFlagsUndeliveredOkResult(t *testing.T) {
 		t.Fatal("the delivered member must stamp as usual")
 	}
 }
+
+// A turn whose link dropped and came back is a success: codex's bare `error`
+// events are observations, and only turn.failed is a verdict. The tally is
+// recorded and printed as a diagnostic line, worded as what the provider
+// said — never as "offline", which would be the engine's inference.
+func TestCodexReconnectEventsAreObservedNotJudged(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "reconnect-then-success")
+	outDir := filepath.Join(t.TempDir(), "job")
+	prompt := writePrompt(t, t.TempDir())
+
+	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "5")...)
+	if res.code != 0 {
+		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	mustContain(t, "stdout", res.stdout, "status: ok")
+	meta := readMeta(t, outDir)
+	ce, _ := meta["connectionErrors"].(map[string]any)
+	if ce == nil || ce["count"] != float64(2) || ce["firstAt"] == nil || ce["lastAt"] == nil {
+		t.Fatalf("connectionErrors must tally the two recognized events with stamps, got %v", meta["connectionErrors"])
+	}
+	status := runEnvoy(t, e, "collect", "--status-only", outDir)
+	mustContain(t, "status block", status.stdout, "provider stream: 2 recognized connection-error events; first observed ")
+	mustNotContain(t, "status block", status.stdout, "offline", "network timeout")
+
+	// A clean turn records zero — an observation, distinct from an older
+	// engine's meta that never counted.
+	clean := filepath.Join(t.TempDir(), "clean")
+	runEnvoy(t, newEnv(t).set("ENVOY_FAKE_SCENARIO", "success"), turnArgs(prompt, clean, "--provider", "codex", "--timeout-min", "5")...)
+	cleanStatus := runEnvoy(t, e, "collect", "--status-only", clean)
+	mustContain(t, "clean status block", cleanStatus.stdout, "provider stream: no connection-error events recognized by this engine version")
+}
+
+// --coordinate-file is the dispatch handoff a background task's hidden
+// stdout cannot be: the same startup block, landed atomically before the
+// provider spawns, at a path the caller chose and can correlate.
+func TestCoordinateFileMirrorsTheStartupBlock(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	outDir := filepath.Join(t.TempDir(), "job")
+	coord := filepath.Join(t.TempDir(), "handoff", "turn.txt")
+	prompt := writePrompt(t, t.TempDir())
+
+	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "5", "--coordinate-file", coord)...)
+	if res.code != 0 {
+		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	block := readFile(t, coord)
+	if !strings.HasPrefix(res.stdout, block) {
+		t.Fatalf("coordinate file must be the exact head of stdout\nfile:\n%s\nstdout:\n%s", block, res.stdout)
+	}
+	mustContain(t, "coordinate file", block, "out-dir: "+outDir, "watch: tail -f", "next: let this command run to completion")
+	if _, err := os.Stat(coord + ".tmp"); err == nil {
+		t.Fatalf("the temp file must be renamed away")
+	}
+
+	fanDir := filepath.Join(t.TempDir(), "fan")
+	fanCoord := filepath.Join(t.TempDir(), "fan.txt")
+	fres := runEnvoy(t, e, "fan", "--prompt-file", prompt, "--out-dir", fanDir, "--with", "codex", "--with", "claude",
+		"--timeout-min", "5", "--coordinate-file", fanCoord)
+	if fres.code != 0 {
+		t.Fatalf("fan exit = %d\nstderr:\n%s", fres.code, fres.stderr)
+	}
+	fblock := readFile(t, fanCoord)
+	if !strings.HasPrefix(fres.stdout, fblock) {
+		t.Fatalf("fan coordinate file must be the exact head of stdout\nfile:\n%s\nstdout:\n%s", fblock, fres.stdout)
+	}
+	mustContain(t, "fan coordinate file", fblock, "out-dir: "+fanDir, "fan-out: 2 turns", "member codex:", "member claude:")
+}

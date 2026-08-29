@@ -94,6 +94,50 @@ type CapStream struct {
 	Quiet     time.Duration // how long the stream had been silent when the cap fired
 }
 
+// ProviderStream words the tally of a provider's own connection-error
+// events, as a diagnostic line beside the block — never inside the timeout
+// gloss, because status and recovery follow from terminal and prompt evidence
+// alone. It reports and stops: "connection-error events" is what the provider
+// said, and "offline" would be the engine's inference. nil (an older engine
+// never counted) prints nothing; zero is a real observation and prints.
+func ProviderStream(ce *ConnectionErrors) string {
+	if ce == nil {
+		return ""
+	}
+	if ce.Count == 0 {
+		return "provider stream: no connection-error events recognized by this engine version"
+	}
+	line := fmt.Sprintf("provider stream: %d recognized connection-error event%s", ce.Count, plural(ce.Count))
+	if ce.FirstAt != "" && ce.LastAt != "" {
+		line += fmt.Sprintf("; first observed %s, last observed %s", clockOf(ce.FirstAt), clockOf(ce.LastAt))
+	}
+	return line
+}
+
+// ConnectionErrors is the observation ProviderStream words; timestamps are
+// RFC 3339 as meta.json records them.
+type ConnectionErrors struct {
+	Count   int64
+	FirstAt string
+	LastAt  string
+}
+
+func plural(n int64) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+// clockOf renders an RFC 3339 instant as HH:MMZ, the resolution a caller
+// comparing it to a cap or a commute needs; an unparseable stamp prints as is.
+func clockOf(stamp string) string {
+	if t, err := time.Parse(time.RFC3339, stamp); err == nil {
+		return t.UTC().Format("15:04Z")
+	}
+	return stamp
+}
+
 // TimedOut is the terminal envelope of a turn the wall-clock cap ended: what
 // happened, what reaching the cap does and does not prove, and what the stream
 // itself looked like on the way there.
@@ -377,17 +421,68 @@ func ResumeFromNoTurn(flag, dir string, cause error) string {
 		flag, dir, cause)
 }
 
+// FanMemberCandidate is one member of the fan-out a job-dir flag was aimed
+// at: the coordinate the caller can name instead of the group, or the
+// observation that blocks it (Blocked is "" when the member may continue).
+type FanMemberCandidate struct {
+	Name    string
+	Dir     string
+	Blocked string
+}
+
 // ResumeFromIsFanOut redirects a job-dir flag aimed at a fan-out directory: a
-// group holds several conversations, so the caller picks the set or a member.
+// group holds several conversations, so the caller names one member or — on
+// a round — the set. The two flags want different next actions, so each gets
+// its own: --with-from continues one member beside cold ones and is handed
+// copy-ready member flags, never the whole-set round (that continues every
+// member and starts nobody cold); --resume-from on a turn is handed the
+// round first and the per-member turn commands after. Only members the
+// shared eligibility check clears are offered as commands; the rest print
+// their blocker, so nothing here advertises what dispatch would refuse.
 // roundCmd is the runnable set-level round, "" when the manifest is unreadable.
-func ResumeFromIsFanOut(flag, dir, roundCmd string) string {
+func ResumeFromIsFanOut(flag, dir string, members []FanMemberCandidate, roundCmd string) string {
 	head := fmt.Sprintf("%s %s: this is a fan-out, and its members hold their own sessions.", flag, dir)
-	if roundCmd != "" {
-		return head + " Continue every member as one round:\n  " + roundCmd +
-			"\nOr name one member's directory to continue that voice alone."
+	var offered, blocked []string
+	for _, m := range members {
+		if m.Blocked != "" {
+			blocked = append(blocked, "  "+m.Blocked)
+			continue
+		}
+		if flag == "--with-from" {
+			offered = append(offered, fmt.Sprintf("  --with-from %s  (%s)", text.ShellQuote(m.Dir), m.Name))
+		} else {
+			offered = append(offered, fmt.Sprintf("  %s  (%s)", TurnResumeFromCommand(m.Dir), m.Name))
+		}
 	}
-	return head + " Name one member's directory to continue that voice alone, or continue every member " +
-		"as one round with envoy fan --resume-from."
+	var b strings.Builder
+	b.WriteString(head)
+	if flag == "--with-from" {
+		if len(offered) > 0 {
+			b.WriteString(" Continue one member's session beside cold members by naming its directory:\n")
+			b.WriteString(strings.Join(offered, "\n"))
+		} else {
+			b.WriteString(" Name one member's directory to continue that session beside cold members.")
+		}
+		if len(blocked) > 0 {
+			b.WriteString("\nNot continuable:\n" + strings.Join(blocked, "\n"))
+		}
+		if roundCmd != "" {
+			b.WriteString("\n(To continue every member as one round, with no cold member: " + roundCmd + ")")
+		}
+		return b.String()
+	}
+	if roundCmd != "" {
+		b.WriteString(" Continue every member as one round:\n  " + roundCmd)
+	}
+	if len(offered) > 0 {
+		b.WriteString("\nOr continue one member's directory alone:\n" + strings.Join(offered, "\n"))
+	} else if roundCmd == "" {
+		b.WriteString(" Name one member's directory to continue that voice alone, or continue every member as one round with envoy fan --resume-from.")
+	}
+	if len(blocked) > 0 {
+		b.WriteString("\nNot continuable:\n" + strings.Join(blocked, "\n"))
+	}
+	return b.String()
 }
 
 // ResumeFromBlocked refuses to continue a job whose session is not provably

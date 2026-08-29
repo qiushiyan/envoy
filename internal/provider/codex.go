@@ -20,8 +20,34 @@ type codex struct {
 	sessionID     string // learned from thread.started on a fresh thread
 	threadStarted bool
 	finalText     *string
-	errorText     *string
+	failedText    *string // turn.failed's message: the provider's own verdict
+	lastErrorText *string // the latest transient `error` event; detail, never a verdict
 	tokens        *job.Tokens
+}
+
+// connectionErrorMarkers are the substrings codex-cli 0.144.1 puts in the
+// message of a transient `error` event when its link to the API drops:
+// reconnect attempts, stream drops, DNS failures, transport fallback. A match
+// is recorded as an observation of the provider's stream and nothing more —
+// the engine never concludes "offline" from it. When codex changes these
+// strings the count degrades to zero with raw.log still authoritative.
+var connectionErrorMarkers = []string{
+	"Reconnecting...",
+	"stream disconnected",
+	"Connection failed",
+	"error sending request",
+	"failed to lookup address",
+	"waiting for network",
+	"Falling back from WebSockets",
+}
+
+func isConnectionError(message string) bool {
+	for _, marker := range connectionErrorMarkers {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func newCodex(opts Options, ws job.Workspace) *codex {
@@ -107,11 +133,17 @@ func (c *codex) Feed(line string) []Event {
 				message = m
 			}
 		}
-		c.errorText = job.Ptr(message)
+		c.failedText = job.Ptr(message)
 		events = append(events, Event{Kind: KindTerminal, Terminal: "codex turn.failed"})
 	case "error":
+		// A bare `error` event is transient: codex emits one per reconnect
+		// attempt and then carries on, and a turn that later completes is a
+		// success. Only turn.failed is the provider's verdict.
 		if m := str(event, "message"); m != "" {
-			c.errorText = job.Ptr(m)
+			c.lastErrorText = job.Ptr(m)
+			if isConnectionError(m) {
+				events = append(events, Event{Kind: KindConnectionError, Message: m})
+			}
 		}
 	}
 	return events
@@ -150,10 +182,10 @@ func (c *codex) Recovery() (Evidence, []Event) {
 func (c *codex) Conclude(exit ExitInfo) Outcome {
 	recovered := c.recoveredText()
 
-	if c.errorText != nil {
+	if c.failedText != nil {
 		out := Outcome{
 			Status:    job.StatusFailed,
-			ErrorText: fmt.Sprintf("Codex reported a provider failure: %s", *c.errorText),
+			ErrorText: fmt.Sprintf("Codex reported a provider failure: %s", *c.failedText),
 			Remedy:    "Fix the cause it reported first.",
 			Partial:   recovered,
 			Tokens:    c.tokens,
@@ -187,11 +219,15 @@ func (c *codex) Conclude(exit ExitInfo) Outcome {
 		}
 	}
 
+	detail := stderrDetail(exit.StderrTail)
+	if c.lastErrorText != nil {
+		detail = fmt.Sprintf("last error event %q; stderr: %s", *c.lastErrorText, detail)
+	}
 	out := Outcome{
 		Status: job.StatusInfra,
 		ErrorText: fmt.Sprintf(
 			"Codex exited with code %s but returned no usable result. Last provider detail: %s",
-			codeStr(exit.Code), stderrDetail(exit.StderrTail)),
+			codeStr(exit.Code), detail),
 		Tokens: c.tokens,
 	}
 	if c.threadStarted {
