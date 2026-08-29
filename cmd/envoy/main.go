@@ -48,12 +48,13 @@ THE LOOP
   1. Write the whole prompt to a file. The turn starts cold — it has none of
      your conversation — so that file carries every fact it needs.
   2. Dispatch, and let the command run to completion: minutes to hours. Run it
-     as a background job; the process exiting is the completion signal, and
-     --coordinate-file hands a background caller the out-dir before then.
+     as a background job; the process exiting is the completion signal.
   3. Collect. That prints the result and, when something went wrong, the one
      action to take next.
 
-    envoy turn --provider codex --prompt-file brief.md --timeout-min 30 --label review
+    C=$(mktemp)
+    envoy turn --provider codex --prompt-file brief.md --timeout-min 30 --label review --coordinate-file $C
+    cat $C                      # out-dir and watch command, while the turn still runs
     # ...the turn runs; once the process exits:
     envoy collect               # newest job for this project, or pass a job dir
     envoy collect --result-only # an ok job's result body alone; a job that is
