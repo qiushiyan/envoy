@@ -13,6 +13,14 @@ make install                  # builds to ~/.local/bin/envoy
 
 ## Usage
 
+Recommended Codex default: **`gpt-6-astra`**. Set
+`model = "gpt-6-astra"` in `~/.codex/config.toml`; keep your existing reasoning
+effort. The default commands below inherit that provider config, including
+`--with codex` in a fan-out. To select Astra explicitly for a turn, add
+`--model gpt-6-astra`; for a fan-out member, use `--with codex:gpt-6-astra`.
+Explicit overrides and recorded continuation settings still take precedence.
+See the [official model guidance](https://developers.openai.com/api/docs/guides/latest-model).
+
 ```sh
 envoy turn --provider codex --prompt-file brief.md --timeout-min 30 --label consult
 envoy turn --resume-from <job-dir> --prompt-file next.md   # continue a finished job's session

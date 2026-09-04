@@ -157,6 +157,12 @@ FORGOT SOMETHING AFTER DISPATCHING
   Steer never marks anything collected; it exits 0 once it has answered.
 
 BEFORE YOU DISPATCH
+  Recommended Codex default: gpt-6-astra. Set model = "gpt-6-astra" in
+  ~/.codex/config.toml and keep your existing reasoning effort. The examples
+  above inherit that config. To pin Astra explicitly, use --model gpt-6-astra
+  on a turn or --with codex:gpt-6-astra in a fan-out. Explicit overrides and
+  recorded continuation settings still take precedence.
+
   Model and effort. Leaving --model or --effort off puts the provider's own
   configuration in charge; envoy never substitutes a model of its own, and
   reports `+"`(provider default)`"+` rather than guessing. What the provider says it
