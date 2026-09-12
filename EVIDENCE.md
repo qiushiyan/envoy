@@ -247,3 +247,24 @@ will look anyway.
   from 08-02 against source from 08-20, both `0.4.0` — the stale-binary
   incident's shape again; the version is now bumped with every contract
   change and the skills edited only after `make install`.
+- **2026-09-12 — the surface was the friction: one verb, named jobs.** An
+  obelisk pass over 119 review/consult invocations found zero CLI refusals and
+  every cost in orientation and handoff: the shared mechanics doc read on 81
+  of 119 invocations and re-read 73 times, and the coordinate file's *path*
+  failing to survive across the caller's shell calls — 123 reads of it across
+  48 sessions, 59 `ls -t` guesses at the store in 21. Real use had two dispatch
+  shapes (one voice; several voices) plus collect; `steer`, `jobs`, `turn`
+  versus `fan`, and six dispatch flags were surface the caller learned without
+  using. A codex consult settled the replacement: `run <job>` with the name
+  chosen by the caller and reserved atomically (a taken name refused, never
+  suffixed), voices as `provider[:model[:effort]]` or `@<job>`, and nothing to
+  read back. Two reviews of the result, both cold codex: the first found the
+  records still half-old — persisted commands with no reader, schema fallbacks,
+  a member label that recorded the parent's name — plus three defects pinned
+  red before the fix (a generated member address landing on a sibling's
+  directory, `collectedAt` stamped before the block reached the caller's
+  writer, and the "identical retry" turning a continuation into a cold voice
+  without its budget); the second caught the fix's own regression (pending
+  rendering an abandoned job's recovery from its still-running record). The
+  lessons that generalize: **a record holds facts and the reader renders the
+  words**, and **an address the caller chooses needs no handoff at all.**

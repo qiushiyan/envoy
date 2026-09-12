@@ -77,20 +77,31 @@ sandbox once broke the calling session's own tooling).
   reinterpret. `next:` lines exist so the caller never has to derive the next
   move from status codes.
 - **Background is the default posture.** Collection is notification-driven;
-  polling a live job is a smell. The one sanctioned read after dispatch is
-  the startup coordinate block; `watch:` is observation, never a completion
-  or acceptance signal (a lesson paid for in a real incident — EVIDENCE.md,
-  2026-07-11).
-- **The coordinate handoff is a file the caller names, not "the newest job".**
-  A harness that runs the dispatch in the background hides its stdout until
-  the process exits, and the log showed 159 of 221 caller sessions guessing
-  at the block with `sleep N; cat` (EVIDENCE.md, 2026-08-28). `--coordinate-file`
-  lands the exact startup block, atomically, before the provider spawns, at a
-  path only that dispatch uses. Reprinting the store's newest job was rejected:
-  `jobs` orders by name, the block prints before the first meta write, and a
-  second session in the same project can dispatch in between — a plausible
-  wrong out-dir is worse than an empty read. A `--detach` was rejected because
-  the process exiting is the completion signal.
+  polling a live job is a smell, and there is no watch command to tempt it: a
+  live stream was once read as evidence of a hang it did not show (EVIDENCE.md,
+  2026-07-11). The process exiting is the completion signal, so there is no
+  `--detach` either.
+- **The name is the address.** The caller chooses the job's name before
+  dispatch and collects by it, so nothing printed by a dispatch whose stdout
+  the harness hides has to be read back. Two handoffs were tried and paid for
+  first — "the newest job in the store" (rejected: name-ordered, printed
+  before the first record, and racy against a second dispatch in the same
+  project) and a coordinate file the dispatch wrote (retired: the path itself
+  had to survive across the caller's shell calls, and the logs showed it did
+  not — EVIDENCE.md, 2026-09-12). A name is reserved by creating its directory,
+  so creation is the collision check, and a taken name is refused rather than
+  suffixed: a silent suffix would leave the caller collecting somebody else's
+  job. A refusal that ran nothing gives the name back.
+- **Records hold facts; collect renders.** `meta.json` carries what the turn
+  was dispatched with and what the engine observed, never a rendered command
+  or prescription: a persisted command drifts with every wording or verb
+  change and cannot be repaired without a compatibility layer, and a record
+  from another schema version is refused by name instead of reinterpreted.
+  Every `resume:`, retry and `next:` line is rendered at collect time from the
+  fields plus the directory the record was read from, so the identical retry
+  can repeat the dispatch it replaces — the same source conversation, the
+  archived prompt, the spend cap — and the resume line can never disagree
+  with what dispatch would accept.
 - **A provider's transient error is an observation; only its verdict fails a
   turn.** codex emits a bare `error` event per reconnect attempt and then
   carries on; a driver that let the last one stand as the outcome recorded
@@ -118,36 +129,41 @@ sandbox once broke the calling session's own tooling).
 
 ## Fan-out: several turns, one job
 
-`envoy fan` sends one prompt to several turns at once. The design rule that
+Several `--with` voices send one prompt to several turns at once. The design rule that
 keeps it from becoming a second engine: **a fan-out is a supervisor over
 unchanged turns, not a new kind of turn.** Members are ordinary turns — own
 session, own lock, own job dir, own prompt state, own `result.md`, one level
 down in the group dir — so every lifecycle invariant above holds unmodified
-and `envoy collect <member-dir>` still works. What the group adds is only what
+and `envoy collect <job>/<member>` still works. What the group adds is only what
 the caller was otherwise doing by hand: one process to wait on, one completion,
 one collect, one exit code.
 
 Consequences that are load-bearing, not incidental:
 
-- **`group.json` is a roster of coordinates, never a mirror of member state.**
+- **`group.json` is a roster of names, never a mirror of member state.**
   A member's status lives in that member's `meta.json` and nowhere else, so the
   two cannot drift. Collect re-reads the members; the manifest records only
-  what the supervisor itself knows (who was dispatched, where, when, and — for
-  a resumed fan-out — which fan-out its sessions continue).
+  what the supervisor itself knows: the roster, whose names are the member
+  directories, and the tree, cap and anchor the members share.
 - **Recovery stays per member; a round addresses the set.** Prompt state is
   per member: one `accepted` member licenses only a resume while its
   `not_started` sibling licenses an identical retry, so there is no group-wide
   retry and every failure sentence points back at per-member actions. A
-  *follow-up round* is not recovery: `fan --resume-from` re-dispatches every
-  member of a finished fan-out as a resumed turn on one NEW prompt — a new
-  fan-out over ordinary turns, with the roster, sessions, cwd, and baseline
-  read from the original's own records so the caller re-decides nothing per
-  member. The set continues whole or is refused: a member still running or
-  without a session blocks the round rather than being silently left out of
-  it. Cherry-picking voices stays a caller move, via the per-member
-  `turn --resume` commands collect prints. (The feature was paid for before it
-  was built: agents hand-rolled the round three different ways in three days —
-  EVIDENCE.md, 2026-07-28.)
+  *follow-up round* is not recovery: `--with @<fan-out>` alone re-dispatches
+  every member of a finished fan-out as a continued turn on one NEW prompt — a
+  new fan-out over ordinary turns, each member resolved exactly as a directly
+  named `@<fan-out>/<member>` would be, keeping its name, with the sessions,
+  cwd and baseline read from the members' own records so the caller re-decides
+  nothing per member. Eligibility is judged for the whole set before anything
+  is reserved: a member still running or without a session refuses the round
+  rather than being silently left out of it. A session found held only at
+  dispatch time refuses that member alone and the round reports partial;
+  reserving every session up front through a supervisor-held lock is
+  rejected, because it splits lock ownership between the runner and the
+  supervisor for a case the caller can see in the collect block anyway. Cherry-picking voices is a
+  caller move, one `--with @<fan-out>/<member>` each. (The round was paid for
+  before it was built: agents hand-rolled it three different ways in three
+  days — EVIDENCE.md, 2026-07-28.)
 - **Exit code 6 (`partial`) earned a new code** rather than overloading an
   existing one. A fan-out where one member answered and one timed out is not a
   failure (results exist) and not a success (a member needs a decision);
@@ -159,8 +175,8 @@ Consequences that are load-bearing, not incidental:
   share one working tree and concurrent write turns overwrite each other.
   Parallel write work means a worktree per turn, dispatched as separate turns.
 - **Members run in one process, on N event loops.** The runner was already
-  parameterized by its writers and out-dir, which is what made this free; the
-  alternative — spawning `envoy turn` subprocesses — was rejected because the
+  parameterized by its writers and job dir, which is what made this free; the
+  alternative — spawning `envoy run` subprocesses — was rejected because the
   supervisor would become a second, drifting copy of the CLI's argv and
   validation surface. The cost accepted in exchange is blast radius, so a
   member panic is contained per member rather than taking its siblings down.
@@ -215,32 +231,36 @@ follow-up instead of running the one carrying the turn's cwd and write intent.
 
 ## Storage
 
-Jobs live in one central store, `~/.local/state/envoy/jobs/<slug>/`, never in
-the project tree (the predecessor's repo-local `.sidekick/` dirs are
+Jobs live in one central store, `~/.local/state/envoy/jobs/<slug>/<name>/`,
+never in the project tree (the predecessor's repo-local `.sidekick/` dirs are
 deliberately gone — they polluted every repo with runtime state). The slug is
 `basename-hash8`: the basename for humans scanning the store, the hash of the
 symlink-resolved path for uniqueness, the git root as anchor so a dispatch
 from a subdirectory belongs to the project. The store is an implementation
-detail by contract: dispatch prints the out-dir, collect and pending
-re-derive it from cwd, and no caller constructs the path. Creating a job dir
-is atomic — `Mkdir`, not stat-then-create — because two turns dispatched in
+detail by contract: the caller names the job, `run`, `collect` and `pending`
+re-derive the project's store from the directory they run in, and no caller
+constructs the path — a name is one path segment, and anything starting with
+`/`, `.` or `~` is a directory taken as given. Creating the job dir is the
+reservation — `Mkdir`, not stat-then-create — because two turns dispatched in
 the same second once shared one (EVIDENCE.md, 2026-07-27).
 
 ## Deliberately not built
 
-- No daemon, status command, or cancel service — the caller's background-task
-  layer is the live-job layer. `envoy jobs` is not an exception to that: it
-  lists the durable store, never live work, and it stayed a non-goal until the
-  logs showed callers rebuilding job paths by hand (EVIDENCE.md, 2026-07-31).
-  The coordinate a caller keeps is still the out-dir printed at dispatch.
+- No daemon, status command, cancel service, or job listing — the caller's
+  background-task layer is the live-job layer, and the caller named the job
+  it wants. A listing was built when callers rebuilt stamp-named paths by hand
+  (EVIDENCE.md, 2026-07-31) and removed once names were the caller's own;
+  `pending` is the one index, and it is recovery, not discovery.
 - No alias translation, effort aliases, model fallbacks, or provider
   auto-selection.
 - No group-wide retry, and no partial resume of a fan-out: recovery is per
-  member, and a round continues the whole set or is refused.
+  member, and a round is refused when a member cannot continue.
 - No live steering of a running turn: no provider accepts input into one —
   claude's streaming input queues a NEW turn (a multi-turn job in disguise),
-  codex exec has no channel at all. `envoy steer` answers with the follow-up
-  command instead; the verified research is in EVIDENCE.md (2026-07-28).
+  codex exec has no channel at all (verified research: EVIDENCE.md,
+  2026-07-28). A supplement is a follow-up turn, `--with @<job>`; a `steer`
+  command saying so is surface the caller learns and never reaches for
+  (EVIDENCE.md, 2026-09-12).
 - No sandbox flag for codex, ever; no permission machinery beyond claude's
   own `--permission-mode`.
 - No activity-based hang detector; no timeout that resets on output.
