@@ -101,7 +101,8 @@ FACTS THE FLAGS CANNOT TELL YOU
   the prompt — envoy does not enforce it.
 
   Continuing. A finished job's block prints `+"`resume:`"+`, the exact command that
-  continues its conversation as a new job; it takes a NEW prompt file, since
+  continues its conversation as a new job — for a fan-out, the whole set; each
+  member's section prints its own. It takes a NEW prompt file, since
   re-sending the original repeats work the provider already did. One live
   turn per session: continuing a job that is still running is refused.
 
