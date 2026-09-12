@@ -59,10 +59,10 @@ VOICES
                                      one member warm beside a cold voice
     --with @consult-r1  (alone)      continue every member of a fan-out
 
-  One --with is a single turn; several are a fan-out — the same prompt to each,
+  One voice is a single turn; several are a fan-out — the same prompt to each,
   supervised as one job that exits once every member is done, and collected
-  once. Members never see each other's output. A fan-out is read-only: its
-  members share one working tree.
+  once. A fan-out reference counts as its members. Members never see each
+  other's output. A fan-out is read-only: its members share one working tree.
 
   A continued voice takes its provider, session, model, effort, tree, baseline
   and write intent from the job's own records; --cwd and --baseline override.
@@ -100,26 +100,31 @@ FACTS THE FLAGS CANNOT TELL YOU
   effectively read-only, and "analyse only, change nothing" still belongs in
   the prompt — envoy does not enforce it.
 
-  Continuing. A finished job's block prints `+"`resume:`"+`, the exact command that
-  continues its conversation as a new job — for a fan-out, the whole set; each
-  member's section prints its own. It takes a NEW prompt file, since
-  re-sending the original repeats work the provider already did. One live
-  turn per session: continuing a job that is still running is refused.
+  Continuing. A finished job that holds a session prints `+"`resume:`"+`, the exact
+  command that continues its conversation as a new job — for a fan-out, the
+  whole set when every member can continue; each member's section prints its
+  own. It takes a NEW prompt file, since re-sending the original repeats work
+  the provider already did. One live turn per session: continuing a job that
+  is still running, or whose session may belong to another job, is refused.
 
   The cap bounds wall-clock time as a safety net, not a stall detector — it
   counts healthy work, so reaching it never proves a hang.
 
-EXIT CODES, AND WHAT EACH ONE LICENSES
+EXIT CODES OF A RUN, AND WHAT EACH ONE LICENSES
   0 ok           result.md holds the answer
   1 failed       the provider ran and reported a failure; partial work may exist
   2 infra        envoy or the environment failed, not the model
-  3 usage        flags were rejected, the name is taken, or the session is
-                 locked; nothing ran
+  3 usage        flags were rejected, the name is taken, or a session is
+                 locked; for a single turn, nothing ran
   4 timeout      the cap elapsed — not evidence the provider hung
   5 interrupted  a signal stopped the turn
   6 partial      fan-out only: some members returned a result and others did
                  not — the results that landed are usable, and only the members
                  that failed need a decision
+  A fan-out where no member returned a result exits with its worst member's
+  code, so a non-zero code says nothing about the other members: collect
+  it and read each member's own status. Collect exits 0 whenever it printed
+  the job, whatever the job's status.
 
   For any non-zero exit, collect the job and follow its `+"`next:`"+` line instead of
   re-dispatching: whether the provider accepted the prompt decides between a

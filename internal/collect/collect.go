@@ -780,7 +780,9 @@ func Pending(base string, baseWasDerived bool, w, errW io.Writer) int {
 		fmt.Fprintf(w, "why: %s\n", item.detail)
 		ws := job.Workspace{Dir: item.dir}
 		switch item.kind {
-		case "terminal", "group":
+		case "terminal", "group", "abandoned":
+			// Collection reconciles an abandoned record and renders its
+			// recovery from the reconciled state; the index only points there.
 			fmt.Fprintf(w, "next: %s\n", prose.CollectCommand(item.dir))
 		case "corrupt":
 			fmt.Fprintf(w, "next: inspect %s, %s, %s, and the working tree; do not infer completion from the damaged metadata\n",

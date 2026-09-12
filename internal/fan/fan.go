@@ -36,19 +36,20 @@ type Turn struct {
 	Options runner.Options
 }
 
-// Options is one validated fan-out request. Everything here is shared by every
-// member except the members themselves: the whole point is one prompt, one
-// cap, one directory.
+// Options is one validated fan-out request: the turns, the directory that
+// holds them, and the writers. The prompt, tree, anchor and cap are read
+// from the turns, which the caller validated to share them — the manifest
+// and the dispatch block describe the settings the members actually run
+// with, never a second copy.
 type Options struct {
-	Turns      []Turn
-	PromptFile string
-	Cwd        string
-	Baseline   string
-	TimeoutMin float64
-	OutDir     string // the fan-out directory, already reserved by the caller
-	Stdout     io.Writer
-	Stderr     io.Writer
+	Turns  []Turn
+	OutDir string // the fan-out directory, already reserved by the caller
+	Stdout io.Writer
+	Stderr io.Writer
 }
+
+// shared is the settings every member runs with, read from the first turn.
+func (o Options) shared() runner.Options { return o.Turns[0].Options }
 
 // outcome is one member's terminal state as the group reports it.
 type outcome struct {
@@ -64,7 +65,8 @@ func Run(opts Options) int {
 	startedAt := time.Now().Round(0)
 	gw := job.GroupWorkspace{Dir: opts.OutDir}
 
-	if err := gw.Prepare(opts.PromptFile); err != nil {
+	shared := opts.shared()
+	if err := gw.Prepare(shared.PromptFile); err != nil {
 		fmt.Fprintf(opts.Stderr, "envoy: cannot prepare fan-out dir: %s\n", err)
 		return job.ExitInfra
 	}
@@ -80,9 +82,9 @@ func Run(opts Options) int {
 	group := &job.Group{
 		SchemaVersion: job.GroupSchemaVersion,
 		StartedAt:     job.ISO(startedAt),
-		Cwd:           opts.Cwd,
-		TimeoutMin:    opts.TimeoutMin,
-		GitBaseline:   ptrIfNonEmpty(opts.Baseline),
+		Cwd:           shared.Cwd,
+		TimeoutMin:    shared.TimeoutMin,
+		GitBaseline:   ptrIfNonEmpty(shared.Baseline),
 		Members:       names,
 	}
 	if err := group.WriteFile(gw.GroupPath()); err != nil {
@@ -160,8 +162,9 @@ func runMember(opts Options, t Turn, outDir string, mu *sync.Mutex) (res outcome
 
 func printDispatchBlock(opts Options, gw job.GroupWorkspace) {
 	w := opts.Stdout
+	shared := opts.shared()
 	fmt.Fprintf(w, "job: %s\n", gw.Dir)
-	fmt.Fprintf(w, "fan-out: %d turns · one prompt · hard cap %s each\n", len(opts.Turns), text.HardCap(opts.TimeoutMin))
+	fmt.Fprintf(w, "fan-out: %d turns · one prompt · hard cap %s each\n", len(opts.Turns), text.HardCap(shared.TimeoutMin))
 	// The member name already carries its provider and model, so the line adds
 	// only what the name cannot: the resolved settings, where it writes, and
 	// which conversation it continues.
@@ -173,8 +176,8 @@ func printDispatchBlock(opts Options, gw job.GroupWorkspace) {
 		}
 		fmt.Fprintln(w)
 	}
-	if opts.Baseline != "" {
-		fmt.Fprintf(w, "baseline: %s\n", opts.Baseline)
+	if shared.Baseline != "" {
+		fmt.Fprintf(w, "baseline: %s\n", shared.Baseline)
 	}
 	fmt.Fprintf(w, "next: %s\n", prose.FanDispatchNext(gw.Dir))
 }

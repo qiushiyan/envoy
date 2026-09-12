@@ -165,17 +165,7 @@ func Run(req RunRequest) int {
 		releaseIfUnstarted(dir, job.Workspace{Dir: dir}.MetaPath())
 		return code
 	}
-	shared := turns[0].Options
-	code := fan.Run(fan.Options{
-		Turns:      turns,
-		PromptFile: shared.PromptFile,
-		Cwd:        shared.Cwd,
-		Baseline:   shared.Baseline,
-		TimeoutMin: shared.TimeoutMin,
-		OutDir:     dir,
-		Stdout:     stdout,
-		Stderr:     stderr,
-	})
+	code := fan.Run(fan.Options{Turns: turns, OutDir: dir, Stdout: stdout, Stderr: stderr})
 	releaseIfUnstarted(dir, job.GroupWorkspace{Dir: dir}.GroupPath())
 	return code
 }
@@ -237,11 +227,14 @@ func resolveTurns(req RunRequest, invocationCwd string, timeoutMin float64) ([]f
 			voices = append(voices, members...)
 			continue
 		}
-		v, errText := continuedVoice(ref, "")
-		if errText != "" {
-			return nil, errText
+		source, blocker, err := collect.Inspect(ref)
+		if err != nil {
+			return nil, prose.ContinueNoTurn(ref, err)
 		}
-		voices = append(voices, v)
+		if blocker != "" {
+			return nil, prose.ContinueBlocked(ref, blocker)
+		}
+		voices = append(voices, continuedVoice(ref, source, ""))
 	}
 
 	// The roster checks: one conversation once, and one tree and one anchor
@@ -319,18 +312,10 @@ func resolveTurns(req RunRequest, invocationCwd string, timeoutMin float64) ([]f
 	return turns, ""
 }
 
-// continuedVoice resolves a job dir named by @<job> into the voice that
-// continues its conversation. name presets the member address (a fan-out's
-// member keeps its identity across rounds); "" derives it from the records.
-// errText is "" exactly when the conversation is continuable.
-func continuedVoice(dir, name string) (voice, string) {
-	source, blocker, err := collect.Inspect(dir)
-	if err != nil {
-		return voice{}, prose.ContinueNoTurn(dir, err)
-	}
-	if blocker != "" {
-		return voice{}, prose.ContinueBlocked(dir, blocker)
-	}
+// continuedVoice is the voice that continues a finished job's conversation,
+// from the source its records describe. name presets the member address (a
+// fan-out's member keeps its identity across rounds); "" derives it.
+func continuedVoice(dir string, source *collect.Source, name string) voice {
 	if name == "" {
 		name = voiceBase(source.Provider, source.Model)
 	}
@@ -344,7 +329,7 @@ func continuedVoice(dir, name string) (voice, string) {
 		cwd:        source.Cwd,
 		baseline:   source.Baseline,
 		allowWrite: source.AllowWrite,
-	}, ""
+	}
 }
 
 // fanMembers expands a fan-out reference into its members as continued
@@ -364,7 +349,7 @@ func fanMembers(dir string) ([]voice, string) {
 	var reasons []string
 	for _, name := range group.Members {
 		memberDir := gw.Member(name).Dir
-		_, blocker, err := collect.Inspect(memberDir)
+		source, blocker, err := collect.Inspect(memberDir)
 		switch {
 		case err != nil:
 			reasons = append(reasons, prose.FanResumeBlockerLine(name, prose.BlockerUnreadableMeta, err.Error()))
@@ -373,11 +358,7 @@ func fanMembers(dir string) ([]voice, string) {
 			reasons = append(reasons, prose.FanResumeBlockerLine(name, blocker, ""))
 			continue
 		}
-		v, errText := continuedVoice(memberDir, name)
-		if errText != "" {
-			return nil, errText
-		}
-		voices = append(voices, v)
+		voices = append(voices, continuedVoice(memberDir, source, name))
 	}
 	if len(reasons) > 0 {
 		return nil, prose.FanContinueBlocked(dir, reasons)

@@ -802,6 +802,11 @@ func TestCollectReconcilesAbandonedJob(t *testing.T) {
 	data, _ := json.Marshal(meta)
 	os.WriteFile(filepath.Join(outDir, "meta.json"), data, 0o644)
 
+	// Discovery names the job and sends the caller to collect it: collection
+	// is what reconciles the record and renders the recovery.
+	pending := runEnvoy(t, e, "pending", "--base", base)
+	mustContain(t, "pending stdout", pending.stdout, "[abandoned] "+outDir, "next: envoy collect '"+outDir+"'")
+
 	res := runEnvoy(t, e, "collect", outDir)
 	if res.code != 0 {
 		t.Fatalf("collect = %d\n%s", res.code, res.stderr)
@@ -1222,7 +1227,7 @@ func TestFanDuplicateMembersGetDistinctJobDirs(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	for _, m := range members {
-		name := memberName(m)
+		name := m.(string)
 		if seen[name] {
 			t.Fatalf("two members share the address %q: %v", name, members)
 		}
@@ -1235,18 +1240,6 @@ func TestFanDuplicateMembersGetDistinctJobDirs(t *testing.T) {
 	if !seen["claude-opus"] || !seen["claude-opus-2"] {
 		t.Fatalf("the first pair keeps its numbering: %v", seen)
 	}
-}
-
-// memberName reads a member's address from a manifest entry, whichever shape
-// the manifest records members in.
-func memberName(m any) string {
-	switch v := m.(type) {
-	case string:
-		return v
-	case map[string]any:
-		return v["name"].(string)
-	}
-	return ""
 }
 
 // A roster that cannot mean anything is refused in its own terms, before
@@ -1305,10 +1298,10 @@ func TestHelpIsSelfSufficient(t *testing.T) {
 		"FACTS THE FLAGS CANNOT TELL YOU",
 		"envoy never substitutes", // no model substitution
 		"not a sandbox",           // --allow-write is intent
-		"One live\n  turn per session",
+		"One live turn per session",
 		"takes a NEW prompt file", // resume discipline
 		"counts healthy work",     // cap semantics
-		"EXIT CODES, AND WHAT EACH ONE LICENSES",
+		"EXIT CODES OF A RUN, AND WHAT EACH ONE LICENSES",
 		"6 partial",
 		"claude: low medium high xhigh max", // rendered from the provider map
 	)
