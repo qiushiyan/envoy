@@ -899,6 +899,17 @@ func TestNamedJobsLiveInTheCentralStore(t *testing.T) {
 	pending := runEnvoyIn(t, e, project, "pending")
 	mustContain(t, "pending stdout", pending.stdout, "pending jobs: 0")
 
+	// A fan-out member is reachable by name/member, from the project.
+	if r := runEnvoyIn(t, e, project, "run", "pair", "--prompt-file", prompt, "--with", "codex", "--with", "claude", "--timeout-min", "5"); r.code != 0 {
+		t.Fatalf("fan exit = %d\n%s", r.code, r.stderr)
+	}
+	if r := runEnvoyIn(t, e, project, "collect", "pair/codex"); r.code != 0 || !strings.Contains(r.stdout, "job: "+filepath.Join(filepath.Dir(outDir), "pair", "codex")) {
+		t.Fatalf("collect pair/codex = %d\n%s%s", r.code, r.stdout, r.stderr)
+	}
+	if r := runEnvoyIn(t, e, project, "run", "pair-r2", "--prompt-file", prompt, "--with", "@pair/codex", "--with", "claude", "--timeout-min", "5"); r.code != 0 {
+		t.Fatalf("warm member by name: exit = %d\n%s", r.code, r.stderr)
+	}
+
 	// collect without a job names nothing: there is no "newest" under
 	// caller-chosen names, and a guess could deliver somebody else's result.
 	bare := runEnvoyIn(t, e, project, "collect")
@@ -1312,7 +1323,7 @@ func TestUsageErrors(t *testing.T) {
 		want string
 	}{
 		{[]string{"run", "--prompt-file", prompt, "--with", "codex"}, "a job name is required"},
-		{[]string{"run", "bad name", "--prompt-file", prompt, "--with", "codex"}, "one path segment"},
+		{[]string{"run", "bad name", "--prompt-file", prompt, "--with", "codex"}, "one segment"},
 		{[]string{"run", job, "--prompt-file", prompt}, "at least one --with is required"},
 		{[]string{"run", job, "--with", "gemini", "--prompt-file", prompt}, "must name provider claude or codex"},
 		{[]string{"run", job, "--with", "codex"}, "--prompt-file <path> is required"},

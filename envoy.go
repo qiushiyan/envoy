@@ -122,7 +122,7 @@ func Run(req RunRequest) int {
 		fmt.Fprintf(stderr, "envoy: cannot determine cwd: %s\n", err)
 		return ExitInfra
 	}
-	dir, err := job.ResolveRef(req.Job, invocationCwd)
+	dir, err := job.ResolveName(req.Job, invocationCwd)
 	if err != nil {
 		return usageError(stderr, "%s", err)
 	}

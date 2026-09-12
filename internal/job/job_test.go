@@ -48,20 +48,30 @@ func TestResolveRefNamesLandInTheCentralStore(t *testing.T) {
 	subdir := filepath.Join(repo, "pkg", "inner")
 	os.MkdirAll(subdir, 0o755)
 
-	dir, err := ResolveRef("review-r1", repo)
+	dir, err := ResolveName("review-r1", repo)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// A reference reads the same name, and reaches a fan-out's member.
+	if ref, _ := ResolveRef("review-r1", repo); ref != dir {
+		t.Fatalf("ResolveRef = %q, want %q", ref, dir)
+	}
+	if ref, _ := ResolveRef("review-r1/codex", repo); ref != filepath.Join(dir, "codex") {
+		t.Fatalf("member ref = %q", ref)
+	}
+	if _, err := ResolveName("review-r1/codex", repo); err == nil {
+		t.Fatal("a new job's name is one segment")
 	}
 	jobsRoot := filepath.Join(home, ".local", "state", "envoy", "jobs")
 	if filepath.Dir(filepath.Dir(dir)) != jobsRoot || filepath.Base(dir) != "review-r1" {
 		t.Fatalf("dir = %q, want %q/<project>/review-r1", dir, jobsRoot)
 	}
 	// The name round-trips exactly: no lowercasing, no slugging.
-	if d, _ := ResolveRef("Review.R1_x", repo); filepath.Base(d) != "Review.R1_x" {
+	if d, _ := ResolveName("Review.R1_x", repo); filepath.Base(d) != "Review.R1_x" {
 		t.Fatalf("name was rewritten: %q", d)
 	}
 	// A subdirectory dispatch belongs to the same project store.
-	if sub, _ := ResolveRef("review-r1", subdir); sub != dir {
+	if sub, _ := ResolveName("review-r1", subdir); sub != dir {
 		t.Fatalf("subdir resolves %q, want %q", sub, dir)
 	}
 	// A path is a path.
@@ -69,9 +79,6 @@ func TestResolveRefNamesLandInTheCentralStore(t *testing.T) {
 		t.Fatalf("path ref = %q", p)
 	}
 	for _, bad := range []string{"", "-lead", "a b", "a/b/../c!"} {
-		if IsPath(bad) {
-			continue
-		}
 		if _, err := ResolveRef(bad, repo); err == nil {
 			t.Fatalf("ResolveRef(%q) must refuse", bad)
 		}
