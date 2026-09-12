@@ -190,40 +190,8 @@ type stringList []string
 func (s *stringList) String() string     { return strings.Join(*s, " ") }
 func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
 
-// splitJobArg takes the one positional argument — the job — from wherever
-// it sits among the flags, so `envoy run review-r1 --with codex` and
-// `envoy run --with codex review-r1` both parse.
-func splitJobArg(args []string, boolFlags ...string) (job string, rest []string, extra []string) {
-	rest = make([]string, 0, len(args))
-	isBool := func(a string) bool {
-		name := strings.TrimLeft(a, "-")
-		for _, b := range boolFlags {
-			if name == b {
-				return true
-			}
-		}
-		return false
-	}
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		if strings.HasPrefix(a, "-") {
-			rest = append(rest, a)
-			// A flag with a separate value carries the value along; a
-			// --flag=value spelling and a boolean flag take none.
-			if !strings.Contains(a, "=") && !isBool(a) && i+1 < len(args) {
-				i++
-				rest = append(rest, args[i])
-			}
-			continue
-		}
-		if job == "" {
-			job = a
-		} else {
-			extra = append(extra, a)
-		}
-	}
-	return job, rest, extra
-}
+// isHelp reports an explicit help request in a positional slot.
+func isHelp(arg string) bool { return arg == "-h" || arg == "--help" || arg == "-help" }
 
 func cmdRun(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("run", stderr)
@@ -236,16 +204,20 @@ func cmdRun(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&req.Cwd, "cwd", "", "")
 	timeoutMin := fs.Float64("timeout-min", 30, "")
 	budget := fs.Float64("max-budget-usd", math.NaN(), "")
-	jobArg, rest, extra := splitJobArg(args, "allow-write")
-	if proceed, code := parseFlags(fs, rest, stdout); !proceed {
-		return code
+	// The job comes first, then the flags: `envoy run <job> --with …`.
+	if len(args) > 0 && isHelp(args[0]) {
+		fmt.Fprint(stdout, usageText)
+		return 0
 	}
-	if len(extra) > 0 {
-		fmt.Fprintf(stderr, "usage error: unexpected argument %q; a run takes one job name, and each voice is passed as --with\n", extra[0])
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		fmt.Fprintln(stderr, "usage error: a job name is required, and it comes first: envoy run <job> --prompt-file <F> --with <voice>")
 		return envoy.ExitUsage
 	}
-	if jobArg == "" {
-		fmt.Fprintln(stderr, "usage error: a job name is required: envoy run <job> --prompt-file <F> --with <voice>")
+	if proceed, code := parseFlags(fs, args[1:], stdout); !proceed {
+		return code
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(stderr, "usage error: unexpected argument %q; a run takes one job name, and each voice is passed as --with\n", fs.Arg(0))
 		return envoy.ExitUsage
 	}
 	// The CLI contract keeps `--timeout-min 0` = no cap; the library spells
@@ -258,7 +230,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) int {
 	if !math.IsNaN(*budget) {
 		req.MaxBudgetUSD = budget
 	}
-	req.Job = jobArg
+	req.Job = args[0]
 	req.With = with
 	req.Stdout = stdout
 	req.Stderr = stderr
@@ -269,16 +241,16 @@ func cmdCollect(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("collect", stderr)
 	resultOnly := fs.Bool("result-only", false, "")
 	statusOnly := fs.Bool("status-only", false, "")
-	jobArg, rest, extra := splitJobArg(args, "result-only", "status-only")
-	if proceed, code := parseFlags(fs, rest, stdout); !proceed {
+	// The flags come first, then the job: `envoy collect [--status-only] <job>`.
+	if proceed, code := parseFlags(fs, args, stdout); !proceed {
 		return code
 	}
-	if len(extra) > 0 {
-		fmt.Fprintln(stderr, "collect error: pass exactly one job")
+	if fs.NArg() > 1 {
+		fmt.Fprintf(stderr, "usage error: collect takes exactly one job; %q is extra\n", fs.Arg(1))
 		return envoy.ExitUsage
 	}
 	return envoy.Collect(envoy.CollectRequest{
-		Job:        jobArg,
+		Job:        fs.Arg(0),
 		ResultOnly: *resultOnly,
 		StatusOnly: *statusOnly,
 		Stdout:     stdout,

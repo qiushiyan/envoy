@@ -2,6 +2,7 @@ package job
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -47,38 +48,25 @@ func ExitCodeForGroup(codes []int) int {
 	return ExitInfra
 }
 
-// GroupSchemaVersion for group.json written by this engine.
-const GroupSchemaVersion = 1
+// GroupSchemaVersion is the only group.json schema this engine reads or
+// writes.
+const GroupSchemaVersion = 2
 
-// GroupMember is one dispatched turn's coordinates inside a fan-out.
-type GroupMember struct {
-	Name     string  `json:"name"`
-	Provider string  `json:"provider"`
-	Model    *string `json:"model"`  // nil = the provider's own configured default
-	Effort   *string `json:"effort"` // nil = the provider's own configured default
-	OutDir   string  `json:"outDir"`
-}
-
-// Group is the manifest of one fan-out: which members were dispatched, where
-// each one's job dir is, and the settings they shared.
+// Group is the manifest of one fan-out: the members it dispatched, in roster
+// order, and the settings they shared. A member's name is also its directory
+// under the fan-out, so the roster is the only coordinate the manifest holds.
 //
-// It deliberately records no member status, session, or result. Every member is
-// an ordinary turn whose meta.json is the single source of that truth, so the
-// manifest is a roster of coordinates only and cannot drift out of step with
-// the members it names. A reader wanting outcomes reads the members.
+// It deliberately records no member status, session, settings, or result.
+// Every member is an ordinary turn whose meta.json is the single source of
+// that truth, so the manifest cannot drift out of step with the members it
+// names. A reader wanting anything about a member reads the member.
 type Group struct {
-	SchemaVersion int           `json:"schemaVersion"`
-	StartedAt     string        `json:"startedAt"`
-	EndedAt       *string       `json:"endedAt"` // nil = the supervisor is still running
-	Cwd           string        `json:"cwd"`
-	PromptFile    string        `json:"promptFile"`
-	Label         *string       `json:"label"`
-	TimeoutMin    float64       `json:"timeoutMin"`
-	GitBaseline   *string       `json:"gitBaseline"`
-	OutDir        string        `json:"outDir"`
-	SupervisorPid int           `json:"supervisorPid"`
-	ResumedFrom   *string       `json:"resumedFrom,omitempty"` // the fan-out whose sessions this one continues
-	Members       []GroupMember `json:"members"`
+	SchemaVersion int      `json:"schemaVersion"`
+	StartedAt     string   `json:"startedAt"`
+	Cwd           string   `json:"cwd"`
+	TimeoutMin    float64  `json:"timeoutMin"`
+	GitBaseline   *string  `json:"gitBaseline"`
+	Members       []string `json:"members"`
 }
 
 // Marshal renders the canonical on-disk form.
@@ -99,7 +87,7 @@ func (g *Group) WriteFile(path string) error {
 	return WriteFileAtomic(path, data)
 }
 
-// ReadGroupFile parses a group.json.
+// ReadGroupFile parses a group.json this engine wrote.
 func ReadGroupFile(path string) (*Group, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -108,6 +96,9 @@ func ReadGroupFile(path string) (*Group, error) {
 	var g Group
 	if err := json.Unmarshal(data, &g); err != nil {
 		return nil, err
+	}
+	if g.SchemaVersion != GroupSchemaVersion {
+		return nil, fmt.Errorf("group.json is schema %d and this engine reads schema %d only", g.SchemaVersion, GroupSchemaVersion)
 	}
 	return &g, nil
 }

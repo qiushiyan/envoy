@@ -187,10 +187,6 @@ func TestCodexSuccess(t *testing.T) {
 		"session: fake-session-id",
 		"next: Collect and verify this job: envoy collect",
 	)
-	// The caller is an agent that names the job and collects by that name:
-	// nothing in the dispatch block is a coordinate it must read back, and
-	// nothing addresses a human at a keyboard.
-	mustNotContain(t, "stdout", res.stdout, "takeover", "watch:", "out-dir:")
 	if got := readFile(t, filepath.Join(outDir, "result.md")); got != "fake provider result" {
 		t.Fatalf("result.md = %q", got)
 	}
@@ -210,15 +206,6 @@ func TestCodexSuccess(t *testing.T) {
 	}
 	if meta["promptStateEvidence"] != "codex thread.started" {
 		t.Fatalf("evidence = %v", meta["promptStateEvidence"])
-	}
-	// The recorded follow-up is a complete command, not a fragment the caller
-	// has to assemble — it names this job, whose records carry the session and
-	// the settings, and leaves open only what the caller must choose.
-	resume, _ := meta["resumeCommand"].(string)
-	for _, want := range []string{"envoy run <new-job-name>", "--with @'" + outDir + "'", "--timeout-min 5", "--prompt-file <your-follow-up.md>"} {
-		if !strings.Contains(resume, want) {
-			t.Fatalf("resumeCommand %q is missing %q", resume, want)
-		}
 	}
 	tokens := meta["tokens"].(map[string]any)
 	if tokens["input"] != float64(13) || tokens["cachedInput"] != float64(5) || tokens["reasoningOutput"] != float64(3) {
@@ -314,11 +301,11 @@ func TestCollectOkBlockDoesNotGuessAtModelSubstitution(t *testing.T) {
 	collected := runEnvoy(t, e, "collect", outDir)
 	mustContain(t, "collect stdout", collected.stdout, "status: ok")
 	mustNotContain(t, "ok block", collected.stdout,
-		"provider: claude · model", "fake-claude-model", "label job")
+		"provider: claude · model", "fake-claude-model")
 
 	status := runEnvoy(t, e, "collect", "--status-only", outDir)
 	mustContain(t, "status-only stdout", status.stdout,
-		"provider: claude · model opus (ran fake-claude-model) · effort (provider default) · label job")
+		"provider: claude · model opus (ran fake-claude-model) · effort (provider default)")
 }
 
 func TestClaudePartialFailure(t *testing.T) {
@@ -375,7 +362,11 @@ func TestCodexTimeoutRecordsAcceptance(t *testing.T) {
 	// deserves is different.
 	mustContain(t, "error", meta["error"].(string),
 		"the stream had been quiet for", "after 1 event (last: thread.started)")
-	mustContain(t, "recoveryAction", meta["recoveryAction"].(string),
+	// The prescription is rendered from the records at collect time: the
+	// prompt was accepted, so the one move offered is to continue the session.
+	col := runEnvoy(t, e, "collect", outDir)
+	mustContain(t, "collect next", col.stdout,
+		"next: The provider accepted this prompt",
 		"--with @'"+outDir+"'", "--timeout-min 0.02",
 		"would repeat work that already happened")
 	mustContain(t, "result.md", readFile(t, filepath.Join(outDir, "result.md")), "# Turn timeout")
@@ -571,14 +562,16 @@ func TestCodexFreshSessionLockCollision(t *testing.T) {
 	if meta["sessionLockConflict"] == nil {
 		t.Fatal("meta must record the lock conflict")
 	}
-	if meta["resumeCommand"] != nil {
-		t.Fatalf("a conflicted session must suppress its resume coordinate: %v", meta["resumeCommand"])
-	}
 	if meta["promptStateEvidence"] != "codex thread.started with conflicting session lock" {
 		t.Fatalf("evidence = %v", meta["promptStateEvidence"])
 	}
 	mustContain(t, "result.md", readFile(t, filepath.Join(outDir, "result.md")),
 		"# Turn infra", "another turn already holds")
+	// The session may belong to the other turn, so no continuation of it is
+	// offered; the next move is to collect the job that holds it.
+	col := runEnvoy(t, e, "collect", outDir)
+	mustContain(t, "collect stdout", col.stdout, "session: fake-session-id", "next: Another turn holds this session id")
+	mustNotContain(t, "collect stdout", col.stdout, "resume: envoy run")
 }
 
 func TestInterruptRecordsPartialAndResume(t *testing.T) {
@@ -625,7 +618,8 @@ func TestInterruptRecordsPartialAndResume(t *testing.T) {
 		t.Fatalf("meta = status %v signal %v", meta["status"], meta["interruptionSignal"])
 	}
 	mustContain(t, "error", meta["error"].(string), "stopped codex after receiving SIGINT")
-	mustContain(t, "recoveryAction", meta["recoveryAction"].(string),
+	col := runEnvoy(t, e, "collect", outDir)
+	mustContain(t, "collect next", col.stdout,
 		"envoy run <new-job-name>", "--with @'"+outDir+"'", "--timeout-min 5")
 }
 
@@ -696,8 +690,7 @@ func TestCollectOkBlockHoldsBackDiagnostics(t *testing.T) {
 		"logs: progress ",
 		// The continuation names the job, not the session; a bare id line
 		// is one more chance to hand-assemble a follow-up out of it.
-		"session: fake-session-id\n",
-		"takeover")
+		"session: fake-session-id\n")
 
 	status := runEnvoy(t, e, "collect", "--status-only", outDir)
 	mustContain(t, "status-only block", status.stdout,
@@ -800,11 +793,10 @@ func TestCollectReconcilesAbandonedJob(t *testing.T) {
 	os.MkdirAll(outDir, 0o755)
 	os.WriteFile(filepath.Join(outDir, "prompt.md"), []byte("x"), 0o644)
 	meta := map[string]any{
-		"schemaVersion": 4, "status": "running", "provider": "codex",
+		"schemaVersion": 9, "status": "running", "provider": "codex",
 		"promptState": "accepted", "sessionId": "dead-session",
-		"resumeCommand": "envoy turn --provider codex --resume dead-session --timeout-min 180 --prompt-file <your-follow-up.md>",
-		"runnerPid":     4194304, "providerPid": 4194304, "providerPgid": 4194304,
-		"timeoutMin": 180.0, "nextAction": "wait", "resultKind": "none",
+		"runnerPid": 4194304, "providerPid": 4194304, "providerPgid": 4194304,
+		"timeoutMin": 180.0, "resultKind": "none",
 		"collectedAt": nil,
 	}
 	data, _ := json.Marshal(meta)
@@ -818,10 +810,7 @@ func TestCollectReconcilesAbandonedJob(t *testing.T) {
 		"status: abandoned — the process ended without publishing a result",
 		"This turn ended without publishing a result",
 		"continue the same session with a follow-up prompt",
-		"envoy run <new-job-name> --with @'"+outDir+"'")
-	// The persisted command names a verb that no longer exists; it is never
-	// replayed, the records are.
-	mustNotContain(t, "collect stdout", res.stdout, "envoy turn", "--resume dead-session")
+		"envoy run <new-job-name> --with @'"+outDir+"' --timeout-min 180")
 	got := readMeta(t, outDir)
 	if got["status"] != "abandoned" || got["reconciledAt"] == nil {
 		t.Fatalf("reconciled meta = status %v reconciledAt %v", got["status"], got["reconciledAt"])
@@ -871,9 +860,6 @@ func TestNamedJobsLiveInTheCentralStore(t *testing.T) {
 	entries, _ := os.ReadDir(project)
 	if len(entries) != 0 {
 		t.Fatalf("the project tree must stay untouched, found %v", entries)
-	}
-	if got := readMeta(t, outDir)["label"]; got != "consult" {
-		t.Fatalf("label = %v, want the job's name", got)
 	}
 
 	// Collect by name, from the project; the store is derived the same way.
@@ -1016,8 +1002,8 @@ func TestClaudeInitOnlyIsNotAcceptance(t *testing.T) {
 		t.Fatalf("init alone must not prove acceptance, got %v (evidence %v)",
 			meta["promptState"], meta["promptStateEvidence"])
 	}
-	mustContain(t, "recoveryAction", meta["recoveryAction"].(string),
-		"silence is not proof", "only once they show it never began")
+	col := runEnvoy(t, e, "collect", outDir)
+	mustContain(t, "collect next", col.stdout, "silence is not proof", "only once they show it never began")
 }
 
 // The fan-out contract: one command, one completion, one directory — and
@@ -1058,9 +1044,6 @@ func TestFanDispatchesEveryMemberAsAnOrdinaryTurn(t *testing.T) {
 		if meta["allowWrite"] != false {
 			t.Fatalf("%s: a fan-out member must be read-only", name)
 		}
-		// Recovery is per member: each carries its own complete follow-up.
-		resume, _ := meta["resumeCommand"].(string)
-		mustContain(t, name+" resumeCommand", resume, "envoy run <new-job-name>", "--with @'"+memberDir+"'")
 		if got := readFile(t, filepath.Join(memberDir, "result.md")); got != "fake provider result" {
 			t.Fatalf("%s result.md = %q", name, got)
 		}
@@ -1078,23 +1061,12 @@ func TestFanDispatchesEveryMemberAsAnOrdinaryTurn(t *testing.T) {
 	if err := json.Unmarshal([]byte(readFile(t, filepath.Join(outDir, "group.json"))), &group); err != nil {
 		t.Fatalf("group.json: %v", err)
 	}
-	if group["endedAt"] == nil {
-		t.Fatal("group.json must record when the fan-out finished")
-	}
+	// The manifest is a roster: the member's name is its directory, and
+	// everything else about a member — settings, session, outcome — is read
+	// from that member's own meta.json, never mirrored here.
 	members := group["members"].([]any)
-	if len(members) != 2 {
+	if len(members) != 2 || members[0] != "codex" || members[1] != "claude-opus" {
 		t.Fatalf("group.json members = %v", members)
-	}
-	first := members[0].(map[string]any)
-	if first["name"] != "codex" || first["outDir"] != filepath.Join(outDir, "codex") {
-		t.Fatalf("member roster = %v", first)
-	}
-	// The manifest is coordinates only. A member status here would be a second
-	// copy of what meta.json owns, free to drift from the turn it describes.
-	for _, forbidden := range []string{"status", "resultKind", "sessionId"} {
-		if _, ok := first[forbidden]; ok {
-			t.Fatalf("group.json must not mirror member state, found %q in %v", forbidden, first)
-		}
 	}
 
 	locks, _ := os.ReadDir(filepath.Join(e.home, ".local", "state", "envoy", "locks"))
@@ -1236,16 +1208,45 @@ func TestFanDuplicateMembersGetDistinctJobDirs(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "group")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "claude:opus", "--with", "claude:opus", "--timeout-min", "5")...)
+	// The third voice's model spells the name the numbering would give the
+	// second: a generated name must never land on a directory another member
+	// already owns, or two turns overwrite one answer.
+	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "claude:opus", "--with", "claude:opus",
+		"--with", "claude:opus-2", "--timeout-min", "5")...)
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
-	mustContain(t, "stdout", res.stdout, "member claude-opus: ok", "member claude-opus-2: ok")
-	for _, name := range []string{"claude-opus", "claude-opus-2"} {
+	members := readGroup(t, outDir)["members"].([]any)
+	if len(members) != 3 {
+		t.Fatalf("group.json members = %v", members)
+	}
+	seen := map[string]bool{}
+	for _, m := range members {
+		name := memberName(m)
+		if seen[name] {
+			t.Fatalf("two members share the address %q: %v", name, members)
+		}
+		seen[name] = true
 		if readMeta(t, filepath.Join(outDir, name))["status"] != "ok" {
 			t.Fatalf("%s did not run as its own turn", name)
 		}
+		mustContain(t, "stdout", res.stdout, "member "+name+": ok")
 	}
+	if !seen["claude-opus"] || !seen["claude-opus-2"] {
+		t.Fatalf("the first pair keeps its numbering: %v", seen)
+	}
+}
+
+// memberName reads a member's address from a manifest entry, whichever shape
+// the manifest records members in.
+func memberName(m any) string {
+	switch v := m.(type) {
+	case string:
+		return v
+	case map[string]any:
+		return v["name"].(string)
+	}
+	return ""
 }
 
 // A roster that cannot mean anything is refused in its own terms, before
@@ -1311,7 +1312,6 @@ func TestHelpIsSelfSufficient(t *testing.T) {
 		"6 partial",
 		"claude: low medium high xhigh max", // rendered from the provider map
 	)
-	mustNotContain(t, "stdout", res.stdout, "takeover", "watch:", "envoy turn", "envoy fan", "--coordinate-file", "--resume-from", "--with-from", "envoy steer", "envoy jobs")
 }
 
 func TestUsageErrors(t *testing.T) {
@@ -1391,17 +1391,13 @@ func TestFanResumeFromContinuesEveryMember(t *testing.T) {
 	if res.code != 0 {
 		t.Fatalf("round 2 exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
+	// The members keep their identities, and each says which conversation
+	// it continues.
 	mustContain(t, "round 2 stdout", res.stdout,
-		"resumed-from: "+r1,
-		"member codex: ",
-		"member claude-opus: ",
+		"member codex: model (provider default) · effort (provider default) · dir "+filepath.Join(r2, "codex")+" · continues "+filepath.Join(r1, "codex"),
+		"member claude-opus: model opus · effort (provider default) · dir "+filepath.Join(r2, "claude-opus")+" · continues "+filepath.Join(r1, "claude-opus"),
 		"status: ok — all 2 turns returned a result",
 	)
-
-	// The manifest records the lineage, and the members keep their identities.
-	if g := readGroup(t, r2); g["resumedFrom"] != r1 {
-		t.Fatalf("resumedFrom = %v, want %s", g["resumedFrom"], r1)
-	}
 	// Each member's turn is a real resume — the provider argv carries the
 	// original session — and the roster's settings carry over.
 	codexMeta := readMeta(t, filepath.Join(r2, "codex"))
@@ -1425,38 +1421,6 @@ func TestFanResumeFromContinuesEveryMember(t *testing.T) {
 			t.Fatalf("%s prompt.md = %q", name, got)
 		}
 	}
-}
-
-// The shapes a fan-out reference cannot take are refused with the voices
-// that would work, before anything spawns.
-func TestFanReferenceRefusals(t *testing.T) {
-	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
-	prompt := writePrompt(t, t.TempDir())
-	fanDir := filepath.Join(t.TempDir(), "fan")
-	if r := runEnvoy(t, e, runArgs(prompt, fanDir, "--with", "codex", "--with", "claude", "--timeout-min", "5")...); r.code != 0 {
-		t.Fatalf("fan exit = %d\nstderr:\n%s", r.code, r.stderr)
-	}
-
-	// A fan-out reference continues every member, so beside another voice
-	// it is refused — with each eligible member offered as the voice to name.
-	next := filepath.Join(t.TempDir(), "next")
-	res := runEnvoy(t, e, runArgs(prompt, next, "--with", "@"+fanDir, "--with", "codex")...)
-	if res.code != 3 {
-		t.Fatalf("fan ref beside a cold voice: exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
-	}
-	mustContain(t, "stderr", res.stderr, "stands alone",
-		"--with @'"+filepath.Join(fanDir, "codex")+"'  (codex)",
-		"--with @'"+filepath.Join(fanDir, "claude")+"'  (claude)")
-	if _, err := os.Stat(next); !os.IsNotExist(err) {
-		t.Fatal("a refused run must leave no job dir")
-	}
-
-	// Nothing at the path at all.
-	res = runEnvoy(t, e, runArgs(prompt, next, "--with", "@"+filepath.Join(t.TempDir(), "nowhere"))...)
-	if res.code != 3 {
-		t.Fatalf("missing job: exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
-	}
-	mustContain(t, "stderr", res.stderr, "no job found there")
 }
 
 // The resume set is whole or refused: a member that never published a session
@@ -1592,11 +1556,11 @@ func TestFanCollectResultOnly(t *testing.T) {
 	}
 }
 
-// A resumed fan-out starts every member or none — including at dispatch time.
 // A member's session held by another live turn (a caller resumed it
-// individually, say) must refuse the round before any sibling spawns, not
-// strand a partial round after validation passed on historical metadata.
-func TestFanResumeFromRefusesWhenASessionIsHeld(t *testing.T) {
+// individually, say) refuses that member alone: the runner's own lock is
+// the one gate, the sibling runs, and the round reports partial with the
+// refused member marked never dispatched.
+func TestFanResumeFromRefusesTheHeldMemberOnly(t *testing.T) {
 	e := newEnv(t).
 		set("ENVOY_FAKE_SCENARIO", "success").
 		set("ENVOY_FAKE_SESSION_ID_CODEX", "sess-codex-held").
@@ -1608,8 +1572,6 @@ func TestFanResumeFromRefusesWhenASessionIsHeld(t *testing.T) {
 		t.Fatalf("round 1 exit = %d\nstderr:\n%s", res.code, res.stderr)
 	}
 
-	// Another live turn holds the codex member's session, exactly as when a
-	// caller resumed that member individually and it is still running.
 	lockDir := filepath.Join(e.home, ".local", "state", "envoy", "locks")
 	if err := os.MkdirAll(lockDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -1622,18 +1584,17 @@ func TestFanResumeFromRefusesWhenASessionIsHeld(t *testing.T) {
 
 	r2 := filepath.Join(t.TempDir(), "round2")
 	res := runEnvoy(t, e, runArgs(prompt, r2, "--with", "@"+r1, "--timeout-min", "5")...)
-	if res.code != 3 {
-		t.Fatalf("held-session resume exit = %d, want 3\nstdout:\n%s\nstderr:\n%s",
+	if res.code != 6 {
+		t.Fatalf("held-member resume exit = %d, want 6 (partial)\nstdout:\n%s\nstderr:\n%s",
 			res.code, res.stdout, res.stderr)
 	}
-	mustContain(t, "stderr", res.stderr, "sess-codex-held")
-	if _, err := os.Stat(filepath.Join(r2, "claude-opus", "meta.json")); err == nil {
-		t.Fatal("a sibling turn ran while the set was refused")
+	mustContain(t, "stderr", res.stderr, "[codex] lock error:", "sess-codex-held")
+	mustContain(t, "stdout", res.stdout, "member codex: never dispatched", "member claude-opus: ok")
+	if _, err := os.Stat(filepath.Join(r2, "codex", "meta.json")); err == nil {
+		t.Fatal("the held member must not have run")
 	}
-	// The refusal happened after the name was reserved and before anything
-	// ran under it, so the name is given back rather than left occupied.
-	if _, err := os.Stat(r2); !os.IsNotExist(err) {
-		t.Fatal("a refused round must leave no job dir behind")
+	if readMeta(t, filepath.Join(r2, "claude-opus"))["status"] != "ok" {
+		t.Fatal("the free member runs")
 	}
 }
 
@@ -1651,13 +1612,12 @@ func TestConflictedMemberIsNotSetResumable(t *testing.T) {
 		}
 	}
 	cwd := t.TempDir()
-	group := fmt.Sprintf(`{"schemaVersion":1,"startedAt":"2026-07-28T00:00:00.000Z","endedAt":"2026-07-28T00:05:00.000Z","cwd":%q,"promptFile":%q,"label":null,"timeoutMin":5,"gitBaseline":null,"outDir":%q,"watchCommand":"","supervisorPid":1,"members":[{"name":"codex","provider":"codex","model":null,"effort":null,"outDir":%q},{"name":"claude-opus","provider":"claude","model":"opus","effort":null,"outDir":%q}]}`,
-		cwd, filepath.Join(dir, "prompt.md"), dir, codexDir, opusDir)
+	group := fmt.Sprintf(`{"schemaVersion":2,"startedAt":"2026-07-28T00:00:00.000Z","cwd":%q,"timeoutMin":5,"gitBaseline":null,"members":["codex","claude-opus"]}`, cwd)
 	if err := os.WriteFile(filepath.Join(dir, "group.json"), []byte(group), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	okMeta := `{"schemaVersion":4,"status":"ok","provider":"codex","sessionId":"sess-ok","promptState":"accepted","timeoutMin":5,"collectedAt":null}`
-	conflictMeta := `{"schemaVersion":4,"status":"failed","provider":"claude","model":"opus","sessionId":"sess-conflict","sessionLockConflict":"session sess-conflict already has a live turn","promptState":"unknown","timeoutMin":5,"collectedAt":null}`
+	okMeta := `{"schemaVersion":9,"status":"ok","provider":"codex","sessionId":"sess-ok","promptState":"accepted","timeoutMin":5,"collectedAt":null}`
+	conflictMeta := `{"schemaVersion":9,"status":"failed","provider":"claude","model":"opus","sessionId":"sess-conflict","sessionLockConflict":"session sess-conflict already has a live turn","promptState":"unknown","timeoutMin":5,"collectedAt":null}`
 	os.WriteFile(filepath.Join(codexDir, "meta.json"), []byte(okMeta), 0o644)
 	os.WriteFile(filepath.Join(opusDir, "meta.json"), []byte(conflictMeta), 0o644)
 	os.WriteFile(filepath.Join(codexDir, "result.md"), []byte("codex answer"), 0o644)
@@ -1686,7 +1646,7 @@ func TestCollectDoesNotStampAnOkTurnWithoutItsResult(t *testing.T) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		meta := `{"schemaVersion":4,"status":"ok","provider":"codex","sessionId":"sess-1","promptState":"accepted","timeoutMin":5,"collectedAt":null}`
+		meta := `{"schemaVersion":9,"status":"ok","provider":"codex","sessionId":"sess-1","promptState":"accepted","timeoutMin":5,"collectedAt":null}`
 		if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte(meta), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -1725,12 +1685,11 @@ func TestFanCollectFlagsUndeliveredOkResult(t *testing.T) {
 		}
 	}
 	cwd := t.TempDir()
-	group := fmt.Sprintf(`{"schemaVersion":1,"startedAt":"2026-07-28T00:00:00.000Z","endedAt":"2026-07-28T00:05:00.000Z","cwd":%q,"promptFile":%q,"label":null,"timeoutMin":5,"gitBaseline":null,"outDir":%q,"watchCommand":"","supervisorPid":1,"members":[{"name":"codex","provider":"codex","model":null,"effort":null,"outDir":%q},{"name":"claude-opus","provider":"claude","model":"opus","effort":null,"outDir":%q}]}`,
-		cwd, filepath.Join(dir, "prompt.md"), dir, codexDir, opusDir)
+	group := fmt.Sprintf(`{"schemaVersion":2,"startedAt":"2026-07-28T00:00:00.000Z","cwd":%q,"timeoutMin":5,"gitBaseline":null,"members":["codex","claude-opus"]}`, cwd)
 	if err := os.WriteFile(filepath.Join(dir, "group.json"), []byte(group), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	okMeta := `{"schemaVersion":4,"status":"ok","provider":"%s","sessionId":"sess-%s","promptState":"accepted","timeoutMin":5,"collectedAt":null}`
+	okMeta := `{"schemaVersion":9,"status":"ok","provider":"%s","sessionId":"sess-%s","promptState":"accepted","timeoutMin":5,"collectedAt":null}`
 	os.WriteFile(filepath.Join(codexDir, "meta.json"), []byte(fmt.Sprintf(okMeta, "codex", "a")), 0o644)
 	os.WriteFile(filepath.Join(opusDir, "meta.json"), []byte(fmt.Sprintf(okMeta, "claude", "b")), 0o644)
 	// codex delivered; claude-opus reports ok but its payload is gone.
@@ -1798,4 +1757,51 @@ func TestClaudeBlockCarriesNoConnectionTally(t *testing.T) {
 	}
 	status := runEnvoy(t, e, "collect", "--status-only", outDir)
 	mustNotContain(t, "claude status block", status.stdout, "provider stream:")
+}
+
+// The option terminator is part of the documented grammar: a job whose
+// spelling starts with a dash can only be named after `--`.
+func TestCollectAcceptsTheOptionTerminator(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	outDir := filepath.Join(t.TempDir(), "job")
+	prompt := writePrompt(t, t.TempDir())
+	if r := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "5")...); r.code != 0 {
+		t.Fatalf("turn exit = %d\nstderr:\n%s", r.code, r.stderr)
+	}
+	res := runEnvoy(t, e, "collect", "--status-only", "--", outDir)
+	if res.code != 0 {
+		t.Fatalf("collect -- <job>: exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	mustContain(t, "stdout", res.stdout, "job: "+outDir, "status: ok")
+}
+
+// A prompt the provider never received is safe to send again — but only as
+// the same dispatch. A continuation that failed to start must be re-sent into
+// the same conversation with the same spend cap; a fresh cold voice with no
+// budget is a different job, and offering it as "the identical retry" loses
+// both the session and the safety net.
+func TestRedispatchRepeatsTheDispatchItReplaces(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").set("ENVOY_FAKE_SESSION_ID", "sess-r1")
+	prompt := writePrompt(t, t.TempDir())
+	r1 := filepath.Join(t.TempDir(), "consult")
+	if r := runEnvoy(t, e, runArgs(prompt, r1, "--with", "claude:opus", "--timeout-min", "5")...); r.code != 0 {
+		t.Fatalf("round 1 exit = %d\nstderr:\n%s", r.code, r.stderr)
+	}
+
+	// No provider on PATH: the continuation provably never starts.
+	noProvider := newEnv(t).set("PATH", t.TempDir())
+	r2 := filepath.Join(t.TempDir(), "review")
+	res := runEnvoy(t, noProvider, runArgs(prompt, r2, "--with", "@"+r1, "--max-budget-usd", "0.25", "--timeout-min", "9")...)
+	if res.code != 2 {
+		t.Fatalf("spawn failure exit = %d, want 2\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	col := runEnvoy(t, noProvider, "collect", r2)
+	mustContain(t, "collect stdout", col.stdout,
+		"never started",
+		"envoy run <new-job-name>",
+		"--with @'"+r1+"'",
+		"--max-budget-usd 0.25",
+		"--timeout-min 9",
+		"--prompt-file '"+filepath.Join(r2, "prompt.md")+"'")
+	mustNotContain(t, "collect stdout", col.stdout, "--with claude")
 }

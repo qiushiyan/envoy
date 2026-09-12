@@ -36,6 +36,11 @@ func TestAcquireConflictRelease(t *testing.T) {
 	if strings.Contains(conflict.Message, "Automatic takeover is refused") {
 		t.Fatal("live owner must not be reported as a stale refusal")
 	}
+	// The caller is an agent that waits and collects; a terminal to tail is
+	// not a thing it has.
+	if strings.Contains(conflict.Message, "tail -f") || !strings.Contains(conflict.Message, "envoy collect '/tmp/job1'") {
+		t.Fatalf("a live conflict must point at the owning job's collect, not a watch command: %q", conflict.Message)
+	}
 
 	h.Release()
 	if _, err := os.Stat(Path("session-a")); !os.IsNotExist(err) {

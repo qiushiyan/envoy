@@ -22,7 +22,6 @@ type Options struct {
 	Effort       string // "" = the provider's own configured default
 	Resume       string // session id to continue, "" = fresh session
 	AllowWrite   bool
-	TimeoutMin   float64  // recorded into resume fragments
 	MaxBudgetUSD *float64 // claude only
 }
 

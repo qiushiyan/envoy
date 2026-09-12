@@ -1,12 +1,16 @@
 // Package collect recovers or prints one finished (or stranded) job as a
 // single scannable block, and discovers pending jobs after a possibly missed
 // completion notification. Explicit collection stamps terminal jobs with
-// collectedAt; pending discovery never marks anything collected.
+// collectedAt once their block has reached the caller; pending discovery
+// never marks anything collected.
+//
+// Every command and prescription a caller reads is rendered here, from the
+// job's records and the directory they were read from. The runner records
+// facts; this package words them.
 package collect
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -56,6 +60,72 @@ func JobDirs(base string) ([]string, error) {
 func FirstRun(err error, baseWasDerived bool) bool {
 	return baseWasDerived && errors.Is(err, fs.ErrNotExist)
 }
+
+// ---------- continuing a finished job ----------
+
+// Source is a finished turn whose conversation a follow-up may continue,
+// carrying the recorded settings the follow-up inherits unless the caller
+// overrides them.
+type Source struct {
+	Provider   string
+	Model      string
+	Effort     string
+	Cwd        string
+	Baseline   string
+	Session    string
+	AllowWrite bool
+}
+
+// continuationBlocker is the single definition of "this job's session may
+// not be continued", consulted by every surface that advertises or dispatches
+// a continuation: collect's resume line, the fan-out's set-level resume line,
+// and the @<job> inspection at dispatch. One definition means no surface can
+// advertise a follow-up that dispatch would refuse. A recorded session-lock
+// conflict blocks because the session may belong to another job.
+func continuationBlocker(meta *job.Meta) (prose.ResumeBlockerKind, bool) {
+	switch {
+	case meta == nil:
+		return prose.BlockerUnreadableMeta, true
+	case meta.Status == job.StatusRunning:
+		return prose.BlockerRunning, true
+	case meta.SessionLockConflict != nil:
+		return prose.BlockerLockConflict, true
+	case meta.SessionID == nil:
+		return prose.BlockerNoSession, true
+	}
+	return "", false
+}
+
+// Inspect reads dir as a single turn and reports whether its conversation
+// can be continued. The error is non-nil only when dir holds no readable
+// turn at all; a real turn that cannot continue reports a blocker instead.
+func Inspect(dir string) (*Source, prose.ResumeBlockerKind, error) {
+	metaPath := job.Workspace{Dir: dir}.MetaPath()
+	if _, err := os.Stat(metaPath); err != nil {
+		return nil, "", fmt.Errorf("no job found there (no meta.json)")
+	}
+	meta, err := job.ReadMetaFile(metaPath)
+	if err != nil {
+		return nil, "", err
+	}
+	if !job.KnownStatus(meta.Status) || meta.Provider == "" {
+		return nil, "", fmt.Errorf("meta.json is not a job this engine wrote (status %q)", meta.Status)
+	}
+	if kind, blocked := continuationBlocker(meta); blocked {
+		return nil, kind, nil
+	}
+	return &Source{
+		Provider:   meta.Provider,
+		Model:      deref(meta.Model),
+		Effort:     deref(meta.Effort),
+		Cwd:        meta.Cwd,
+		Baseline:   deref(meta.GitBaseline),
+		Session:    *meta.SessionID,
+		AllowWrite: meta.AllowWrite,
+	}, "", nil
+}
+
+// ---------- classification and recovery ----------
 
 // runningState classifies a status:"running" meta by process liveness.
 type runningState struct {
@@ -107,77 +177,32 @@ func classifyRunning(meta *job.Meta) runningState {
 	}
 }
 
-// turnFromMeta rebuilds the dispatched turn's settings for follow-up
-// rendering, or reports false when this job has no continuable session (none
-// recorded, or a lock conflict that means the session may belong elsewhere).
-func turnFromMeta(meta *job.Meta) (prose.Turn, bool) {
-	if meta.SessionLockConflict != nil || meta.SessionID == nil {
-		return prose.Turn{}, false
-	}
-	return prose.Turn{
-		Dir:        meta.OutDir,
-		Provider:   meta.Provider,
-		SessionID:  *meta.SessionID,
-		Cwd:        meta.Cwd,
-		Model:      deref(meta.Model),
-		Effort:     deref(meta.Effort),
-		AllowWrite: meta.AllowWrite,
-		Baseline:   deref(meta.GitBaseline),
-		PromptFile: meta.PromptFile,
-		TimeoutMin: meta.TimeoutMin,
-	}, true
-}
-
-// redispatchCommand rebuilds a fresh dispatch of this job's prompt under a new
-// name, for a prompt the provider provably never received.
-func redispatchCommand(meta *job.Meta) string {
-	return prose.Turn{
-		Dir:        meta.OutDir,
-		Provider:   meta.Provider,
-		Cwd:        meta.Cwd,
-		Model:      deref(meta.Model),
-		Effort:     deref(meta.Effort),
-		AllowWrite: meta.AllowWrite,
-		Baseline:   deref(meta.GitBaseline),
-		PromptFile: meta.PromptFile,
-		TimeoutMin: meta.TimeoutMin,
-	}.RedispatchCommand()
-}
-
-// recoveryAction is the prescription for a terminal job that did not deliver.
-// A job this engine version wrote carries its own — the driver's remedy clause
-// is only known at the moment the turn ended — and an older job's persisted
-// text names commands that no longer exist, so it is re-rendered from the
-// records here.
-func recoveryAction(meta *job.Meta) string {
-	if meta.RecoveryAction != nil && meta.SchemaVersion >= job.MetaSchemaVersion {
-		return *meta.RecoveryAction
-	}
-	return prose.Recovery(meta.PromptState, resumeCommand(meta), redispatchCommand(meta), "")
-}
-
-// resumeCommand rebuilds this job's follow-up command from what the turn was
-// dispatched with, so the caller never has to assemble one — or discover too
-// late that the original turn's write intent was dropped.
-func resumeCommand(meta *job.Meta) string {
-	turn, ok := turnFromMeta(meta)
-	if !ok {
+// resumeCommand is the follow-up that continues this job's conversation, or
+// "" when continuing it is not licensed — the same eligibility an @<job>
+// voice applies, so collect can never offer a continuation dispatch would
+// refuse.
+func resumeCommand(dir string, meta *job.Meta) string {
+	if _, blocked := continuationBlocker(meta); blocked {
 		return ""
 	}
-	return turn.ResumeCommand()
+	return prose.ContinueCommand(dir, meta.TimeoutMin)
 }
 
-func deref(s *string) string {
-	if s == nil {
-		return ""
+// recoveryAction is the prescription for a terminal job that did not
+// deliver, rendered from its records: what the prompt state licenses, the
+// driver's own remedy where it recorded one, and the commands that continue
+// or repeat the dispatch.
+func recoveryAction(dir string, meta *job.Meta) string {
+	if meta.SessionLockConflict != nil {
+		return prose.LockedSession(*meta.SessionLockConflict, false)
 	}
-	return *s
+	return prose.Recovery(meta.PromptState, resumeCommand(dir, meta), prose.RedispatchCommand(dir, meta), deref(meta.Remedy))
 }
 
 // recoveryForStale prescribes the next move for a job whose runner is gone.
 // A live orphan provider outranks the prompt state: acting alongside it would
 // put two turns in one tree.
-func recoveryForStale(meta *job.Meta, state runningState) string {
+func recoveryForStale(dir string, meta *job.Meta, state runningState) string {
 	if meta.SessionLockConflict != nil {
 		return prose.LockedSession(*meta.SessionLockConflict, state.kind == "orphaned")
 	}
@@ -185,30 +210,35 @@ func recoveryForStale(meta *job.Meta, state runningState) string {
 	case "orphaned":
 		return prose.Orphaned()
 	case "abandoned":
-		return prose.Recovery(meta.PromptState, resumeCommand(meta), redispatchCommand(meta), "")
+		return recoveryAction(dir, meta)
 	default:
 		return prose.Unprovable()
 	}
 }
 
 // reconcileAbandoned rewrites a provably abandoned running job as terminal
-// status "abandoned" so its evidence survives and its next action is recorded.
-func reconcileAbandoned(outDir string, meta *job.Meta, state runningState) *job.Meta {
+// status "abandoned" so its evidence survives.
+func reconcileAbandoned(dir string, meta *job.Meta, state runningState) *job.Meta {
 	if state.kind != "abandoned" {
 		return meta
 	}
+	ws := job.Workspace{Dir: dir}
 	errText := fmt.Sprintf("This turn ended without publishing a result: %s.", state.detail)
 	meta.Status = job.StatusAbandoned
 	meta.ReconciledAt = job.Ptr(job.ISO(time.Now()))
 	meta.Error = job.Ptr(errText)
-	meta.NextAction = prose.CollectThisJob(outDir)
-	meta.RecoveryAction = job.Ptr(recoveryForStale(meta, state))
-	resultPath := filepath.Join(outDir, "result.md")
-	if _, err := os.Stat(resultPath); os.IsNotExist(err) {
-		job.WriteFileAtomic(resultPath, []byte(fmt.Sprintf("# Turn abandoned\n\n%s\n", errText)))
+	if _, err := os.Stat(ws.ResultPath()); os.IsNotExist(err) {
+		job.WriteFileAtomic(ws.ResultPath(), []byte(fmt.Sprintf("# Turn abandoned\n\n%s\n", errText)))
 	}
-	meta.WriteFile(filepath.Join(outDir, "meta.json"))
+	meta.WriteFile(ws.MetaPath())
 	return meta
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 func groupThousands(n int64) string {
@@ -229,6 +259,8 @@ func groupThousands(n int64) string {
 	}
 	return b.String()
 }
+
+// ---------- collection ----------
 
 // Mode selects which sections of a job's block collection prints. The default
 // prints everything; the narrowed modes exist because the block is read by an
@@ -252,64 +284,91 @@ const (
 )
 
 // Collect prints one job — a single turn, or a whole fan-out with a section per
-// member — and stamps first terminal collection. Returns a process exit code.
-func Collect(outDir string, mode Mode, w, errW io.Writer) int {
-	if job.IsGroupDir(outDir) {
-		return collectGroup(outDir, mode, w, errW)
+// member — and stamps first terminal collection once the block has reached
+// the caller. Returns a process exit code.
+//
+// Rendering and acknowledgment are separate steps: the block is rendered in
+// full first, written to the caller second, and only a write that succeeded
+// stamps anything. A caller whose output broke mid-block is still owed the
+// job, and pending discovery keeps listing it.
+func Collect(dir string, mode Mode, w, errW io.Writer) int {
+	if job.IsGroupDir(dir) {
+		return collectGroup(dir, mode, w, errW)
 	}
-	_, _, code := collectJob(outDir, mode, w, errW, true)
-	return code
+	var body bytes.Buffer
+	r := renderJob(dir, mode, &body, errW, true)
+	if r.code != 0 {
+		return r.code
+	}
+	if !deliver(w, errW, body.Bytes()) {
+		return job.ExitInfra
+	}
+	if r.stamp {
+		stampCollected(dir, r.meta)
+	}
+	return 0
 }
 
-// collectJob prints one turn and reports the meta it published plus whether
-// an ok payload failed to reach the output, so a fan-out can aggregate its
-// members — status and delivery both — without a second reader of meta.json.
-// showGit is false for a member of a fan-out, where the reviewed range
-// belongs to the whole fan-out and is printed once above the members rather
-// than per member.
-func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (collected *job.Meta, okUndelivered bool, code int) {
-	metaPath := filepath.Join(outDir, "meta.json")
-	resultPath := filepath.Join(outDir, "result.md")
-	if _, err := os.Stat(metaPath); err != nil {
+// deliver writes a rendered block to the caller and reports whether all of
+// it arrived. A short or failed write is reported on stderr so the caller
+// knows the job is still owed.
+func deliver(w, errW io.Writer, body []byte) bool {
+	n, err := w.Write(body)
+	if err == nil && n < len(body) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		fmt.Fprintf(errW, "collect error: the block was not delivered (%s), so nothing was marked collected; collect again once the output is readable\n", err)
+		return false
+	}
+	return true
+}
+
+// rendered is what one turn's block decided while it was being written: the
+// record it described, whether an ok payload failed to reach the block, and
+// whether delivering the block completes the collection.
+type rendered struct {
+	meta        *job.Meta
+	undelivered bool // ok status, but result.md could not be read
+	stamp       bool // deliverable complete: stamp once the block is written
+	code        int
+}
+
+// renderJob writes one turn's block into w and reports what a fan-out needs
+// to aggregate its members — status and delivery both — without a second
+// reader of meta.json. showGit is false for a member of a fan-out, where the
+// reviewed range belongs to the whole fan-out and is printed once above the
+// members rather than per member.
+func renderJob(dir string, mode Mode, w io.Writer, errW io.Writer, showGit bool) rendered {
+	ws := job.Workspace{Dir: dir}
+	if _, err := os.Stat(ws.MetaPath()); err != nil {
 		fmt.Fprintf(errW,
 			"collect error: %s not found — inspect %s, %s, %s, and the working tree before deciding whether to retry\n",
-			metaPath,
-			filepath.Join(outDir, "progress.log"),
-			filepath.Join(outDir, "raw.log"),
-			filepath.Join(outDir, "stderr.log"))
-		return nil, false, job.ExitUsage
+			ws.MetaPath(), ws.ProgressLogPath(), ws.RawLogPath(), ws.StderrLogPath())
+		return rendered{code: job.ExitUsage}
 	}
-	meta, _, err := job.ReadMetaFile(metaPath)
+	meta, err := job.ReadMetaFile(ws.MetaPath())
 	if err != nil {
 		fmt.Fprintf(errW,
-			"collect error: %s is not valid JSON (%s). Inspect %s, %s, %s, and the working tree; do not assume the job finished or retry it blindly.\n",
-			metaPath, err,
-			filepath.Join(outDir, "progress.log"),
-			filepath.Join(outDir, "raw.log"),
-			filepath.Join(outDir, "stderr.log"))
-		return nil, false, job.ExitUsage
-	}
-	// An older record may not name its own directory; the follow-up commands
-	// are rendered from where it was actually read.
-	if meta.OutDir == "" {
-		meta.OutDir = outDir
+			"collect error: %s could not be read (%s). Inspect %s, %s, %s, and the working tree; do not assume the job finished or retry it blindly.\n",
+			ws.MetaPath(), err, ws.ProgressLogPath(), ws.RawLogPath(), ws.StderrLogPath())
+		return rendered{code: job.ExitUsage}
 	}
 	state := classifyRunning(meta)
-	meta = reconcileAbandoned(outDir, meta, state)
+	meta = reconcileAbandoned(dir, meta, state)
 	state = classifyRunning(meta)
 
 	// The payload is read once, before anything is printed, because whether it
 	// reads is what the rest of the block is shaped around — not a detail
 	// discovered on the way past.
-	resultBody, resultErr := os.ReadFile(resultPath)
+	resultBody, resultErr := os.ReadFile(ws.ResultPath())
 
 	// The result-only shortcut applies only when the payload actually reads:
 	// an ok turn whose result.md is unreadable falls through to the full
 	// block, which diagnoses the missing payload and leaves the job owed.
 	if mode == ModeResultOnly && meta.Status == job.StatusOK && resultErr == nil {
 		fmt.Fprintln(w, string(resultBody))
-		stampCollected(metaPath, meta, prose.CollectedOK())
-		return meta, false, 0
+		return rendered{meta: meta, stamp: true}
 	}
 
 	// What the block holds back is decided by delivery, not by status. A turn
@@ -324,7 +383,7 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 	delivered := meta.Status == job.StatusOK && resultErr == nil
 	diagnostic := !delivered || mode == ModeStatusOnly
 
-	fmt.Fprintf(w, "job: %s\n", outDir)
+	fmt.Fprintf(w, "job: %s\n", dir)
 	if meta.Status == job.StatusRunning {
 		fmt.Fprintf(w, "status: running (%s — %s; result.md is not final)\n", state.kind, state.detail)
 	} else {
@@ -359,11 +418,7 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 		}
 	}
 	if diagnostic {
-		labelSuffix := ""
-		if meta.Label != nil {
-			labelSuffix = " · label " + *meta.Label
-		}
-		fmt.Fprintf(w, "provider: %s · model %s · effort %s%s\n", meta.Provider, modelDisplay, display(meta.Effort), labelSuffix)
+		fmt.Fprintf(w, "provider: %s · model %s · effort %s\n", meta.Provider, modelDisplay, display(meta.Effort))
 	}
 	if meta.DurationMs != nil {
 		costSuffix := ""
@@ -404,27 +459,17 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 		// eligibility: gating each path on the branch that happened to fire
 		// would make the block's shape unpredictable to save one line on a job
 		// already in trouble.
-		fmt.Fprintf(w, "logs: progress %s · raw %s · stderr %s\n",
-			orDefault(meta.ProgressPath, filepath.Join(outDir, "progress.log")),
-			orDefault(meta.RawPath, filepath.Join(outDir, "raw.log")),
-			orDefault(meta.StderrPath, filepath.Join(outDir, "stderr.log")))
+		fmt.Fprintf(w, "logs: progress %s · raw %s · stderr %s\n", ws.ProgressLogPath(), ws.RawLogPath(), ws.StderrLogPath())
 	}
 	if meta.ResumedFrom != nil {
 		fmt.Fprintf(w, "resumed-from: %s\n", *meta.ResumedFrom)
 	}
 	if meta.SessionID != nil {
-		// The follow-up command is advertised only when dispatching it is
-		// licensed — the same eligibility an @<job> voice applies, so collect
-		// can never offer a continuation dispatch would refuse. A running
-		// turn's session still prints; its next line says to wait.
-		resume := ""
-		if _, blocked := memberResumeBlocker(meta); !blocked {
-			resume = resumeCommand(meta)
-		}
 		// The bare id is printed only when no command carries it: the
 		// continuation names the job, not the session, so a caller never
-		// hand-assembles a follow-up out of the id.
-		if resume == "" {
+		// hand-assembles a follow-up out of the id. A running turn's session
+		// still prints; its next line says to wait.
+		if resume := resumeCommand(dir, meta); resume == "" {
 			fmt.Fprintf(w, "session: %s\n", *meta.SessionID)
 		} else {
 			fmt.Fprintf(w, "resume: %s\n", resume)
@@ -456,81 +501,89 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 
 	if meta.Status == job.StatusRunning {
 		if state.kind == "live" {
-			fmt.Fprintf(w, "\nnext: %s\n", prose.RunningNext(outDir))
+			fmt.Fprintf(w, "\nnext: %s\n", prose.RunningNext(dir))
 		} else {
-			fmt.Fprintf(w, "\nnext: %s\n", recoveryForStale(meta, state))
+			fmt.Fprintf(w, "\nnext: %s\n", recoveryForStale(dir, meta, state))
 		}
-		return meta, false, 0
+		return rendered{meta: meta}
 	}
 
 	if mode == ModeStatusOnly {
-		fmt.Fprintf(w, "\nnext: %s\n", prose.StatusOnlyNext(outDir))
-		return meta, false, 0
+		fmt.Fprintf(w, "\nnext: %s\n", prose.StatusOnlyNext(dir))
+		return rendered{meta: meta}
 	}
 
 	// An ok turn's deliverable is its payload; a non-ok turn's is the status
 	// and recovery above. Only a delivered deliverable stamps collection, so
 	// an ok turn whose result.md cannot be read stays owed.
 	if meta.Status == job.StatusOK && !resultDelivered {
-		fmt.Fprintf(w, "\nnext: %s\n", prose.OkResultUnreadable(outDir))
-		return meta, true, 0
+		fmt.Fprintf(w, "\nnext: %s\n", prose.OkResultUnreadable(dir))
+		return rendered{meta: meta, undelivered: true}
 	}
 
-	postCollectionAction := prose.CollectedOK()
-	if meta.Status != job.StatusOK {
-		postCollectionAction = recoveryAction(meta)
+	if meta.Status == job.StatusOK {
+		fmt.Fprintf(w, "\nnext: %s\n", prose.CollectedOK())
+	} else {
+		fmt.Fprintf(w, "\nnext: %s\n", recoveryAction(dir, meta))
 	}
-	stampCollected(metaPath, meta, postCollectionAction)
-	fmt.Fprintf(w, "\nnext: %s\n", postCollectionAction)
-	return meta, false, 0
+	return rendered{meta: meta, stamp: true}
 }
 
-// stampCollected marks first terminal collection: the result body has actually
+// stampCollected marks first terminal collection: the block has actually
 // been delivered to a caller, so pending discovery stops listing the job.
-func stampCollected(metaPath string, meta *job.Meta, nextAction string) {
+func stampCollected(dir string, meta *job.Meta) {
 	if meta.CollectedAt != nil {
 		return
 	}
 	meta.CollectedAt = job.Ptr(job.ISO(time.Now()))
-	meta.NextAction = nextAction
-	meta.WriteFile(metaPath)
+	meta.WriteFile(job.Workspace{Dir: dir}.MetaPath())
 }
 
 // collectGroup prints a whole fan-out: the aggregate first, then one section
 // per member, split by member name. The member sections are rendered before
-// the header is written because collecting a member can change its status —
-// reconciling an abandoned turn — and an aggregate that disagreed with the
-// sections below it would be worse than no aggregate at all.
+// the header because collecting a member can change its status — reconciling
+// an abandoned turn — and an aggregate that disagreed with the sections below
+// it would be worse than no aggregate at all. Nothing is stamped until the
+// whole block has reached the caller.
 func collectGroup(dir string, mode Mode, w, errW io.Writer) int {
 	gw := job.GroupWorkspace{Dir: dir}
 	group, err := job.ReadGroupFile(gw.GroupPath())
 	if err != nil {
 		fmt.Fprintf(errW,
-			"collect error: %s is unreadable (%s). Each member's job dir under %s is self-contained — collect one directly to see its result.\n",
+			"collect error: %s could not be read (%s). Each member's job dir under %s is self-contained — collect one directly to see its result.\n",
 			gw.GroupPath(), err, dir)
 		return job.ExitUsage
 	}
 
-	var body bytes.Buffer
+	var sections bytes.Buffer
 	statuses := make([]string, 0, len(group.Members))
 	labels := make([]string, 0, len(group.Members))
 	var undelivered []string
+	type stampable struct {
+		dir  string
+		meta *job.Meta
+	}
+	var stamps []stampable
 	resumable := len(group.Members) > 0
-	for _, m := range group.Members {
-		fmt.Fprintf(&body, "\n=== member %s ===\n", m.Name)
-		meta, okUndelivered, code := collectJob(m.OutDir, mode, &body, errW, false)
+	for _, name := range group.Members {
+		memberDir := gw.Member(name).Dir
+		fmt.Fprintf(&sections, "\n=== member %s ===\n", name)
+		r := renderJob(memberDir, mode, &sections, errW, false)
 		status := ""
-		if code != 0 {
+		if r.code != 0 {
 			// The member dir carries no readable meta: the turn never got far
-			// enough to publish one. collectJob has already said so on stderr.
-			fmt.Fprintf(&body, "status: %s\n", prose.FanUndispatched())
+			// enough to publish one. renderJob has already said so on stderr.
+			fmt.Fprintf(&sections, "status: %s\n", prose.FanUndispatched())
 		} else {
-			status = meta.Status
+			status = r.meta.Status
 		}
-		if okUndelivered {
-			undelivered = append(undelivered, m.Name)
+		if r.undelivered {
+			undelivered = append(undelivered, name)
 		}
-		if _, blocked := memberResumeBlocker(meta); blocked {
+		if r.stamp {
+			stamps = append(stamps, stampable{memberDir, r.meta})
+		}
+		if _, blocked := continuationBlocker(r.meta); blocked {
 			resumable = false
 		}
 		statuses = append(statuses, status)
@@ -538,7 +591,7 @@ func collectGroup(dir string, mode Mode, w, errW io.Writer) int {
 		if label == "" {
 			label = "no status"
 		}
-		labels = append(labels, m.Name+" "+label)
+		labels = append(labels, name+" "+label)
 	}
 
 	// The group's closing aggregates delivery alongside status: a member that
@@ -551,45 +604,48 @@ func collectGroup(dir string, mode Mode, w, errW io.Writer) int {
 		return prose.FanCollected(dir, statuses)
 	}
 
-	// Result-only keeps the aggregate line and the member split — attribution
-	// is the point of a fan-out — and drops the coordinate preamble.
+	var body bytes.Buffer
 	if mode == ModeResultOnly {
-		fmt.Fprintf(w, "status: %s\n", prose.FanStatusLine(statuses))
-		w.Write(body.Bytes())
+		// Result-only keeps the aggregate line and the member split —
+		// attribution is the point of a fan-out — and drops the preamble.
+		fmt.Fprintf(&body, "status: %s\n", prose.FanStatusLine(statuses))
+		body.Write(sections.Bytes())
 		if len(undelivered) > 0 || prose.FanStatus(statuses) != prose.FanOK {
-			fmt.Fprintf(w, "\nnext: %s\n", closing())
+			fmt.Fprintf(&body, "\nnext: %s\n", closing())
 		}
-		return 0
-	}
-
-	fmt.Fprintf(w, "fan-out: %s\n", dir)
-	fmt.Fprintf(w, "status: %s\n", prose.FanStatusLine(statuses))
-	fmt.Fprintf(w, "members: %s\n", strings.Join(labels, " · "))
-	// The prompt this fan-out was given is the caller's own file, and a set
-	// that returned every result raises no question it answers. It joins the
-	// members' diagnostic tier: printed when a member needs a decision, and
-	// whenever the whole preamble was asked for.
-	if prose.FanStatus(statuses) != prose.FanOK || mode == ModeStatusOnly {
-		fmt.Fprintf(w, "prompt: %s\n", gw.PromptPath())
-	}
-	if group.ResumedFrom != nil {
-		fmt.Fprintf(w, "resumed-from: %s\n", *group.ResumedFrom)
-	}
-	// The set-level follow-up is offered only when it is provably possible:
-	// every member finished and holds a session to continue.
-	if resumable {
-		fmt.Fprintf(w, "resume: %s\n", prose.ContinueCommand(dir, group.TimeoutMin))
-	}
-	// Every member reviewed the same range, so it is reported once here rather
-	// than repeated under each of them.
-	if group.GitBaseline != nil {
-		printGitSinceBaseline(w, group.Cwd, *group.GitBaseline)
-	}
-	w.Write(body.Bytes())
-	if mode == ModeStatusOnly {
-		fmt.Fprintf(w, "\nnext: %s\n", prose.StatusOnlyNext(dir))
 	} else {
-		fmt.Fprintf(w, "\nnext: %s\n", closing())
+		fmt.Fprintf(&body, "fan-out: %s\n", dir)
+		fmt.Fprintf(&body, "status: %s\n", prose.FanStatusLine(statuses))
+		fmt.Fprintf(&body, "members: %s\n", strings.Join(labels, " · "))
+		// The prompt this fan-out was given is the caller's own file, and a
+		// set that returned every result raises no question it answers. It
+		// joins the members' diagnostic tier: printed when a member needs a
+		// decision, and whenever the whole preamble was asked for.
+		if prose.FanStatus(statuses) != prose.FanOK || mode == ModeStatusOnly {
+			fmt.Fprintf(&body, "prompt: %s\n", gw.PromptPath())
+		}
+		// The set-level follow-up is offered only when it is provably
+		// possible: every member finished and holds a session to continue.
+		if resumable {
+			fmt.Fprintf(&body, "resume: %s\n", prose.ContinueCommand(dir, group.TimeoutMin))
+		}
+		// Every member reviewed the same range, so it is reported once here
+		// rather than repeated under each of them.
+		if group.GitBaseline != nil {
+			printGitSinceBaseline(&body, group.Cwd, *group.GitBaseline)
+		}
+		body.Write(sections.Bytes())
+		if mode == ModeStatusOnly {
+			fmt.Fprintf(&body, "\nnext: %s\n", prose.StatusOnlyNext(dir))
+		} else {
+			fmt.Fprintf(&body, "\nnext: %s\n", closing())
+		}
+	}
+	if !deliver(w, errW, body.Bytes()) {
+		return job.ExitInfra
+	}
+	for _, s := range stamps {
+		stampCollected(s.dir, s.meta)
 	}
 	return 0
 }
@@ -613,6 +669,8 @@ func orDefault(v, fallback string) string {
 	}
 	return v
 }
+
+// ---------- pending discovery ----------
 
 // pendingItem is one job needing attention after a possibly missed
 // notification.
@@ -641,15 +699,15 @@ func pendingJobs(dirs []string) []pendingItem {
 
 // pendingJob classifies one turn: still needing attention, or not.
 func pendingJob(dir string) (pendingItem, bool) {
-	metaPath := filepath.Join(dir, "meta.json")
+	metaPath := job.Workspace{Dir: dir}.MetaPath()
 	if _, err := os.Stat(metaPath); err != nil {
 		return pendingItem{}, false
 	}
-	meta, raw, err := job.ReadMetaFile(metaPath)
+	meta, err := job.ReadMetaFile(metaPath)
 	if err != nil {
 		return pendingItem{
 			kind: "corrupt", dir: dir,
-			detail: fmt.Sprintf("meta.json is unreadable: %s", err),
+			detail: fmt.Sprintf("meta.json could not be read: %s", err),
 		}, true
 	}
 	if meta.Status == job.StatusRunning {
@@ -659,7 +717,7 @@ func pendingJob(dir string) (pendingItem, bool) {
 		}
 		return pendingItem{kind: state.kind, dir: dir, detail: state.detail, meta: meta}, true
 	}
-	if hasNullCollectedAt(raw) {
+	if meta.CollectedAt == nil {
 		return pendingItem{
 			kind: "terminal", dir: dir, meta: meta,
 			detail: fmt.Sprintf("terminal status %s has not been collected", meta.Status),
@@ -673,17 +731,18 @@ func pendingJob(dir string) (pendingItem, bool) {
 // why; the prescription for each of them is per member, and printing it is
 // collect's job, not the index's.
 func pendingGroup(dir string) (pendingItem, bool) {
-	group, err := job.ReadGroupFile(job.GroupWorkspace{Dir: dir}.GroupPath())
+	gw := job.GroupWorkspace{Dir: dir}
+	group, err := job.ReadGroupFile(gw.GroupPath())
 	if err != nil {
 		return pendingItem{
 			kind: "corrupt", dir: dir,
-			detail: fmt.Sprintf("group.json is unreadable: %s", err),
+			detail: fmt.Sprintf("group.json could not be read: %s", err),
 		}, true
 	}
 	var reasons []string
-	for _, m := range group.Members {
-		if item, ok := pendingJob(m.OutDir); ok {
-			reasons = append(reasons, fmt.Sprintf("%s: %s", m.Name, item.detail))
+	for _, name := range group.Members {
+		if item, ok := pendingJob(gw.Member(name).Dir); ok {
+			reasons = append(reasons, fmt.Sprintf("%s: %s", name, item.detail))
 		}
 	}
 	if len(reasons) == 0 {
@@ -694,11 +753,6 @@ func pendingGroup(dir string) (pendingItem, bool) {
 		detail: fmt.Sprintf("%d of %d members still need attention — %s",
 			len(reasons), len(group.Members), strings.Join(reasons, " · ")),
 	}, true
-}
-
-func hasNullCollectedAt(raw map[string]json.RawMessage) bool {
-	v, ok := raw["collectedAt"]
-	return ok && string(v) == "null"
 }
 
 // Pending prints the discovery-only recovery index: it skips provably live
@@ -724,16 +778,15 @@ func Pending(base string, baseWasDerived bool, w, errW io.Writer) int {
 		}
 		fmt.Fprintf(w, "\n[%s] %s\n", head, item.dir)
 		fmt.Fprintf(w, "why: %s\n", item.detail)
+		ws := job.Workspace{Dir: item.dir}
 		switch item.kind {
 		case "terminal", "group":
 			fmt.Fprintf(w, "next: %s\n", prose.CollectCommand(item.dir))
 		case "corrupt":
 			fmt.Fprintf(w, "next: inspect %s, %s, %s, and the working tree; do not infer completion from the damaged metadata\n",
-				filepath.Join(item.dir, "progress.log"),
-				filepath.Join(item.dir, "raw.log"),
-				filepath.Join(item.dir, "stderr.log"))
+				ws.ProgressLogPath(), ws.RawLogPath(), ws.StderrLogPath())
 		default:
-			fmt.Fprintf(w, "next: %s\n", recoveryForStale(item.meta, runningState{kind: item.kind, detail: item.detail}))
+			fmt.Fprintf(w, "next: %s\n", recoveryForStale(item.dir, item.meta, runningState{kind: item.kind, detail: item.detail}))
 		}
 	}
 	return 0

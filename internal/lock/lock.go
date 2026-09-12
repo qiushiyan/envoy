@@ -94,9 +94,8 @@ func Acquire(sessionID, outDir, runnerInstanceID string) (*Handle, error) {
 		return nil, &Conflict{
 			SessionID: sessionID,
 			Message: fmt.Sprintf(
-				"session %s already has a live turn (pid %d, started %s, out-dir %s). One turn per session: wait for it, or observe it with: tail -f %s",
-				sessionID, held.Pid, held.StartedAt, held.OutDir,
-				filepath.Join(held.OutDir, "progress.log")),
+				"session %s already has a live turn (pid %d, started %s, job %s). One turn per session: wait for that process to exit, then collect its job: envoy collect %s",
+				sessionID, held.Pid, held.StartedAt, held.OutDir, text.ShellQuote(held.OutDir)),
 		}
 	}
 	inspect := ""

@@ -3,7 +3,6 @@ package runner
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -21,10 +20,6 @@ func (r *run) initMeta() {
 		// always diff the delegate's work.
 		baseline = gitx.Head(r.opts.Cwd)
 	}
-	promptFile, err := filepath.Abs(r.opts.PromptFile)
-	if err != nil {
-		promptFile = r.opts.PromptFile
-	}
 	var deadlineAt *string
 	if !r.deadline.IsZero() {
 		deadlineAt = job.Ptr(job.ISO(r.deadline))
@@ -41,22 +36,16 @@ func (r *run) initMeta() {
 		Cwd:              r.opts.Cwd,
 		AllowWrite:       r.opts.Turn.AllowWrite,
 		GitBaseline:      ptrIfNonEmpty(baseline),
+		MaxBudgetUSD:     r.opts.Turn.MaxBudgetUSD,
 		ResumedFrom:      ptrIfNonEmpty(r.opts.ResumedFrom),
 		StartedAt:        job.ISO(r.startedAt),
-		TimeoutMin:       r.opts.Turn.TimeoutMin,
+		TimeoutMin:       r.opts.TimeoutMin,
 		DeadlineAt:       deadlineAt,
-		Label:            ptrIfNonEmpty(r.opts.Label),
-		PromptFile:       promptFile,
-		OutDir:           r.ws.Dir,
-		RawPath:          r.ws.RawLogPath(),
-		StderrPath:       r.ws.StderrLogPath(),
-		ProgressPath:     r.ws.ProgressLogPath(),
 		ProviderArgv:     append([]string{r.opts.Provider}, r.argv...),
 		RunnerPid:        os.Getpid(),
 		RunnerInstanceID: r.instance,
 		PromptState:      job.PromptUnknown,
 		ResultKind:       job.ResultNone,
-		NextAction:       prose.RunningNext(r.ws.Dir),
 	}
 	r.setSession(r.driver.PreflightSessionID())
 }
@@ -85,7 +74,7 @@ func (r *run) printStartupBlock() {
 	}
 	fmt.Fprintf(w, "job: %s\n", r.ws.Dir)
 	fmt.Fprintf(w, "provider: %s · model %s · effort %s · hard cap %s\n",
-		r.opts.Provider, display(r.opts.Turn.Model), display(r.opts.Turn.Effort), text.HardCap(r.opts.Turn.TimeoutMin))
+		r.opts.Provider, display(r.opts.Turn.Model), display(r.opts.Turn.Effort), text.HardCap(r.opts.TimeoutMin))
 	if r.meta.GitBaseline != nil {
 		fmt.Fprintf(w, "baseline: %s\n", *r.meta.GitBaseline)
 	}
@@ -99,7 +88,7 @@ type finishArgs struct {
 	status              string
 	text                string // final text, ok only
 	errorText           string
-	recovery            string // the prescription; prose owns its wording
+	remedy              string // the driver's cause-specific fix, "" when none
 	partial             *string
 	tokens              *job.Tokens
 	costUSD             *float64
@@ -123,15 +112,6 @@ func (r *run) finish(f finishArgs) {
 	}
 	endedAt := time.Now()
 	collectAction := prose.CollectThisJob(r.ws.Dir)
-
-	var recoveryAction *string
-	if f.status != job.StatusOK {
-		recovery := f.recovery
-		if recovery == "" {
-			recovery = prose.Recovery(r.meta.PromptState, r.resumeCommand(), r.redispatchCommand(), "")
-		}
-		recoveryAction = job.Ptr(recovery)
-	}
 
 	hasPartial := f.partial != nil && strings.TrimSpace(*f.partial) != ""
 	resultKind := job.ResultNone
@@ -158,11 +138,11 @@ func (r *run) finish(f finishArgs) {
 		m.CostUSD = f.costUSD
 		if f.status == job.StatusOK {
 			m.Error = nil
+			m.Remedy = nil
 		} else {
 			m.Error = ptrIfNonEmpty(f.errorText)
+			m.Remedy = ptrIfNonEmpty(f.remedy)
 		}
-		m.NextAction = collectAction
-		m.RecoveryAction = recoveryAction
 		if f.promptState != "" {
 			m.PromptState = f.promptState
 		}

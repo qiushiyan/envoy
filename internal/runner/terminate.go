@@ -49,7 +49,6 @@ func (r *run) requestTermination(kind, signalName string) {
 		if kind == "interrupted" {
 			m.InterruptionSignal = job.Ptr(signalName)
 		}
-		m.NextAction = prose.Stopping()
 	})
 	reason := signalName
 	if kind == "timeout" {
@@ -153,7 +152,6 @@ func (r *run) onChildDone(exit exitResult) {
 			status: job.StatusInfra,
 			errorText: fmt.Sprintf("%s reported a session id that another turn already holds, so this turn was stopped.",
 				capitalize(r.opts.Provider)),
-			recovery:            prose.LockedSession(*r.meta.SessionLockConflict, false),
 			partial:             ev.Partial,
 			tokens:              ev.Tokens,
 			promptState:         job.PromptAccepted,
@@ -180,7 +178,6 @@ func (r *run) onChildDone(exit exitResult) {
 			status: job.StatusInfra,
 			errorText: fmt.Sprintf("%s was killed by signal %s, which envoy did not send.",
 				r.opts.Provider, *exit.signal),
-			recovery:            prose.Recovery(promptState, r.resumeCommand(), r.redispatchCommand(), ""),
 			partial:             ev.Partial,
 			tokens:              ev.Tokens,
 			costUSD:             ev.CostUSD,
@@ -202,21 +199,13 @@ func (r *run) onChildDone(exit exitResult) {
 	if outcome.SessionID != "" {
 		r.setSession(outcome.SessionID)
 	}
-	// The driver reported the cause; the prescription follows from the prompt
-	// state it observed, worded once in prose.
-	recovery := ""
-	if outcome.Status != job.StatusOK {
-		promptState := outcome.PromptState
-		if promptState == "" {
-			promptState = r.meta.PromptState
-		}
-		recovery = prose.Recovery(promptState, r.resumeCommand(), r.redispatchCommand(), outcome.Remedy)
-	}
+	// The driver reported the cause and any cause-specific fix; the
+	// prescription itself is rendered from the records at collect time.
 	r.finish(finishArgs{
 		status:              outcome.Status,
 		text:                outcome.Text,
 		errorText:           outcome.ErrorText,
-		recovery:            recovery,
+		remedy:              outcome.Remedy,
 		partial:             outcome.Partial,
 		tokens:              outcome.Tokens,
 		costUSD:             outcome.CostUSD,
@@ -236,7 +225,7 @@ func (r *run) finishAfterStop(exit exitResult) {
 
 	var stopped string
 	if r.term.kind == "timeout" {
-		stopped = prose.TimedOut(r.opts.Turn.TimeoutMin, r.opts.Provider, r.term.stream)
+		stopped = prose.TimedOut(r.opts.TimeoutMin, r.opts.Provider, r.term.stream)
 	} else {
 		sig := r.term.signal
 		if sig == "" {
@@ -258,7 +247,6 @@ func (r *run) finishAfterStop(exit exitResult) {
 	r.finish(finishArgs{
 		status:              status,
 		errorText:           stopped,
-		recovery:            prose.Recovery(promptState, r.resumeCommand(), r.redispatchCommand(), ""),
 		partial:             ev.Partial,
 		tokens:              ev.Tokens,
 		costUSD:             ev.CostUSD,

@@ -77,10 +77,3 @@ func Reserve(dir string) error {
 	}
 	return nil
 }
-
-// Unreserve removes a directory Reserve created, for a refusal that happens
-// before anything was written into it. A directory with content is left
-// alone: it is evidence by then.
-func Unreserve(dir string) {
-	os.Remove(dir)
-}

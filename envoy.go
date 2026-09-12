@@ -26,7 +26,7 @@ import (
 )
 
 // Version of the engine, reported by `envoy version`.
-const Version = "0.6.0"
+const Version = "0.7.0"
 
 // Exit codes: 0 ok · 1 provider failure · 2 infra · 3 usage · 4 timeout ·
 // 5 interrupted · 6 partial (several voices only).
@@ -100,19 +100,6 @@ func usageError(w io.Writer, format string, args ...any) int {
 	return ExitUsage
 }
 
-// plan is a run request resolved into what dispatch needs: the members, the
-// tree and anchor they share, and the write intent — every refusal decided
-// before a directory is reserved or a session locked.
-type plan struct {
-	members    []fan.Member
-	cwd        string
-	baseline   string
-	allowWrite bool
-	// groupRef is the fan-out directory every member continues, "" when the
-	// roster was composed voice by voice.
-	groupRef string
-}
-
 // Run validates the request, reserves the job, and runs it to terminal state.
 func Run(req RunRequest) int {
 	stdout, stderr := defaultWriters(req.Stdout, req.Stderr)
@@ -140,23 +127,19 @@ func Run(req RunRequest) int {
 		return usageError(stderr, "%s", err)
 	}
 
-	p, errText := resolvePlan(req, invocationCwd, timeoutMin)
+	turns, errText := resolveTurns(req, invocationCwd, timeoutMin)
 	if errText != "" {
 		return usageError(stderr, "%s", errText)
 	}
 	if req.MaxBudgetUSD != nil {
-		if len(p.members) != 1 || p.members[0].Provider != "claude" {
+		if len(turns) != 1 || turns[0].Options.Provider != "claude" {
 			return usageError(stderr, "--max-budget-usd caps one claude voice; codex has no budget flag")
 		}
 		if math.IsNaN(*req.MaxBudgetUSD) || math.IsInf(*req.MaxBudgetUSD, 0) || *req.MaxBudgetUSD <= 0 {
 			return usageError(stderr, "--max-budget-usd must be a positive number")
 		}
 	}
-	cwd := p.cwd
-	if cwd == "" {
-		cwd = invocationCwd
-	}
-	cwd = absOrSelf(cwd)
+	cwd := turns[0].Options.Cwd
 	if info, err := os.Stat(cwd); err != nil || !info.IsDir() {
 		return usageError(stderr, "cwd not found: %s", cwd)
 	}
@@ -171,43 +154,27 @@ func Run(req RunRequest) int {
 		fmt.Fprintf(stderr, "envoy: cannot create job dir: %s\n", err)
 		return ExitInfra
 	}
-	label := filepath.Base(dir)
 
-	if len(p.members) == 1 {
-		m := p.members[0]
-		code := runner.Run(runner.Options{
-			Provider:    m.Provider,
-			PromptFile:  req.PromptFile,
-			Cwd:         cwd,
-			Baseline:    p.baseline,
-			Label:       label,
-			OutDir:      dir,
-			ResumedFrom: m.ResumedFrom,
-			Turn: provider.Options{
-				Model:        m.Model,
-				Effort:       m.Effort,
-				Resume:       m.Resume,
-				AllowWrite:   p.allowWrite,
-				TimeoutMin:   timeoutMin,
-				MaxBudgetUSD: req.MaxBudgetUSD,
-			},
-			Stdout: stdout,
-			Stderr: stderr,
-		}).ExitCode
+	// Cardinality decides layout only: one voice runs flat in the job
+	// directory, several run as a fan-out with a member directory each.
+	if len(turns) == 1 {
+		opts := turns[0].Options
+		opts.OutDir = dir
+		opts.Stdout, opts.Stderr = stdout, stderr
+		code := runner.Run(opts).ExitCode
 		releaseIfUnstarted(dir, job.Workspace{Dir: dir}.MetaPath())
 		return code
 	}
+	shared := turns[0].Options
 	code := fan.Run(fan.Options{
-		Members:     p.members,
-		PromptFile:  req.PromptFile,
-		Cwd:         cwd,
-		Baseline:    p.baseline,
-		Label:       label,
-		OutDir:      dir,
-		ResumedFrom: p.groupRef,
-		TimeoutMin:  timeoutMin,
-		Stdout:      stdout,
-		Stderr:      stderr,
+		Turns:      turns,
+		PromptFile: shared.PromptFile,
+		Cwd:        shared.Cwd,
+		Baseline:   shared.Baseline,
+		TimeoutMin: shared.TimeoutMin,
+		OutDir:     dir,
+		Stdout:     stdout,
+		Stderr:     stderr,
 	})
 	releaseIfUnstarted(dir, job.GroupWorkspace{Dir: dir}.GroupPath())
 	return code
@@ -224,198 +191,257 @@ func releaseIfUnstarted(dir, recordPath string) {
 	os.RemoveAll(dir)
 }
 
-// resolvePlan turns the voices into a roster. Continued voices are resolved
-// first, through collect's typed inspection, so the dispatch decision and
-// collect's own resume line can never disagree about which jobs may
-// continue; every refusal names the job actually named. errText is "" exactly
-// when the plan is dispatchable.
-func resolvePlan(req RunRequest, invocationCwd string, timeoutMin float64) (plan, string) {
-	p := plan{cwd: req.Cwd, baseline: req.Baseline}
-	sessionDirs := map[string]string{}
-	inheritedCwd, inheritedCwdDir := "", ""
-	inheritedBaseline, inheritedBaselineDir := "", ""
-	var writeSources []string
+// voice is one turn of the roster before the shared settings are applied:
+// what the caller spelled, resolved into the turn it runs.
+type voice struct {
+	base       string // the name to derive the member address from
+	provider   string
+	model      string
+	effort     string
+	session    string // "" = a fresh conversation
+	source     string // the job dir whose conversation session continues
+	cwd        string // recorded tree, for a continued voice
+	baseline   string // recorded anchor, for a continued voice
+	allowWrite bool   // recorded write intent, for a continued voice
+}
 
-	inherit := func(dir, cwd, baseline string) string {
-		if req.Cwd == "" && cwd != "" {
-			if inheritedCwd == "" {
-				inheritedCwd, inheritedCwdDir = cwd, dir
-			} else if cwd != inheritedCwd {
-				return prose.CwdMix(inheritedCwdDir, inheritedCwd, dir, cwd)
-			}
-		}
-		if req.Baseline == "" && baseline != "" {
-			if inheritedBaseline == "" {
-				inheritedBaseline, inheritedBaselineDir = baseline, dir
-			} else if baseline != inheritedBaseline {
-				return prose.BaselineMix(inheritedBaselineDir, inheritedBaseline, dir, baseline)
-			}
-		}
-		return ""
-	}
-
+// resolveTurns turns the voices into the turns a job runs, every refusal
+// decided before a directory is reserved or a session locked. A fan-out
+// reference expands into its members and each one is resolved exactly as a
+// member named directly would be, so there is one eligibility rule and one
+// set of roster checks whatever the caller spelled. errText is "" exactly
+// when the roster is dispatchable.
+func resolveTurns(req RunRequest, invocationCwd string, timeoutMin float64) ([]fan.Turn, string) {
+	var voices []voice
 	for _, spec := range req.With {
 		if !strings.HasPrefix(spec, "@") {
-			m, err := parseMember(spec)
+			v, err := parseVoice(spec)
 			if err != nil {
-				return plan{}, err.Error()
+				return nil, err.Error()
 			}
-			p.members = append(p.members, m)
+			voices = append(voices, v)
 			continue
 		}
 		ref, err := job.ResolveRef(strings.TrimPrefix(spec, "@"), invocationCwd)
 		if err != nil {
-			return plan{}, fmt.Sprintf("--with %s: %s", spec, err)
+			return nil, fmt.Sprintf("--with %s: %s", spec, err)
 		}
 		if job.IsGroupDir(ref) {
 			if len(req.With) > 1 {
-				return plan{}, prose.GroupRefMustStandAlone(ref, fanCandidates(ref))
+				return nil, prose.GroupRefMustStandAlone(ref, fanCandidates(ref))
 			}
-			members, group, errText := resumableMembers(ref)
+			members, errText := fanMembers(ref)
 			if errText != "" {
-				return plan{}, errText
+				return nil, errText
 			}
-			if errText := inherit(ref, group.Cwd, derefString(group.GitBaseline)); errText != "" {
-				return plan{}, errText
-			}
-			p.members = members
-			p.groupRef = ref
-			break
+			voices = append(voices, members...)
+			continue
 		}
-		source, errText := resumableTurn(ref)
+		v, errText := continuedVoice(ref, "")
 		if errText != "" {
-			return plan{}, errText
+			return nil, errText
 		}
-		if prev, dup := sessionDirs[source.Session]; dup {
-			return plan{}, prose.DuplicateConversation(source.Session, prev, ref)
-		}
-		sessionDirs[source.Session] = ref
-		if source.AllowWrite {
-			writeSources = append(writeSources, ref)
-		}
-		if errText := inherit(ref, source.Cwd, source.Baseline); errText != "" {
-			return plan{}, errText
-		}
-		p.members = append(p.members, fan.Member{
-			Provider:    source.Provider,
-			Model:       source.Model,
-			Effort:      source.Effort,
-			Resume:      source.Session,
-			ResumedFrom: ref,
-		})
+		voices = append(voices, v)
 	}
-	if p.cwd == "" {
-		p.cwd = inheritedCwd
+
+	// The roster checks: one conversation once, and one tree and one anchor
+	// across every continued voice unless the caller chose them.
+	cwd, baseline := req.Cwd, req.Baseline
+	sessions := map[string]string{}
+	inheritedCwdFrom, inheritedBaselineFrom := "", ""
+	var writeSources []string
+	for _, v := range voices {
+		if v.session == "" {
+			continue
+		}
+		if prev, dup := sessions[v.session]; dup {
+			return nil, prose.DuplicateConversation(v.session, prev, v.source)
+		}
+		sessions[v.session] = v.source
+		if v.allowWrite {
+			writeSources = append(writeSources, v.source)
+		}
+		if req.Cwd == "" && v.cwd != "" {
+			if cwd == "" {
+				cwd, inheritedCwdFrom = v.cwd, v.source
+			} else if v.cwd != cwd {
+				return nil, prose.CwdMix(inheritedCwdFrom, cwd, v.source, v.cwd)
+			}
+		}
+		if req.Baseline == "" && v.baseline != "" {
+			if baseline == "" {
+				baseline, inheritedBaselineFrom = v.baseline, v.source
+			} else if v.baseline != baseline {
+				return nil, prose.BaselineMix(inheritedBaselineFrom, baseline, v.source, v.baseline)
+			}
+		}
 	}
-	if p.baseline == "" {
-		p.baseline = inheritedBaseline
+	if cwd == "" {
+		cwd = invocationCwd
 	}
+	cwd = absOrSelf(cwd)
 
 	// Write intent is checked after expansion: a roster is read-only unless
 	// it is one voice, and a continued write conversation keeps its intent
 	// only by continuing alone.
-	if len(p.members) == 1 {
-		p.allowWrite = req.AllowWrite || len(writeSources) == 1
-		return p, ""
+	allowWrite := false
+	switch {
+	case len(voices) == 1:
+		allowWrite = req.AllowWrite || len(writeSources) == 1
+	case req.AllowWrite:
+		return nil, prose.AllowWriteNeedsOneVoice()
+	case len(writeSources) > 0:
+		return nil, prose.WriteSourceInRoster(writeSources[0], timeoutMin)
 	}
-	if req.AllowWrite {
-		return plan{}, prose.AllowWriteNeedsOneVoice()
+
+	taken := map[string]bool{}
+	turns := make([]fan.Turn, len(voices))
+	for i, v := range voices {
+		turns[i] = fan.Turn{
+			Name: fan.Name(v.base, taken),
+			Options: runner.Options{
+				Provider:    v.provider,
+				PromptFile:  req.PromptFile,
+				Cwd:         cwd,
+				Baseline:    baseline,
+				ResumedFrom: v.source,
+				TimeoutMin:  timeoutMin,
+				Turn: provider.Options{
+					Model:        v.model,
+					Effort:       v.effort,
+					Resume:       v.session,
+					AllowWrite:   allowWrite,
+					MaxBudgetUSD: req.MaxBudgetUSD,
+				},
+			},
+		}
 	}
-	if len(writeSources) > 0 {
-		return plan{}, prose.WriteSourceInRoster(writeSources[0], timeoutMin)
-	}
-	return p, ""
+	return turns, ""
 }
 
-// resumableTurn resolves a job dir named by @<job> into the turn it may
-// continue. errText is "" exactly when the turn is continuable.
-func resumableTurn(dir string) (*collect.ResumableTurn, string) {
-	source, blocker, err := collect.InspectTurnResume(dir)
+// continuedVoice resolves a job dir named by @<job> into the voice that
+// continues its conversation. name presets the member address (a fan-out's
+// member keeps its identity across rounds); "" derives it from the records.
+// errText is "" exactly when the conversation is continuable.
+func continuedVoice(dir, name string) (voice, string) {
+	source, blocker, err := collect.Inspect(dir)
 	if err != nil {
-		return nil, prose.ContinueNoTurn(dir, err)
+		return voice{}, prose.ContinueNoTurn(dir, err)
 	}
 	if blocker != "" {
-		return nil, prose.ContinueBlocked(dir, blocker)
+		return voice{}, prose.ContinueBlocked(dir, blocker)
 	}
-	return source, ""
+	if name == "" {
+		name = voiceBase(source.Provider, source.Model)
+	}
+	return voice{
+		base:       name,
+		provider:   source.Provider,
+		model:      source.Model,
+		effort:     source.Effort,
+		session:    source.Session,
+		source:     dir,
+		cwd:        source.Cwd,
+		baseline:   source.Baseline,
+		allowWrite: source.AllowWrite,
+	}, ""
+}
+
+// fanMembers expands a fan-out reference into its members as continued
+// voices, each keeping the name it had. The set is whole or refused: any
+// member that cannot continue refuses the round rather than being silently
+// left out of it.
+func fanMembers(dir string) ([]voice, string) {
+	gw := job.GroupWorkspace{Dir: dir}
+	group, err := job.ReadGroupFile(gw.GroupPath())
+	if err != nil {
+		return nil, prose.FanContinueUnreadableManifest(dir, err)
+	}
+	if len(group.Members) == 0 {
+		return nil, prose.FanContinueEmptyManifest(dir)
+	}
+	var voices []voice
+	var reasons []string
+	for _, name := range group.Members {
+		memberDir := gw.Member(name).Dir
+		_, blocker, err := collect.Inspect(memberDir)
+		switch {
+		case err != nil:
+			reasons = append(reasons, prose.FanResumeBlockerLine(name, prose.BlockerUnreadableMeta, err.Error()))
+			continue
+		case blocker != "":
+			reasons = append(reasons, prose.FanResumeBlockerLine(name, blocker, ""))
+			continue
+		}
+		v, errText := continuedVoice(memberDir, name)
+		if errText != "" {
+			return nil, errText
+		}
+		voices = append(voices, v)
+	}
+	if len(reasons) > 0 {
+		return nil, prose.FanContinueBlocked(dir, reasons)
+	}
+	return voices, ""
 }
 
 // fanCandidates lists a fan-out's members in roster order, each through the
 // one eligibility definition, so a refusal never offers a member dispatch
 // would refuse.
 func fanCandidates(dir string) []prose.FanMemberCandidate {
-	state, err := collect.InspectFanResume(dir)
+	gw := job.GroupWorkspace{Dir: dir}
+	group, err := job.ReadGroupFile(gw.GroupPath())
 	if err != nil {
 		return nil
 	}
 	var candidates []prose.FanMemberCandidate
-	for _, m := range state.Group.Members {
-		c := prose.FanMemberCandidate{Name: m.Name, Dir: m.OutDir}
-		for _, b := range state.Blockers {
-			if b.Member == m.Name {
-				c.Blocked, c.Kind, c.Detail = true, b.Kind, b.Detail
-			}
+	for _, name := range group.Members {
+		c := prose.FanMemberCandidate{Name: name, Dir: gw.Member(name).Dir}
+		_, blocker, err := collect.Inspect(c.Dir)
+		switch {
+		case err != nil:
+			c.Blocked, c.Kind, c.Detail = true, prose.BlockerUnreadableMeta, err.Error()
+		case blocker != "":
+			c.Blocked, c.Kind = true, blocker
 		}
 		candidates = append(candidates, c)
 	}
 	return candidates
 }
 
-// resumableMembers resolves a fan-out directory into the members of a new
-// round, through collect's typed inspection. The set is whole or refused: any
-// blocked member refuses the round rather than being silently left out of it.
-func resumableMembers(dir string) ([]fan.Member, *job.Group, string) {
-	state, err := collect.InspectFanResume(dir)
-	if err != nil {
-		return nil, nil, prose.FanContinueUnreadableManifest(dir, err)
-	}
-	if len(state.Members) == 0 && len(state.Blockers) == 0 {
-		return nil, nil, prose.FanContinueEmptyManifest(dir)
-	}
-	if len(state.Blockers) > 0 {
-		reasons := make([]string, len(state.Blockers))
-		for i, b := range state.Blockers {
-			reasons[i] = prose.FanResumeBlockerLine(b.Member, b.Kind, b.Detail)
-		}
-		return nil, nil, prose.FanContinueBlocked(dir, reasons)
-	}
-	members := make([]fan.Member, len(state.Members))
-	for i, m := range state.Members {
-		members[i] = fan.Member{
-			Provider:    m.Provider,
-			Model:       m.Model,
-			Effort:      m.Effort,
-			Resume:      m.Session,
-			ResumedFrom: m.OutDir,
-			Name:        m.Name,
-		}
-	}
-	return members, state.Group, ""
-}
-
-// parseMember reads one cold voice. The colon form keeps a voice's settings
+// parseVoice reads one cold voice. The colon form keeps a voice's settings
 // unambiguously attached to it — no provider name, model name or effort value
 // contains a colon — where repeated flags could not say which voice they
 // belonged to.
-func parseMember(spec string) (fan.Member, error) {
+func parseVoice(spec string) (voice, error) {
 	parts := strings.Split(spec, ":")
 	if len(parts) > 3 {
-		return fan.Member{}, fmt.Errorf("--with '%s' has too many fields; the form is provider[:model[:effort]], for example claude:opus:high", spec)
+		return voice{}, fmt.Errorf("--with '%s' has too many fields; the form is provider[:model[:effort]], for example claude:opus:high", spec)
 	}
-	m := fan.Member{Provider: parts[0]}
+	v := voice{provider: parts[0]}
 	if len(parts) > 1 {
-		m.Model = parts[1]
+		v.model = parts[1]
 	}
 	if len(parts) > 2 {
-		m.Effort = parts[2]
+		v.effort = parts[2]
 	}
-	if m.Provider != "claude" && m.Provider != "codex" {
-		return fan.Member{}, fmt.Errorf("--with '%s' must name provider claude or codex, got '%s'", spec, m.Provider)
+	if v.provider != "claude" && v.provider != "codex" {
+		return voice{}, fmt.Errorf("--with '%s' must name provider claude or codex, got '%s'", spec, v.provider)
 	}
-	if err := provider.ValidateEffort(m.Provider, m.Effort); err != nil {
-		return fan.Member{}, fmt.Errorf("--with '%s': %s", spec, err)
+	if err := provider.ValidateEffort(v.provider, v.effort); err != nil {
+		return voice{}, fmt.Errorf("--with '%s': %s", spec, err)
 	}
-	return m, nil
+	v.base = voiceBase(v.provider, v.model)
+	return v, nil
+}
+
+// voiceBase is the member address a voice derives from what distinguishes
+// it: the provider, plus the model when one was named.
+func voiceBase(providerName, model string) string {
+	if model != "" {
+		return providerName + "-" + model
+	}
+	return providerName
 }
 
 // CollectRequest selects one job and which of its sections to print.
@@ -427,8 +453,9 @@ type CollectRequest struct {
 	Stderr     io.Writer
 }
 
-// Collect prints one job and stamps first terminal collection — except under
-// StatusOnly, which delivers no result and therefore stamps nothing.
+// Collect prints one job and stamps first terminal collection once the block
+// has reached Stdout — except under StatusOnly, which delivers no result and
+// therefore stamps nothing.
 func Collect(req CollectRequest) int {
 	stdout, stderr := defaultWriters(req.Stdout, req.Stderr)
 	if req.ResultOnly && req.StatusOnly {
@@ -488,11 +515,4 @@ func absOrSelf(p string) string {
 		return p
 	}
 	return abs
-}
-
-func derefString(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
 }

@@ -68,44 +68,34 @@ func TestTimedOutCarriesTheStreamItObserved(t *testing.T) {
 	}
 }
 
-// The resume command must carry the settings the turn was dispatched with:
-// a follow-up that silently drops --allow-write turns a write turn read-only,
-// and one without --cwd runs against whatever tree the caller happens to be in.
-func TestResumeCommandCarriesDispatchSettings(t *testing.T) {
-	turn := Turn{
-		Dir:        "/jobs/proj/delegate-r1",
-		Provider:   "codex",
-		SessionID:  "tid-1",
-		Cwd:        "/repo",
-		Model:      "gpt-5.3",
-		Effort:     "xhigh",
-		AllowWrite: true,
-		Baseline:   "abc123",
-		PromptFile: "/jobs/proj/delegate-r1/prompt.md",
-		TimeoutMin: 180,
-	}
-	// A continuation names the job, never the session: the records carry the
-	// provider, session, model, effort, tree and write intent, so the command
-	// spells only what the caller must still choose — a new name, a new prompt.
-	if got, want := turn.ResumeCommand(), "envoy run <new-job-name> --with @'/jobs/proj/delegate-r1' --timeout-min 180 --prompt-file <your-follow-up.md>"; got != want {
-		t.Fatalf("resume command = %q, want %q", got, want)
-	}
-	if (Turn{Provider: "claude", Dir: "/jobs/x"}).ResumeCommand() != "" {
-		t.Fatal("no session id means no resume command")
-	}
-	// A re-dispatch is a fresh conversation, so it spells the voice and every
-	// setting the records held — and never invents a model that was omitted.
-	got := turn.RedispatchCommand()
+// A re-dispatch repeats the dispatch it replaces. A continuation names its
+// source again — a cold voice would start a different conversation — and
+// every recorded setting rides along, the spend cap included; a model that
+// was omitted stays omitted.
+func TestRedispatchRepeatsTheDispatch(t *testing.T) {
+	warm := &job.Meta{Provider: "claude", Model: job.Ptr("opus"), ResumedFrom: job.Ptr("/jobs/consult-r1"),
+		Cwd: "/repo", GitBaseline: job.Ptr("abc123"), MaxBudgetUSD: job.Ptr(0.25), TimeoutMin: 9}
+	got := RedispatchCommand("/jobs/review", warm)
 	for _, want := range []string{
-		"envoy run <new-job-name>", "--with codex:gpt-5.3:xhigh", "--prompt-file '/jobs/proj/delegate-r1/prompt.md'",
-		"--allow-write", "--baseline abc123", "--cwd '/repo'", "--timeout-min 180",
+		"envoy run <new-job-name>", "--with @'/jobs/consult-r1'", "--prompt-file '/jobs/review/prompt.md'",
+		"--baseline abc123", "--cwd '/repo'", "--max-budget-usd 0.25", "--timeout-min 9",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("redispatch command %q is missing %q", got, want)
 		}
 	}
-	if cmd := (Turn{Provider: "claude", PromptFile: "/p.md", TimeoutMin: 30}).RedispatchCommand(); !strings.Contains(cmd, "--with claude ") {
-		t.Fatalf("redispatch command invented a model: %q", cmd)
+	if strings.Contains(got, "--with claude") {
+		t.Fatalf("a continuation's retry must not become a cold voice: %q", got)
+	}
+	cold := &job.Meta{Provider: "codex", Effort: job.Ptr("xhigh"), AllowWrite: true, TimeoutMin: 180}
+	got = RedispatchCommand("/jobs/delegate", cold)
+	for _, want := range []string{"--with codex::xhigh", "--allow-write", "--timeout-min 180"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("redispatch command %q is missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "--max-budget-usd") || strings.Contains(got, "--baseline") {
+		t.Fatalf("redispatch command invented a setting: %q", got)
 	}
 	if got := Voice("codex", "", "high"); got != "codex::high" {
 		t.Fatalf("effort without a model = %q, want the empty model slot kept", got)

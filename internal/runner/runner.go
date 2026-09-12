@@ -55,18 +55,13 @@ type Options struct {
 	PromptFile string
 	Cwd        string
 	Baseline   string // "" = HEAD for write turns, else unset
-	Label      string
 	OutDir     string // the job directory, already reserved by the caller
-	// ResumedFrom is the job dir whose session this turn continues, "" for a
-	// fresh conversation or a bare --resume. Lineage only: recorded and
-	// printed as an observation, never acted on.
+	// ResumedFrom is the job dir whose conversation this turn continues, ""
+	// for a fresh conversation. Recorded so a faithful re-dispatch can name
+	// the same source; never acted on here.
 	ResumedFrom string
+	TimeoutMin  float64 // hard wall-clock cap in minutes; 0 = no cap
 	Turn        provider.Options
-	// SessionLock is a lock a supervisor already holds for this turn's
-	// resumed session — a fan-out reserves every member before any spawns,
-	// so a held session refuses the whole round instead of one member. The
-	// runner takes ownership and releases it however the turn ends.
-	SessionLock *lock.Handle
 	Stdout      io.Writer
 	Stderr      io.Writer
 }
@@ -156,7 +151,7 @@ func Run(opts Options) Result {
 	r := &run{
 		opts:      opts,
 		startedAt: startedAt,
-		deadline:  deadlineFrom(startedAt, opts.Turn.TimeoutMin),
+		deadline:  deadlineFrom(startedAt, opts.TimeoutMin),
 		instance:  job.UUID4(),
 		callCh:    make(chan func(), 32),
 		stdoutCh:  make(chan []byte, 32),
@@ -164,10 +159,6 @@ func Run(opts Options) Result {
 		waitCh:    make(chan exitResult, 1),
 		sigCh:     make(chan os.Signal, 4),
 	}
-
-	// A supervisor's reservation is owned from the first moment, so every
-	// early return below releases it instead of stranding the session.
-	r.sessionLock = opts.SessionLock
 
 	// The caller reserved the directory; a job that cannot be prepared there
 	// is an environment failure, not a naming one.
@@ -191,10 +182,10 @@ func Run(opts Options) Result {
 		return Result{ExitCode: job.ExitInfra, OutDir: outDir}
 	}
 
-	// A known session id (claude, or any --resume) locks before any job
+	// A known session id (claude, or any continuation) locks before any job
 	// artifact is written, so a rejected racing resume cannot truncate the
-	// live job's files. A supervisor may have reserved it already.
-	if sessionID := driver.PreflightSessionID(); sessionID != "" && r.sessionLock == nil {
+	// live job's files.
+	if sessionID := driver.PreflightSessionID(); sessionID != "" {
 		handle, err := lock.Acquire(sessionID, outDir, r.instance)
 		if err != nil {
 			fmt.Fprintf(opts.Stderr, "lock error: %s\n", err)
@@ -219,7 +210,7 @@ func (r *run) execute(promptText string) Result {
 	r.printStartupBlock()
 	r.progress.Append("starting",
 		job.KV{K: "provider", V: r.opts.Provider},
-		job.KV{K: "hard_cap", V: text.HardCap(r.opts.Turn.TimeoutMin)},
+		job.KV{K: "hard_cap", V: text.HardCap(r.opts.TimeoutMin)},
 		job.KV{K: "prompt", V: job.PromptUnknown},
 	)
 	r.writeMeta(nil)
@@ -246,7 +237,6 @@ func (r *run) execute(promptText string) Result {
 		r.finish(finishArgs{
 			status:              job.StatusInfra,
 			errorText:           prose.SpawnFailed(r.opts.Provider, err),
-			recovery:            prose.Recovery(job.PromptNotStarted, r.resumeCommand(), r.redispatchCommand(), ""),
 			promptState:         job.PromptNotStarted,
 			promptStateEvidence: job.Ptr("provider spawn error"),
 			hasEvidence:         true,
@@ -341,7 +331,7 @@ func (r *run) result() Result {
 	return Result{ExitCode: r.exitCode, OutDir: r.ws.Dir, Status: r.meta.Status}
 }
 
-// ---------- session state (the one owner of the coordinate invariant) ----------
+// ---------- session state ----------
 
 func (r *run) session() string {
 	if r.meta.SessionID == nil {
@@ -352,56 +342,14 @@ func (r *run) session() string {
 
 func (r *run) conflicted() bool { return r.meta.SessionLockConflict != nil }
 
-// turn is this turn as prose rebuilds commands from it.
-func (r *run) turn() prose.Turn {
-	return prose.Turn{
-		Dir:        r.ws.Dir,
-		Provider:   r.opts.Provider,
-		SessionID:  r.session(),
-		Cwd:        r.opts.Cwd,
-		Model:      r.opts.Turn.Model,
-		Effort:     r.opts.Turn.Effort,
-		AllowWrite: r.opts.Turn.AllowWrite,
-		Baseline:   ptrString(r.meta.GitBaseline),
-		PromptFile: r.ws.PromptPath(),
-		TimeoutMin: r.opts.Turn.TimeoutMin,
-	}
-}
-
-// resumeCommand is the follow-up command for this turn's session, carrying
-// the settings it was dispatched with.
-func (r *run) resumeCommand() string { return r.turn().ResumeCommand() }
-
-// redispatchCommand re-sends this turn's prompt as a new job — the follow-up
-// for a prompt the provider provably never received.
-func (r *run) redispatchCommand() string { return r.turn().RedispatchCommand() }
-
-func ptrString(p *string) string {
-	if p == nil {
-		return ""
-	}
-	return *p
-}
-
-// setSession records the session id and refreshes its derived coordinates.
-// The invariant "resume present iff a session id exists and no lock
-// conflict was recorded" lives here and in markLockConflict — nowhere else.
+// setSession records the session id. Whether it may be continued is decided
+// at collect time from this id and the lock-conflict field together.
 func (r *run) setSession(id string) {
 	r.meta.SessionID = ptrIfNonEmpty(id)
-	r.syncSessionCoords()
 }
 
 func (r *run) markLockConflict(msg string) {
 	r.meta.SessionLockConflict = job.Ptr(msg)
-	r.syncSessionCoords()
-}
-
-func (r *run) syncSessionCoords() {
-	if r.session() != "" && !r.conflicted() {
-		r.meta.ResumeCommand = ptrIfNonEmpty(r.resumeCommand())
-		return
-	}
-	r.meta.ResumeCommand = nil
 }
 
 func (r *run) releaseLock() {

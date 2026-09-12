@@ -2,11 +2,10 @@ package job
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 )
 
-// Tokens carries provider usage in whichever fields the provider reports.
-// Field order fixes the display order in collect.
 // ConnectionErrors is the observed tally of a provider's connection-error
 // events: how many, and when the first and last arrived.
 type ConnectionErrors struct {
@@ -15,6 +14,8 @@ type ConnectionErrors struct {
 	LastAt  *string `json:"lastAt"`
 }
 
+// Tokens carries provider usage in whichever fields the provider reports.
+// Field order fixes the display order in collect.
 type Tokens struct {
 	Input           *int64 `json:"input,omitempty"`
 	CacheRead       *int64 `json:"cacheRead,omitempty"`
@@ -47,30 +48,32 @@ func (t *Tokens) Pairs() [][2]any {
 // Meta is the single machine-readable source of lifecycle and recovery truth
 // for one turn. It exists from turn start (status "running") and every update
 // is an atomic replace, so a killed job still leaves coordinates on disk.
+//
+// It records facts, never prose: the commands and prescriptions a caller
+// reads are rendered from these fields at collect time, by the engine that
+// is reading them. Paths inside the job directory are not recorded either —
+// the directory a record was read from is the one it describes.
 type Meta struct {
-	SchemaVersion             int      `json:"schemaVersion"`
-	Status                    string   `json:"status"`
-	Provider                  string   `json:"provider"`
-	Model                     *string  `json:"model"`  // nil = the provider's own configured default
-	Effort                    *string  `json:"effort"` // nil = the provider's own configured default
-	Cwd                       string   `json:"cwd"`
-	AllowWrite                bool     `json:"allowWrite"`
-	GitBaseline               *string  `json:"gitBaseline"`
-	SessionID                 *string  `json:"sessionId"`
-	ResumedFrom               *string  `json:"resumedFrom,omitempty"` // job dir whose session this turn continues; absent = a fresh conversation or a bare --resume
-	ResumeCommand             *string  `json:"resumeCommand"`         // complete follow-up command, prompt file left as a placeholder
+	SchemaVersion int      `json:"schemaVersion"`
+	Status        string   `json:"status"`
+	Provider      string   `json:"provider"`
+	Model         *string  `json:"model"`  // nil = the provider's own configured default
+	Effort        *string  `json:"effort"` // nil = the provider's own configured default
+	Cwd           string   `json:"cwd"`
+	AllowWrite    bool     `json:"allowWrite"`
+	GitBaseline   *string  `json:"gitBaseline"`
+	MaxBudgetUSD  *float64 `json:"maxBudgetUsd"` // the spend cap this turn was dispatched with; nil = none
+	SessionID     *string  `json:"sessionId"`
+	// ResumedFrom is the job dir whose conversation this turn continues;
+	// absent for a fresh conversation. It is the source a faithful
+	// re-dispatch names again.
+	ResumedFrom               *string  `json:"resumedFrom,omitempty"`
 	SessionLockConflict       *string  `json:"sessionLockConflict"`
 	StartedAt                 string   `json:"startedAt"`
 	EndedAt                   *string  `json:"endedAt"`
 	DurationMs                *int64   `json:"durationMs"`
 	TimeoutMin                float64  `json:"timeoutMin"`
 	DeadlineAt                *string  `json:"deadlineAt"`
-	Label                     *string  `json:"label"`
-	PromptFile                string   `json:"promptFile"`
-	OutDir                    string   `json:"outDir"`
-	RawPath                   string   `json:"rawPath"`
-	StderrPath                string   `json:"stderrPath"`
-	ProgressPath              string   `json:"progressPath"`
 	ProviderArgv              []string `json:"providerArgv"`
 	RunnerPid                 int      `json:"runnerPid"`
 	RunnerInstanceID          string   `json:"runnerInstanceId"`
@@ -93,23 +96,24 @@ type Meta struct {
 	LastProviderEventType     *string  `json:"lastProviderEventType"`
 	ProviderReportedModel     *string  `json:"providerReportedModel"` // the provider's own announcement; never inferred
 	// ConnectionErrors counts the provider's own connection-error events over
-	// the turn. Non-nil from schema 7 on (a zero count is a real observation);
-	// nil means an older engine wrote this meta and never looked.
-	// Schema 8 dropped takeoverCommand and watchCommand: the caller is an
-	// agent, and neither line was ever run.
+	// the turn. Non-nil only for a driver that observes them (a zero count is
+	// a real observation); nil means the driver never looked.
 	ConnectionErrors *ConnectionErrors `json:"connectionErrors"`
 	Tokens           *Tokens           `json:"tokens"`
 	CostUSD          *float64          `json:"costUsd"`
 	Error            *string           `json:"error"`
-	ResultKind       string            `json:"resultKind"`
-	NextAction       string            `json:"nextAction"`
-	RecoveryAction   *string           `json:"recoveryAction"`
-	CollectedAt      *string           `json:"collectedAt"`
-	ReconciledAt     *string           `json:"reconciledAt,omitempty"`
+	// Remedy is the driver's cause-specific fix for a turn that did not
+	// deliver ("Raise the budget cap first."); nil when the cause needs none.
+	Remedy       *string `json:"remedy"`
+	ResultKind   string  `json:"resultKind"`
+	CollectedAt  *string `json:"collectedAt"`
+	ReconciledAt *string `json:"reconciledAt,omitempty"`
 }
 
-// SchemaVersion for meta.json written by this engine.
-const MetaSchemaVersion = 8
+// MetaSchemaVersion is the only schema this engine reads or writes. Records
+// from another version are refused rather than reinterpreted: a job store
+// holds one engine's records at a time.
+const MetaSchemaVersion = 9
 
 // Marshal renders the canonical on-disk form.
 func (m *Meta) Marshal() ([]byte, error) {
@@ -129,22 +133,20 @@ func (m *Meta) WriteFile(path string) error {
 	return WriteFileAtomic(path, data)
 }
 
-// ReadMetaFile parses a meta.json. The raw field map lets callers distinguish
-// an absent field from an explicit null (collect needs this for collectedAt).
-func ReadMetaFile(path string) (*Meta, map[string]json.RawMessage, error) {
+// ReadMetaFile parses a meta.json this engine wrote.
+func ReadMetaFile(path string) (*Meta, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	var meta Meta
 	if err := json.Unmarshal(data, &meta); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, nil, err
+	if meta.SchemaVersion != MetaSchemaVersion {
+		return nil, fmt.Errorf("meta.json is schema %d and this engine reads schema %d only", meta.SchemaVersion, MetaSchemaVersion)
 	}
-	return &meta, raw, nil
+	return &meta, nil
 }
 
 // Ptr is a convenience for the schema's many nullable fields.

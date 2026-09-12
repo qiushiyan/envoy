@@ -17,22 +17,6 @@ import (
 	"github.com/qiushiyan/envoy/internal/text"
 )
 
-// Turn is what a dispatched turn needs to be rebuilt as a command: the job
-// it ran as (its records carry the session and settings a continuation
-// inherits) and the settings a fresh re-dispatch of the same prompt needs.
-type Turn struct {
-	Dir        string
-	Provider   string
-	SessionID  string
-	Cwd        string
-	Model      string
-	Effort     string
-	AllowWrite bool
-	Baseline   string
-	PromptFile string
-	TimeoutMin float64
-}
-
 // promptPlaceholder is the slot every follow-up command leaves open: a resumed
 // turn needs a NEW prompt, and only the caller knows which file that will be.
 // jobPlaceholder is the other slot: a follow-up is a new job, and its name is
@@ -67,33 +51,41 @@ func Voice(provider, model, effort string) string {
 	return provider
 }
 
-// ResumeCommand continues this turn's session as a new job.
-func (t Turn) ResumeCommand() string {
-	if t.SessionID == "" || t.Dir == "" {
-		return ""
+// RedispatchCommand sends this job's prompt again as a new job — the
+// follow-up for a prompt the provider provably never received, where
+// re-running is safe and the old name is now taken. It repeats the dispatch
+// it replaces: the same conversation when the turn was a continuation (a
+// cold voice would start a different one), the recorded tree, anchor, write
+// intent, cap and spend cap, and the prompt exactly as the job archived it.
+// Only the name changes.
+func RedispatchCommand(dir string, m *job.Meta) string {
+	voice := Voice(m.Provider, deref(m.Model), deref(m.Effort))
+	if m.ResumedFrom != nil {
+		voice = "@" + text.ShellQuote(*m.ResumedFrom)
 	}
-	return ContinueCommand(t.Dir, t.TimeoutMin)
-}
-
-// RedispatchCommand sends this turn's prompt again as a fresh conversation
-// under a new job name — the follow-up for a prompt the provider provably
-// never received, where re-running is safe and the old name is now taken.
-func (t Turn) RedispatchCommand() string {
-	if t.PromptFile == "" {
-		return ""
-	}
-	parts := []string{"envoy run", jobPlaceholder, "--with " + Voice(t.Provider, t.Model, t.Effort), "--prompt-file " + text.ShellQuote(t.PromptFile)}
-	if t.AllowWrite {
+	parts := []string{"envoy run", jobPlaceholder, "--with " + voice,
+		"--prompt-file " + text.ShellQuote(job.Workspace{Dir: dir}.PromptPath())}
+	if m.AllowWrite {
 		parts = append(parts, "--allow-write")
 	}
-	if t.Baseline != "" {
-		parts = append(parts, "--baseline "+t.Baseline)
+	if m.GitBaseline != nil {
+		parts = append(parts, "--baseline "+*m.GitBaseline)
 	}
-	if t.Cwd != "" {
-		parts = append(parts, "--cwd "+text.ShellQuote(t.Cwd))
+	if m.Cwd != "" {
+		parts = append(parts, "--cwd "+text.ShellQuote(m.Cwd))
 	}
-	parts = append(parts, fmt.Sprintf("--timeout-min %g", t.TimeoutMin))
+	if m.MaxBudgetUSD != nil {
+		parts = append(parts, fmt.Sprintf("--max-budget-usd %g", *m.MaxBudgetUSD))
+	}
+	parts = append(parts, fmt.Sprintf("--timeout-min %g", m.TimeoutMin))
 	return strings.Join(parts, " ")
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // CollectCommand prints one job as a single block; it is the caller's read
@@ -323,11 +315,6 @@ func OkResultUnreadable(outDir string) string {
 // CollectThisJob is the action every terminal turn ends on.
 func CollectThisJob(outDir string) string {
 	return "Collect and verify this job: " + CollectCommand(outDir) + "."
-}
-
-// Stopping is what to do while a stop is in flight.
-func Stopping() string {
-	return "This turn is stopping. Wait for the process to exit before inspecting or resuming the job."
 }
 
 // SpawnFailed reports a provider that never launched — the one failure where
@@ -642,15 +629,6 @@ func FanContinueBlocked(dir string, reasons []string) string {
 		"its own recovery; once every member is finished with a session, continue the set — or continue just the ready "+
 		"members individually with the command their sections print.",
 		dir, strings.Join(reasons, "; "), CollectCommand(dir))
-}
-
-// FanResumeSessionHeld refuses a round whose session reservation found a
-// member's conversation held by another live turn. Nothing was dispatched:
-// reservation happens before any member spawns, so the set stays whole.
-func FanResumeSessionHeld(member, conflict string) string {
-	return fmt.Sprintf("cannot start this round — member %s: %s\nA resumed fan-out starts every member or none, "+
-		"and nothing was dispatched. Once that session is free, run this command again.",
-		member, strings.TrimRight(conflict, ". \t\n")+".")
 }
 
 // FanContinueUnreadableManifest rejects a fan-out whose manifest cannot be

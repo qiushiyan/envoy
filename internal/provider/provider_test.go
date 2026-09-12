@@ -87,7 +87,7 @@ func TestCodexArgv(t *testing.T) {
 }
 
 func TestClaudeStreamParsing(t *testing.T) {
-	c := newClaude(Options{TimeoutMin: 30}, time.Now())
+	c := newClaude(Options{}, time.Now())
 
 	events := c.Feed(`{"type":"system","subtype":"init","session_id":"s1","model":"claude-opus-5"}`)
 	if len(events) != 3 || events[1].Kind != KindModelReported || events[1].Model != "claude-opus-5" ||
@@ -141,7 +141,7 @@ func TestClaudeStreamParsing(t *testing.T) {
 }
 
 func TestClaudeFailureExcludesErrorEcho(t *testing.T) {
-	c := newClaude(Options{TimeoutMin: 30}, time.Now())
+	c := newClaude(Options{}, time.Now())
 	c.Feed(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"real partial work"}]}}`)
 	c.Feed(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"boom"}]}}`)
 	c.Feed(`{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s1","errors":["boom"]}`)
@@ -160,7 +160,7 @@ func TestClaudeFailureExcludesErrorEcho(t *testing.T) {
 
 func TestClaudeBudgetStop(t *testing.T) {
 	budget := 0.25
-	c := newClaude(Options{TimeoutMin: 30, MaxBudgetUSD: &budget}, time.Now())
+	c := newClaude(Options{MaxBudgetUSD: &budget}, time.Now())
 	c.Feed(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"partial"}]}}`)
 	c.Feed(`{"type":"result","subtype":"error_max_budget_usd","session_id":"s1","usage":{"input_tokens":1}}`)
 
@@ -197,7 +197,7 @@ func TestClaudeArrayAndNoiseTolerance(t *testing.T) {
 
 func TestCodexLifecycle(t *testing.T) {
 	ws := job.Workspace{Dir: t.TempDir()}
-	c := newCodex(Options{TimeoutMin: 180}, ws)
+	c := newCodex(Options{}, ws)
 
 	events := c.Feed(`{"type":"thread.started","thread_id":"tid-1"}`)
 	var kinds []EventKind
@@ -225,7 +225,7 @@ func TestCodexLifecycle(t *testing.T) {
 
 func TestCodexTerminalEnvelopeWinsOverKill(t *testing.T) {
 	ws := job.Workspace{Dir: t.TempDir()}
-	c := newCodex(Options{TimeoutMin: 1}, ws)
+	c := newCodex(Options{}, ws)
 	c.Feed(`{"type":"thread.started","thread_id":"tid-2"}`)
 	c.Feed(`{"type":"item.completed","item":{"type":"agent_message","text":"finished work"}}`)
 	c.Feed(`{"type":"turn.completed","usage":{"input_tokens":1}}`)
@@ -239,7 +239,7 @@ func TestCodexTerminalEnvelopeWinsOverKill(t *testing.T) {
 
 func TestCodexFailureAndRecovery(t *testing.T) {
 	ws := job.Workspace{Dir: t.TempDir()}
-	c := newCodex(Options{TimeoutMin: 30}, ws)
+	c := newCodex(Options{}, ws)
 	c.Feed(`{"type":"thread.started","thread_id":"tid-3"}`)
 	c.Feed(`{"type":"turn.failed","error":{"message":"model exploded"}}`)
 
@@ -279,7 +279,7 @@ func TestCodexNoResultUsesStderrTail(t *testing.T) {
 // error text — EVIDENCE.md 2026-08-28.)
 func TestCodexTransientErrorDoesNotOverrideCompletion(t *testing.T) {
 	ws := job.Workspace{Dir: t.TempDir()}
-	c := newCodex(Options{TimeoutMin: 30}, ws)
+	c := newCodex(Options{}, ws)
 	c.Feed(`{"type":"thread.started","thread_id":"tid-4"}`)
 	events := c.Feed(`{"type":"error","message":"Reconnecting... waiting for network (Connection failed: error sending request)"}`)
 	var conn int
@@ -307,7 +307,7 @@ func TestCodexTransientErrorDoesNotOverrideCompletion(t *testing.T) {
 // infra outcome — the caller reads what the provider last said.
 func TestCodexTransientErrorIsDetailWithoutResult(t *testing.T) {
 	ws := job.Workspace{Dir: t.TempDir()}
-	c := newCodex(Options{TimeoutMin: 30}, ws)
+	c := newCodex(Options{}, ws)
 	c.Feed(`{"type":"thread.started","thread_id":"tid-5"}`)
 	c.Feed(`{"type":"error","message":"Reconnecting... 5/5 (stream disconnected before completion)"}`)
 	out := c.Conclude(ExitInfo{Code: job.Ptr(1), StderrTail: "tail"})

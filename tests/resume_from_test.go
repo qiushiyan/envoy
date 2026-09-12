@@ -239,8 +239,8 @@ func TestRosterRefusals(t *testing.T) {
 func TestRunningJobIsNotAdvertisedAsContinuable(t *testing.T) {
 	e := newEnv(t)
 	dir := t.TempDir()
-	meta := fmt.Sprintf(`{"schemaVersion":6,"status":"running","provider":"codex","sessionId":"sess-live",`+
-		`"cwd":%q,"promptState":"accepted","timeoutMin":5,"runnerPid":%d,"nextAction":"wait","resultKind":"none","collectedAt":null}`,
+	meta := fmt.Sprintf(`{"schemaVersion":9,"status":"running","provider":"codex","sessionId":"sess-live",`+
+		`"cwd":%q,"promptState":"accepted","timeoutMin":5,"runnerPid":%d,"resultKind":"none","collectedAt":null}`,
 		dir, os.Getpid())
 	if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte(meta), 0o644); err != nil {
 		t.Fatal(err)

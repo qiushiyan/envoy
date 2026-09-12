@@ -117,16 +117,6 @@ func TestReserveIsAtomicAndRefusesAnExistingName(t *testing.T) {
 	if err := Reserve(dir); !errors.Is(err, ErrJobExists) {
 		t.Fatalf("second reservation = %v, want ErrJobExists", err)
 	}
-	// A refusal before anything ran gives the name back; content keeps it.
-	Unreserve(dir)
-	if err := Reserve(dir); err != nil {
-		t.Fatalf("after Unreserve: %v", err)
-	}
-	os.WriteFile(filepath.Join(dir, "meta.json"), []byte("{}"), 0o644)
-	Unreserve(dir)
-	if _, err := os.Stat(dir); err != nil {
-		t.Fatal("Unreserve must not remove a directory with content")
-	}
 }
 
 func TestProjectSlugDistinguishesSameName(t *testing.T) {
@@ -172,22 +162,21 @@ func TestWorkspacePrepareAndProgress(t *testing.T) {
 	}
 }
 
-func TestMetaRoundTripAndNullDetection(t *testing.T) {
+// A record round-trips, and a record from another engine version is refused
+// by name rather than read as if its fields meant what this engine's do.
+func TestMetaRoundTripAndSchemaRefusal(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "meta.json")
 	m := &Meta{SchemaVersion: MetaSchemaVersion, Status: StatusOK, Provider: "codex", PromptState: PromptAccepted, ResultKind: ResultFinal}
 	if err := m.WriteFile(p); err != nil {
 		t.Fatal(err)
 	}
-	got, raw, err := ReadMetaFile(p)
+	got, err := ReadMetaFile(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != StatusOK || got.Provider != "codex" {
+	if got.Status != StatusOK || got.Provider != "codex" || got.CollectedAt != nil {
 		t.Fatalf("round trip = %+v", got)
-	}
-	if v, ok := raw["collectedAt"]; !ok || string(v) != "null" {
-		t.Fatalf("collectedAt must serialize as explicit null, got %q (present=%v)", v, ok)
 	}
 	if got.ReconciledAt != nil {
 		t.Fatal("reconciledAt must stay absent until reconciliation")
@@ -195,6 +184,12 @@ func TestMetaRoundTripAndNullDetection(t *testing.T) {
 	data, _ := os.ReadFile(p)
 	if strings.Contains(string(data), "reconciledAt") {
 		t.Fatal("reconciledAt must be omitted when unset")
+	}
+	if err := os.WriteFile(p, []byte(`{"schemaVersion":8,"status":"ok","provider":"codex"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadMetaFile(p); err == nil || !strings.Contains(err.Error(), "schema 8") {
+		t.Fatalf("another schema must be refused by name, got %v", err)
 	}
 }
 

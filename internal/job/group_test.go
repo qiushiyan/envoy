@@ -1,7 +1,9 @@
 package job
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -34,20 +36,17 @@ func TestExitCodeForGroup(t *testing.T) {
 	}
 }
 
-// group.json is a roster of coordinates, and a member's outcome is only ever
-// read from that member's own meta.json. A status field here would be a second
-// copy of the same fact, free to drift from the turn it describes.
-func TestGroupManifestRoundTripsCoordinatesOnly(t *testing.T) {
+// group.json is a roster, and a member's settings and outcome are only ever
+// read from that member's own meta.json. Any member field here would be a
+// second copy of a fact the turn owns, free to drift from it — and another
+// schema means another engine's records, refused rather than reinterpreted.
+func TestGroupManifestIsARosterOnly(t *testing.T) {
 	dir := t.TempDir()
 	gw := GroupWorkspace{Dir: dir}
 	g := &Group{
 		SchemaVersion: GroupSchemaVersion,
 		StartedAt:     "2026-07-26T00:00:00.000Z",
-		OutDir:        dir,
-		Members: []GroupMember{
-			{Name: "codex", Provider: "codex", OutDir: filepath.Join(dir, "codex")},
-			{Name: "claude-opus", Provider: "claude", Model: Ptr("opus"), OutDir: filepath.Join(dir, "claude-opus")},
-		},
+		Members:       []string{"codex", "claude-opus"},
 	}
 	if err := g.WriteFile(gw.GroupPath()); err != nil {
 		t.Fatal(err)
@@ -62,14 +61,18 @@ func TestGroupManifestRoundTripsCoordinatesOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Members) != 2 || got.Members[1].Name != "claude-opus" || *got.Members[1].Model != "opus" {
+	if len(got.Members) != 2 || got.Members[1] != "claude-opus" {
 		t.Fatalf("members round trip = %+v", got.Members)
 	}
-	if got.EndedAt != nil {
-		t.Fatal("endedAt must stay null while the supervisor runs")
-	}
-	// The member's job dir is an ordinary one, so every single-turn path holds.
+	// The member's job dir is an ordinary one named after the member, so
+	// every single-turn path holds.
 	if want := filepath.Join(dir, "codex", "result.md"); gw.Member("codex").ResultPath() != want {
 		t.Fatalf("member result path = %s, want %s", gw.Member("codex").ResultPath(), want)
+	}
+	if err := os.WriteFile(gw.GroupPath(), []byte(`{"schemaVersion":1,"members":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadGroupFile(gw.GroupPath()); err == nil || !strings.Contains(err.Error(), "schema 1") {
+		t.Fatalf("another schema must be refused by name, got %v", err)
 	}
 }
