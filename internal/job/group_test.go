@@ -2,7 +2,6 @@ package job
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -72,28 +71,5 @@ func TestGroupManifestRoundTripsCoordinatesOnly(t *testing.T) {
 	// The member's job dir is an ordinary one, so every single-turn path holds.
 	if want := filepath.Join(dir, "codex", "result.md"); gw.Member("codex").ResultPath() != want {
 		t.Fatalf("member result path = %s, want %s", gw.Member("codex").ResultPath(), want)
-	}
-}
-
-// The watch command is handed to a caller's shell verbatim, so it must be
-// runnable as printed: every member's progress log spelled out and quoted,
-// never a glob — a glob inside shell quotes matches a literal filename.
-func TestGroupWatchCommandIsRunnableAsPrinted(t *testing.T) {
-	gw := GroupWorkspace{Dir: "/state/jobs/proj/20260727-101112-consult"}
-	members := []GroupMember{
-		{Name: "codex", OutDir: gw.Member("codex").Dir},
-		{Name: "claude-opus", OutDir: gw.Member("claude-opus").Dir},
-	}
-	got := gw.WatchCommand(members)
-	if strings.Contains(got, "*") {
-		t.Fatalf("watch command must not glob: %q", got)
-	}
-	for _, m := range members {
-		if !strings.Contains(got, Workspace{Dir: m.OutDir}.ProgressLogPath()) {
-			t.Fatalf("watch command %q must name member %s's progress log", got, m.Name)
-		}
-	}
-	if !strings.HasPrefix(got, "tail -f ") {
-		t.Fatalf("watch command = %q", got)
 	}
 }

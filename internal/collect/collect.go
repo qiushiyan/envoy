@@ -23,8 +23,8 @@ import (
 	"github.com/qiushiyan/envoy/internal/prose"
 )
 
-// JobDirs lists job directories under base, oldest first (stamped names make
-// lexical order chronological). A dir counts as a job once prompt.md exists.
+// JobDirs lists job directories under base, sorted by name. A dir counts as a
+// job once prompt.md exists.
 //
 // It is the only discovery function, and it returns the read error rather than
 // swallowing it: a store that could not be read is not an empty store. Which
@@ -55,20 +55,6 @@ func JobDirs(base string) ([]string, error) {
 // must not be waved through as an empty project.
 func FirstRun(err error, baseWasDerived bool) bool {
 	return baseWasDerived && errors.Is(err, fs.ErrNotExist)
-}
-
-// LatestJobDir returns the newest job under base. It reports the read error so
-// callers resolving a default job dir refuse on an unreadable store instead of
-// reporting it as a project with no jobs.
-func LatestJobDir(base string) (string, error) {
-	dirs, err := JobDirs(base)
-	if err != nil {
-		return "", err
-	}
-	if len(dirs) == 0 {
-		return "", nil
-	}
-	return dirs[len(dirs)-1], nil
 }
 
 // runningState classifies a status:"running" meta by process liveness.
@@ -129,14 +115,45 @@ func turnFromMeta(meta *job.Meta) (prose.Turn, bool) {
 		return prose.Turn{}, false
 	}
 	return prose.Turn{
+		Dir:        meta.OutDir,
 		Provider:   meta.Provider,
 		SessionID:  *meta.SessionID,
 		Cwd:        meta.Cwd,
 		Model:      deref(meta.Model),
 		Effort:     deref(meta.Effort),
 		AllowWrite: meta.AllowWrite,
+		Baseline:   deref(meta.GitBaseline),
+		PromptFile: meta.PromptFile,
 		TimeoutMin: meta.TimeoutMin,
 	}, true
+}
+
+// redispatchCommand rebuilds a fresh dispatch of this job's prompt under a new
+// name, for a prompt the provider provably never received.
+func redispatchCommand(meta *job.Meta) string {
+	return prose.Turn{
+		Dir:        meta.OutDir,
+		Provider:   meta.Provider,
+		Cwd:        meta.Cwd,
+		Model:      deref(meta.Model),
+		Effort:     deref(meta.Effort),
+		AllowWrite: meta.AllowWrite,
+		Baseline:   deref(meta.GitBaseline),
+		PromptFile: meta.PromptFile,
+		TimeoutMin: meta.TimeoutMin,
+	}.RedispatchCommand()
+}
+
+// recoveryAction is the prescription for a terminal job that did not deliver.
+// A job this engine version wrote carries its own — the driver's remedy clause
+// is only known at the moment the turn ended — and an older job's persisted
+// text names commands that no longer exist, so it is re-rendered from the
+// records here.
+func recoveryAction(meta *job.Meta) string {
+	if meta.RecoveryAction != nil && meta.SchemaVersion >= job.MetaSchemaVersion {
+		return *meta.RecoveryAction
+	}
+	return prose.Recovery(meta.PromptState, resumeCommand(meta), redispatchCommand(meta), "")
 }
 
 // resumeCommand rebuilds this job's follow-up command from what the turn was
@@ -168,7 +185,7 @@ func recoveryForStale(meta *job.Meta, state runningState) string {
 	case "orphaned":
 		return prose.Orphaned()
 	case "abandoned":
-		return prose.Recovery(meta.PromptState, resumeCommand(meta), "")
+		return prose.Recovery(meta.PromptState, resumeCommand(meta), redispatchCommand(meta), "")
 	default:
 		return prose.Unprovable()
 	}
@@ -272,6 +289,11 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 			filepath.Join(outDir, "stderr.log"))
 		return nil, false, job.ExitUsage
 	}
+	// An older record may not name its own directory; the follow-up commands
+	// are rendered from where it was actually read.
+	if meta.OutDir == "" {
+		meta.OutDir = outDir
+	}
 	state := classifyRunning(meta)
 	meta = reconcileAbandoned(outDir, meta, state)
 	state = classifyRunning(meta)
@@ -374,9 +396,6 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 		if line := prose.ProviderStream(meta.ConnectionErrors); line != "" {
 			fmt.Fprintln(w, line)
 		}
-		if meta.Status == job.StatusRunning && meta.WatchCommand != "" {
-			fmt.Fprintf(w, "watch: %s\n", meta.WatchCommand)
-		}
 		// The three streams are one affordance — "here is what the turn
 		// actually emitted" — and a turn that did not deliver is the case that
 		// wants it. Which of the three a given recovery line names varies (an
@@ -395,28 +414,20 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 	}
 	if meta.SessionID != nil {
 		// The follow-up command is advertised only when dispatching it is
-		// licensed — the same eligibility --resume-from applies, so collect
+		// licensed — the same eligibility an @<job> voice applies, so collect
 		// can never offer a continuation dispatch would refuse. A running
 		// turn's session still prints; its next line says to wait.
 		resume := ""
 		if _, blocked := memberResumeBlocker(meta); !blocked {
 			resume = resumeCommand(meta)
 		}
-		// The bare id is printed only when no command below carries it —
-		// independently of status and mode, because redundancy is never what
-		// the fuller reads are asking for. Both commands spell the session
-		// out, and a third line of the same identifier is one more chance for
-		// a caller to hand-assemble a follow-up out of the id instead of
-		// running the command that already carries the turn's cwd and write
-		// intent.
-		if resume == "" && meta.TakeoverCommand == nil {
+		// The bare id is printed only when no command carries it: the
+		// continuation names the job, not the session, so a caller never
+		// hand-assembles a follow-up out of the id.
+		if resume == "" {
 			fmt.Fprintf(w, "session: %s\n", *meta.SessionID)
-		}
-		if resume != "" {
+		} else {
 			fmt.Fprintf(w, "resume: %s\n", resume)
-		}
-		if meta.TakeoverCommand != nil {
-			fmt.Fprintf(w, "takeover: %s\n", *meta.TakeoverCommand)
 		}
 	}
 	if meta.Error != nil {
@@ -445,7 +456,7 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 
 	if meta.Status == job.StatusRunning {
 		if state.kind == "live" {
-			fmt.Fprintf(w, "\nnext: %s\n", prose.RunningNext(outDir, meta.WatchCommand))
+			fmt.Fprintf(w, "\nnext: %s\n", prose.RunningNext(outDir))
 		} else {
 			fmt.Fprintf(w, "\nnext: %s\n", recoveryForStale(meta, state))
 		}
@@ -465,13 +476,9 @@ func collectJob(outDir string, mode Mode, w, errW io.Writer, showGit bool) (coll
 		return meta, true, 0
 	}
 
-	postCollectionAction := ""
-	if meta.Status == job.StatusOK {
-		postCollectionAction = prose.CollectedOK()
-	} else if meta.RecoveryAction != nil {
-		postCollectionAction = *meta.RecoveryAction
-	} else {
-		postCollectionAction = meta.NextAction
+	postCollectionAction := prose.CollectedOK()
+	if meta.Status != job.StatusOK {
+		postCollectionAction = recoveryAction(meta)
 	}
 	stampCollected(metaPath, meta, postCollectionAction)
 	fmt.Fprintf(w, "\nnext: %s\n", postCollectionAction)
@@ -571,10 +578,7 @@ func collectGroup(dir string, mode Mode, w, errW io.Writer) int {
 	// The set-level follow-up is offered only when it is provably possible:
 	// every member finished and holds a session to continue.
 	if resumable {
-		fmt.Fprintf(w, "resume: %s\n", prose.FanResumeCommand(dir, group.TimeoutMin))
-	}
-	if group.EndedAt == nil {
-		fmt.Fprintf(w, "watch: %s\n", group.WatchCommand)
+		fmt.Fprintf(w, "resume: %s\n", prose.ContinueCommand(dir, group.TimeoutMin))
 	}
 	// Every member reviewed the same range, so it is reported once here rather
 	// than repeated under each of them.

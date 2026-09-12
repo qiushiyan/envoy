@@ -239,10 +239,3 @@ func (c *codex) Conclude(exit ExitInfo) Outcome {
 }
 
 func (c *codex) ObservesConnectionErrors() bool { return true }
-
-func (c *codex) Takeover() string {
-	if c.sessionID == "" {
-		return ""
-	}
-	return "codex resume " + c.sessionID
-}

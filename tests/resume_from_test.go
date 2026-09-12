@@ -1,9 +1,8 @@
-// Cross-phase continuation: --resume-from anchors a follow-up turn on a
-// finished job's records, and --with-from puts a continued conversation
-// beside cold members in one fan-out. The records are the coordinate — the
-// session id, settings, and tree come from meta.json, never from what the
-// caller happens to remember — and every dispatch records the lineage it was
-// given.
+// Cross-phase continuation: a voice spelled @<job> anchors a follow-up on a
+// finished job's records, alone or beside cold voices in one fan-out. The
+// records are the coordinate — the session id, settings, and tree come from
+// meta.json, never from what the caller happens to remember — and every
+// dispatch records the lineage it was given.
 package integration
 
 import (
@@ -14,10 +13,10 @@ import (
 	"testing"
 )
 
-// A follow-up dispatched with --resume-from must run as a real resume of the
-// recorded session, inherit the settings the caller left unsaid (model,
-// effort, cwd), obey the explicit flags (the cap is phase policy), and record
-// where the conversation came from.
+// A follow-up dispatched as @<job> must run as a real resume of the recorded
+// session, inherit the recorded settings (model, effort, cwd), take the cap
+// from this dispatch (the cap is phase policy), and record where the
+// conversation came from.
 func TestTurnResumeFromContinuesSession(t *testing.T) {
 	e := newEnv(t).
 		set("ENVOY_FAKE_SCENARIO", "success").
@@ -26,8 +25,7 @@ func TestTurnResumeFromContinuesSession(t *testing.T) {
 	r1 := filepath.Join(t.TempDir(), "consult")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, turnArgs(prompt, r1, "--provider", "codex", "--model", "fake-m",
-		"--effort", "high", "--cwd", workDir, "--timeout-min", "5", "--label", "consult")...)
+	res := runEnvoy(t, e, runArgs(prompt, r1, "--with", "codex:fake-m:high", "--cwd", workDir, "--timeout-min", "5")...)
 	if res.code != 0 {
 		t.Fatalf("consult exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
@@ -37,8 +35,7 @@ func TestTurnResumeFromContinuesSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	r2 := filepath.Join(t.TempDir(), "review")
-	res = runEnvoy(t, e, "turn", "--resume-from", r1, "--prompt-file", review,
-		"--out-dir", r2, "--timeout-min", "7", "--label", "review")
+	res = runEnvoy(t, e, "run", r2, "--with", "@"+r1, "--prompt-file", review, "--timeout-min", "7")
 	if res.code != 0 {
 		t.Fatalf("resume-from exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
@@ -69,60 +66,53 @@ func TestTurnResumeFromContinuesSession(t *testing.T) {
 	// Collect surfaces the lineage next to the session coordinates — the
 	// session itself arriving inside the follow-up command that carries it.
 	col := runEnvoy(t, e, "collect", "--status-only", r2)
-	mustContain(t, "collect stdout", col.stdout, "resumed-from: "+r1, "--resume sess-consult")
-
-	// An explicit flag overrides the record; the rest still inherits.
-	r3 := filepath.Join(t.TempDir(), "review-xhigh")
-	res = runEnvoy(t, e, "turn", "--resume-from", r1, "--prompt-file", review,
-		"--out-dir", r3, "--effort", "xhigh", "--timeout-min", "5")
-	if res.code != 0 {
-		t.Fatalf("override exit = %d\nstderr:\n%s", res.code, res.stderr)
-	}
-	meta = readMeta(t, r3)
-	if meta["effort"] != "xhigh" || meta["model"] != "fake-m" {
-		t.Fatalf("override = model %v effort %v, want fake-m/xhigh", meta["model"], meta["effort"])
-	}
+	mustContain(t, "collect stdout", col.stdout, "resumed-from: "+r1,
+		"resume: envoy run <new-job-name> --with @'"+r2+"' --timeout-min 7")
 }
 
 // Every refusal names the conflict and hands over the caller's actual next
 // move; a job that cannot be continued is refused before anything spawns.
-func TestTurnResumeFromRefusals(t *testing.T) {
+func TestContinuationRefusals(t *testing.T) {
 	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
 	prompt := writePrompt(t, t.TempDir())
 
 	fanDir := filepath.Join(t.TempDir(), "fan")
-	if r := runEnvoy(t, e, fanArgs(prompt, fanDir, "--with", "codex", "--with", "claude",
+	if r := runEnvoy(t, e, runArgs(prompt, fanDir, "--with", "codex", "--with", "claude",
 		"--timeout-min", "5")...); r.code != 0 {
 		t.Fatalf("fan exit = %d\nstderr:\n%s", r.code, r.stderr)
 	}
 
 	noSession := filepath.Join(t.TempDir(), "dead")
 	eDead := newEnv(t).set("ENVOY_FAKE_SCENARIO", "exit-before-stdin")
-	if r := runEnvoy(t, eDead, turnArgs(prompt, noSession, "--provider", "codex", "--timeout-min", "5")...); r.code != 2 {
+	if r := runEnvoy(t, eDead, runArgs(prompt, noSession, "--with", "codex", "--timeout-min", "5")...); r.code != 2 {
 		t.Fatalf("no-session turn exit = %d, want 2\nstderr:\n%s", r.code, r.stderr)
 	}
 
 	cases := []struct {
-		args []string
+		with []string
 		want []string
 	}{
-		{[]string{"turn", "--resume-from", t.TempDir(), "--resume", "sess-1", "--prompt-file", prompt},
-			[]string{"mutually exclusive"}},
-		{[]string{"turn", "--resume-from", t.TempDir(), "--provider", "codex", "--prompt-file", prompt},
-			[]string{"Drop --provider"}},
-		{[]string{"turn", "--resume-from", filepath.Join(t.TempDir(), "nowhere"), "--prompt-file", prompt},
-			[]string{"no turn found there"}},
-		{[]string{"turn", "--resume-from", fanDir, "--prompt-file", prompt},
-			[]string{"this is a fan-out", "envoy fan --resume-from", "envoy turn --resume-from '" + filepath.Join(fanDir, "codex") + "'"}},
-		{[]string{"turn", "--resume-from", noSession, "--prompt-file", prompt},
+		{[]string{"@" + filepath.Join(t.TempDir(), "nowhere")},
+			[]string{"no job found there"}},
+		{[]string{"@" + fanDir, "codex"},
+			[]string{"stands alone", "--with @'" + filepath.Join(fanDir, "codex") + "'  (codex)"}},
+		{[]string{"@" + noSession},
 			[]string{"never published a session id", "envoy collect"}},
 	}
 	for _, c := range cases {
-		res := runEnvoy(t, e, c.args...)
-		if res.code != 3 {
-			t.Fatalf("%v: exit = %d, want 3\nstderr:\n%s", c.args, res.code, res.stderr)
+		dir := filepath.Join(t.TempDir(), "next")
+		args := runArgs(prompt, dir)
+		for _, w := range c.with {
+			args = append(args, "--with", w)
 		}
-		mustContain(t, fmt.Sprintf("stderr of %v", c.args), res.stderr, c.want...)
+		res := runEnvoy(t, e, args...)
+		if res.code != 3 {
+			t.Fatalf("%v: exit = %d, want 3\nstderr:\n%s", c.with, res.code, res.stderr)
+		}
+		mustContain(t, fmt.Sprintf("stderr of %v", c.with), res.stderr, c.want...)
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("%v: a refused run must leave no job dir", c.with)
+		}
 	}
 }
 
@@ -138,8 +128,8 @@ func TestFanWithFromMixedRoster(t *testing.T) {
 	r1 := filepath.Join(t.TempDir(), "consult")
 	prompt := writePrompt(t, t.TempDir())
 
-	if r := runEnvoy(t, e, turnArgs(prompt, r1, "--provider", "codex", "--model", "fake-m",
-		"--cwd", workDir, "--baseline", "bl-consult", "--timeout-min", "5", "--label", "consult")...); r.code != 0 {
+	if r := runEnvoy(t, e, runArgs(prompt, r1, "--with", "codex:fake-m",
+		"--cwd", workDir, "--baseline", "bl-consult", "--timeout-min", "5")...); r.code != 0 {
 		t.Fatalf("consult exit = %d\nstderr:\n%s", r.code, r.stderr)
 	}
 
@@ -148,13 +138,13 @@ func TestFanWithFromMixedRoster(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := filepath.Join(t.TempDir(), "review-fan")
-	res := runEnvoy(t, e, "fan", "--prompt-file", review, "--with-from", r1,
-		"--with", "claude:opus", "--out-dir", g, "--timeout-min", "5", "--label", "review")
+	res := runEnvoy(t, e, "run", g, "--prompt-file", review, "--with", "@"+r1,
+		"--with", "claude:opus", "--timeout-min", "5")
 	if res.code != 0 {
 		t.Fatalf("fan exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
 	mustContain(t, "fan stdout", res.stdout,
-		"member codex-fake-m: model fake-m · effort (provider default) · out-dir "+filepath.Join(g, "codex-fake-m")+" · continues "+r1,
+		"member codex-fake-m: model fake-m · effort (provider default) · dir "+filepath.Join(g, "codex-fake-m")+" · continues "+r1,
 		"member claude-opus: ",
 		"status: ok — all 2 turns returned a result",
 	)
@@ -193,23 +183,18 @@ func TestFanWithFromMixedRoster(t *testing.T) {
 
 // Roster refusals: the shapes that cannot mean anything are stopped with the
 // command that does, before any member spawns.
-func TestFanWithFromRefusals(t *testing.T) {
+func TestRosterRefusals(t *testing.T) {
 	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
 	prompt := writePrompt(t, t.TempDir())
 
 	r1 := filepath.Join(t.TempDir(), "consult")
-	if r := runEnvoy(t, e, turnArgs(prompt, r1, "--provider", "codex", "--timeout-min", "5")...); r.code != 0 {
+	if r := runEnvoy(t, e, runArgs(prompt, r1, "--with", "codex", "--timeout-min", "5")...); r.code != 0 {
 		t.Fatalf("turn exit = %d\nstderr:\n%s", r.code, r.stderr)
-	}
-	fanDir := filepath.Join(t.TempDir(), "fan")
-	if r := runEnvoy(t, e, fanArgs(prompt, fanDir, "--with", "codex", "--with", "claude",
-		"--timeout-min", "5")...); r.code != 0 {
-		t.Fatalf("fan exit = %d\nstderr:\n%s", r.code, r.stderr)
 	}
 	// A source that ran with write intent: continuing it inside a read-only
 	// fan-out would silently narrow the conversation's write intent.
 	writeJob := filepath.Join(t.TempDir(), "delegate")
-	if r := runEnvoy(t, e, turnArgs(prompt, writeJob, "--provider", "codex", "--allow-write",
+	if r := runEnvoy(t, e, runArgs(prompt, writeJob, "--with", "codex", "--allow-write",
 		"--timeout-min", "5")...); r.code != 0 {
 		t.Fatalf("write turn exit = %d\nstderr:\n%s", r.code, r.stderr)
 	}
@@ -218,30 +203,33 @@ func TestFanWithFromRefusals(t *testing.T) {
 		args []string
 		want []string
 	}{
-		{[]string{"fan", "--resume-from", fanDir, "--with-from", r1, "--prompt-file", prompt},
-			[]string{"mutually exclusive"}},
-		{[]string{"fan", "--with-from", r1, "--prompt-file", prompt},
-			[]string{"at least two members", "envoy turn --resume-from"}},
-		{[]string{"fan", "--with-from", r1, "--with-from", r1, "--prompt-file", prompt},
+		{[]string{"--with", "@" + r1, "--with", "@" + r1},
 			[]string{"same conversation twice"}},
-		// Aimed at the group, --with-from is handed the members it may seat
-		// warm, as copy-ready flags, and the whole-set round only as an aside.
-		{[]string{"fan", "--with-from", fanDir, "--with", "codex", "--prompt-file", prompt},
-			[]string{"this is a fan-out", "--with-from '" + filepath.Join(fanDir, "codex") + "'  (codex)",
-				"--with-from '" + filepath.Join(fanDir, "claude") + "'  (claude)", "no cold member"}},
-		// A lone --with-from that names no job must report that, not hand
-		// over a turn command that would only fail the same way.
-		{[]string{"fan", "--with-from", filepath.Join(t.TempDir(), "nowhere"), "--prompt-file", prompt},
-			[]string{"no turn found there"}},
-		{[]string{"fan", "--with-from", writeJob, "--with", "codex", "--prompt-file", prompt},
-			[]string{"read-only", "envoy turn --resume-from"}},
+		{[]string{"--with", "@" + writeJob, "--with", "codex"},
+			[]string{"read-only", "envoy run <new-job-name> --with @'" + writeJob + "'"}},
+		{[]string{"--with", "@" + r1, "--with", "codex", "--allow-write"},
+			[]string{"--allow-write needs exactly one --with"}},
 	}
 	for _, c := range cases {
-		res := runEnvoy(t, e, c.args...)
+		dir := filepath.Join(t.TempDir(), "next")
+		res := runEnvoy(t, e, runArgs(prompt, dir, c.args...)...)
 		if res.code != 3 {
 			t.Fatalf("%v: exit = %d, want 3\nstderr:\n%s", c.args, res.code, res.stderr)
 		}
 		mustContain(t, fmt.Sprintf("stderr of %v", c.args), res.stderr, c.want...)
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("%v: a refused run must leave no job dir", c.args)
+		}
+	}
+
+	// Alone, the write conversation keeps its intent without being asked.
+	alone := filepath.Join(t.TempDir(), "delegate-r2")
+	res := runEnvoy(t, e, runArgs(prompt, alone, "--with", "@"+writeJob, "--timeout-min", "5")...)
+	if res.code != 0 {
+		t.Fatalf("lone write continuation exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	if readMeta(t, alone)["allowWrite"] != true {
+		t.Fatal("a continued write conversation must keep its write intent")
 	}
 }
 
@@ -260,27 +248,18 @@ func TestRunningJobIsNotAdvertisedAsContinuable(t *testing.T) {
 
 	col := runEnvoy(t, e, "collect", dir)
 	mustContain(t, "collect stdout", col.stdout, "status: running (live", "session: sess-live")
-	if strings.Contains(col.stdout, "resume: envoy turn") {
+	if strings.Contains(col.stdout, "resume: envoy run") {
 		t.Fatalf("a running turn must not advertise a resume command:\n%s", col.stdout)
 	}
 
 	prompt := writePrompt(t, t.TempDir())
-	res := runEnvoy(t, e, "turn", "--resume-from", dir, "--prompt-file", prompt)
+	res := runEnvoy(t, e, runArgs(prompt, filepath.Join(t.TempDir(), "next"), "--with", "@"+dir)...)
 	if res.code != 3 {
-		t.Fatalf("resume-from a running job: exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
+		t.Fatalf("continuing a running job: exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
 	}
 	mustContain(t, "stderr", res.stderr, "still records status running")
-
-	// The fan redirect is a continuation surface too: aimed at this running
-	// turn it must point at collect, not hand over the resume command every
-	// other surface is refusing.
-	res = runEnvoy(t, e, "fan", "--resume-from", dir, "--prompt-file", prompt)
-	if res.code != 3 {
-		t.Fatalf("fan --resume-from a running turn: exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
-	}
-	mustContain(t, "stderr", res.stderr, "is a single turn", "Collect it to see what it licenses")
-	if strings.Contains(res.stderr, "--resume sess-live") {
-		t.Fatalf("the redirect must not advertise a blocked turn's resume command:\n%s", res.stderr)
+	if strings.Contains(res.stderr, "resume") && strings.Contains(res.stderr, "sess-live") {
+		t.Fatalf("the refusal must not advertise a blocked turn's session:\n%s", res.stderr)
 	}
 }
 
@@ -293,18 +272,18 @@ func TestFanWithFromBaselines(t *testing.T) {
 
 	a := filepath.Join(t.TempDir(), "job-a")
 	eA := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").set("ENVOY_FAKE_SESSION_ID", "sess-bl-a")
-	if r := runEnvoy(t, eA, turnArgs(prompt, a, "--provider", "codex", "--cwd", shared,
+	if r := runEnvoy(t, eA, runArgs(prompt, a, "--with", "codex", "--cwd", shared,
 		"--baseline", "bl-a", "--timeout-min", "5")...); r.code != 0 {
 		t.Fatalf("job-a exit = %d\nstderr:\n%s", r.code, r.stderr)
 	}
 	b := filepath.Join(t.TempDir(), "job-b")
 	eB := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").set("ENVOY_FAKE_SESSION_ID", "sess-bl-b")
-	if r := runEnvoy(t, eB, turnArgs(prompt, b, "--provider", "codex", "--cwd", shared,
+	if r := runEnvoy(t, eB, runArgs(prompt, b, "--with", "codex", "--cwd", shared,
 		"--baseline", "bl-b", "--timeout-min", "5")...); r.code != 0 {
 		t.Fatalf("job-b exit = %d\nstderr:\n%s", r.code, r.stderr)
 	}
 
-	res := runEnvoy(t, eA, "fan", "--with-from", a, "--with-from", b, "--prompt-file", prompt)
+	res := runEnvoy(t, eA, runArgs(prompt, filepath.Join(t.TempDir(), "g0"), "--with", "@"+a, "--with", "@"+b)...)
 	if res.code != 3 {
 		t.Fatalf("divergent baselines: exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
 	}
@@ -312,8 +291,8 @@ func TestFanWithFromBaselines(t *testing.T) {
 
 	// An explicit anchor resolves it.
 	g := filepath.Join(t.TempDir(), "group")
-	res = runEnvoy(t, eA, "fan", "--with-from", a, "--with-from", b, "--prompt-file", prompt,
-		"--baseline", "bl-x", "--out-dir", g, "--timeout-min", "5")
+	res = runEnvoy(t, eA, runArgs(prompt, g, "--with", "@"+a, "--with", "@"+b,
+		"--baseline", "bl-x", "--timeout-min", "5")...)
 	if res.code != 0 {
 		t.Fatalf("explicit-baseline exit = %d\nstderr:\n%s", res.code, res.stderr)
 	}
@@ -330,16 +309,16 @@ func TestFanWithFromRefusesMixedTrees(t *testing.T) {
 
 	a := filepath.Join(t.TempDir(), "job-a")
 	eA := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").set("ENVOY_FAKE_SESSION_ID", "sess-a")
-	if r := runEnvoy(t, eA, turnArgs(prompt, a, "--provider", "codex", "--cwd", cwdA, "--timeout-min", "5")...); r.code != 0 {
+	if r := runEnvoy(t, eA, runArgs(prompt, a, "--with", "codex", "--cwd", cwdA, "--timeout-min", "5")...); r.code != 0 {
 		t.Fatalf("job-a exit = %d\nstderr:\n%s", r.code, r.stderr)
 	}
 	b := filepath.Join(t.TempDir(), "job-b")
 	eB := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").set("ENVOY_FAKE_SESSION_ID", "sess-b")
-	if r := runEnvoy(t, eB, turnArgs(prompt, b, "--provider", "codex", "--cwd", cwdB, "--timeout-min", "5")...); r.code != 0 {
+	if r := runEnvoy(t, eB, runArgs(prompt, b, "--with", "codex", "--cwd", cwdB, "--timeout-min", "5")...); r.code != 0 {
 		t.Fatalf("job-b exit = %d\nstderr:\n%s", r.code, r.stderr)
 	}
 
-	res := runEnvoy(t, eA, "fan", "--with-from", a, "--with-from", b, "--prompt-file", prompt)
+	res := runEnvoy(t, eA, runArgs(prompt, filepath.Join(t.TempDir(), "g0"), "--with", "@"+a, "--with", "@"+b)...)
 	if res.code != 3 {
 		t.Fatalf("mixed-tree exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
 	}
@@ -347,8 +326,8 @@ func TestFanWithFromRefusesMixedTrees(t *testing.T) {
 
 	// Naming the tree resolves it.
 	g := filepath.Join(t.TempDir(), "group")
-	res = runEnvoy(t, eA, "fan", "--with-from", a, "--with-from", b, "--prompt-file", prompt,
-		"--cwd", cwdA, "--out-dir", g, "--timeout-min", "5")
+	res = runEnvoy(t, eA, runArgs(prompt, g, "--with", "@"+a, "--with", "@"+b,
+		"--cwd", cwdA, "--timeout-min", "5")...)
 	if res.code != 0 {
 		t.Fatalf("explicit-cwd exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}

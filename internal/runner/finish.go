@@ -1,7 +1,6 @@
 package runner
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -52,13 +51,12 @@ func (r *run) initMeta() {
 		RawPath:          r.ws.RawLogPath(),
 		StderrPath:       r.ws.StderrLogPath(),
 		ProgressPath:     r.ws.ProgressLogPath(),
-		WatchCommand:     r.ws.WatchCommand(),
 		ProviderArgv:     append([]string{r.opts.Provider}, r.argv...),
 		RunnerPid:        os.Getpid(),
 		RunnerInstanceID: r.instance,
 		PromptState:      job.PromptUnknown,
 		ResultKind:       job.ResultNone,
-		NextAction:       prose.RunningNext(r.ws.Dir, r.ws.WatchCommand()),
+		NextAction:       prose.RunningNext(r.ws.Dir),
 	}
 	r.setSession(r.driver.PreflightSessionID())
 }
@@ -74,38 +72,27 @@ func (r *run) writeMeta(mutate func(*job.Meta)) {
 	}
 }
 
+// printStartupBlock is the dispatch's own stdout: where the job is and what
+// to do once the process exits. The caller named the job, so nothing here is
+// a coordinate it has to read back.
 func (r *run) printStartupBlock() {
-	var block bytes.Buffer
-	w := &block
+	w := r.opts.Stdout
 	display := func(v string) string {
 		if v == "" {
 			return "(provider default)"
 		}
 		return v
 	}
-	fmt.Fprintf(w, "out-dir: %s\n", r.ws.Dir)
+	fmt.Fprintf(w, "job: %s\n", r.ws.Dir)
 	fmt.Fprintf(w, "provider: %s · model %s · effort %s · hard cap %s\n",
 		r.opts.Provider, display(r.opts.Turn.Model), display(r.opts.Turn.Effort), text.HardCap(r.opts.Turn.TimeoutMin))
-	fmt.Fprintf(w, "watch: %s\n", r.ws.WatchCommand())
-	fmt.Fprintf(w, "raw: %s\n", r.ws.RawLogPath())
-	fmt.Fprintf(w, "stderr: %s\n", r.ws.StderrLogPath())
 	if r.meta.GitBaseline != nil {
 		fmt.Fprintf(w, "baseline: %s\n", *r.meta.GitBaseline)
 	}
 	if r.opts.ResumedFrom != "" {
 		fmt.Fprintf(w, "resumed-from: %s\n", r.opts.ResumedFrom)
 	}
-	if r.session() != "" {
-		fmt.Fprintf(w, "session: %s\n", r.session())
-		fmt.Fprintf(w, "takeover-after-terminal: %s\n", r.driver.Takeover())
-	}
 	fmt.Fprintf(w, "next: %s\n", prose.DispatchNext(r.ws.Dir))
-	r.opts.Stdout.Write(block.Bytes())
-	if r.opts.CoordinateFile != "" {
-		if err := job.WriteCoordinateFile(r.opts.CoordinateFile, block.Bytes()); err != nil {
-			fmt.Fprintf(r.opts.Stderr, "coordinate file warning: %s\n", err)
-		}
-	}
 }
 
 type finishArgs struct {
@@ -141,7 +128,7 @@ func (r *run) finish(f finishArgs) {
 	if f.status != job.StatusOK {
 		recovery := f.recovery
 		if recovery == "" {
-			recovery = prose.Recovery(r.meta.PromptState, r.resumeCommand(), "")
+			recovery = prose.Recovery(r.meta.PromptState, r.resumeCommand(), r.redispatchCommand(), "")
 		}
 		recoveryAction = job.Ptr(recovery)
 	}
@@ -205,9 +192,6 @@ func (r *run) finish(f finishArgs) {
 		session = "(none)"
 	}
 	fmt.Fprintf(w, "session: %s\n", session)
-	if r.session() != "" && !r.conflicted() {
-		fmt.Fprintf(w, "takeover: %s\n", r.driver.Takeover())
-	}
 	fmt.Fprintf(w, "next: %s\n", collectAction)
 
 	r.exitCode = job.ExitCodeFor(f.status)

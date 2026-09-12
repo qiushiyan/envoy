@@ -56,7 +56,7 @@ type Options struct {
 	Cwd        string
 	Baseline   string // "" = HEAD for write turns, else unset
 	Label      string
-	OutDir     string // "" = derive from cwd/label
+	OutDir     string // the job directory, already reserved by the caller
 	// ResumedFrom is the job dir whose session this turn continues, "" for a
 	// fresh conversation or a bare --resume. Lineage only: recorded and
 	// printed as an observation, never acted on.
@@ -67,11 +67,8 @@ type Options struct {
 	// so a held session refuses the whole round instead of one member. The
 	// runner takes ownership and releases it however the turn ends.
 	SessionLock *lock.Handle
-	// CoordinateFile, when set, receives the exact startup block that stdout
-	// prints, written atomically before the provider spawns.
-	CoordinateFile string
-	Stdout         io.Writer
-	Stderr         io.Writer
+	Stdout      io.Writer
+	Stderr      io.Writer
 }
 
 type termination struct {
@@ -172,12 +169,9 @@ func Run(opts Options) Result {
 	// early return below releases it instead of stranding the session.
 	r.sessionLock = opts.SessionLock
 
-	outDir, err := job.ResolveOutDir(opts.OutDir, opts.Cwd, opts.Label, opts.Provider, startedAt)
-	if err != nil {
-		r.releaseLock()
-		fmt.Fprintf(opts.Stderr, "envoy: cannot create out-dir: %s\n", err)
-		return Result{ExitCode: job.ExitInfra, OutDir: opts.OutDir}
-	}
+	// The caller reserved the directory; a job that cannot be prepared there
+	// is an environment failure, not a naming one.
+	outDir := opts.OutDir
 	r.ws = job.Workspace{Dir: outDir}
 	r.progress = r.ws.Progress()
 	r.progress.Warn = opts.Stderr
@@ -252,7 +246,7 @@ func (r *run) execute(promptText string) Result {
 		r.finish(finishArgs{
 			status:              job.StatusInfra,
 			errorText:           prose.SpawnFailed(r.opts.Provider, err),
-			recovery:            prose.Recovery(job.PromptNotStarted, r.resumeCommand(), ""),
+			recovery:            prose.Recovery(job.PromptNotStarted, r.resumeCommand(), r.redispatchCommand(), ""),
 			promptState:         job.PromptNotStarted,
 			promptStateEvidence: job.Ptr("provider spawn error"),
 			hasEvidence:         true,
@@ -358,22 +352,39 @@ func (r *run) session() string {
 
 func (r *run) conflicted() bool { return r.meta.SessionLockConflict != nil }
 
-// resumeCommand is the follow-up command for this turn's session, carrying
-// the settings it was dispatched with.
-func (r *run) resumeCommand() string {
+// turn is this turn as prose rebuilds commands from it.
+func (r *run) turn() prose.Turn {
 	return prose.Turn{
+		Dir:        r.ws.Dir,
 		Provider:   r.opts.Provider,
 		SessionID:  r.session(),
 		Cwd:        r.opts.Cwd,
 		Model:      r.opts.Turn.Model,
 		Effort:     r.opts.Turn.Effort,
 		AllowWrite: r.opts.Turn.AllowWrite,
+		Baseline:   ptrString(r.meta.GitBaseline),
+		PromptFile: r.ws.PromptPath(),
 		TimeoutMin: r.opts.Turn.TimeoutMin,
-	}.ResumeCommand()
+	}
+}
+
+// resumeCommand is the follow-up command for this turn's session, carrying
+// the settings it was dispatched with.
+func (r *run) resumeCommand() string { return r.turn().ResumeCommand() }
+
+// redispatchCommand re-sends this turn's prompt as a new job — the follow-up
+// for a prompt the provider provably never received.
+func (r *run) redispatchCommand() string { return r.turn().RedispatchCommand() }
+
+func ptrString(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // setSession records the session id and refreshes its derived coordinates.
-// The invariant "resume/takeover present iff a session id exists and no lock
+// The invariant "resume present iff a session id exists and no lock
 // conflict was recorded" lives here and in markLockConflict — nowhere else.
 func (r *run) setSession(id string) {
 	r.meta.SessionID = ptrIfNonEmpty(id)
@@ -388,11 +399,9 @@ func (r *run) markLockConflict(msg string) {
 func (r *run) syncSessionCoords() {
 	if r.session() != "" && !r.conflicted() {
 		r.meta.ResumeCommand = ptrIfNonEmpty(r.resumeCommand())
-		r.meta.TakeoverCommand = ptrIfNonEmpty(r.driver.Takeover())
 		return
 	}
 	r.meta.ResumeCommand = nil
-	r.meta.TakeoverCommand = nil
 }
 
 func (r *run) releaseLock() {
@@ -524,7 +533,6 @@ func (r *run) onSessionStarted(ev provider.Event, rest []provider.Event) (abort 
 		}
 		r.sessionLock = handle
 	}
-	fmt.Fprintf(r.opts.Stdout, "takeover-after-terminal: %s\n", r.driver.Takeover())
 	return false
 }
 

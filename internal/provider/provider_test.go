@@ -221,9 +221,6 @@ func TestCodexLifecycle(t *testing.T) {
 	if *out.Tokens.Input != 13 || *out.Tokens.CachedInput != 5 || *out.Tokens.ReasoningOutput != 3 {
 		t.Fatalf("tokens = %+v", out.Tokens)
 	}
-	if got := c.Takeover(); got != "codex resume tid-1" {
-		t.Fatalf("takeover = %q", got)
-	}
 }
 
 func TestCodexTerminalEnvelopeWinsOverKill(t *testing.T) {

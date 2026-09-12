@@ -160,8 +160,10 @@ func mustNotContain(t *testing.T, name, s string, subs ...string) {
 	}
 }
 
-func turnArgs(prompt, outDir string, extra ...string) []string {
-	args := []string{"turn", "--prompt-file", prompt, "--out-dir", outDir}
+// runArgs is the dispatch form every test uses: the job named up front, the
+// prompt, then whatever voices and flags the case adds.
+func runArgs(prompt, outDir string, extra ...string) []string {
+	args := []string{"run", outDir, "--prompt-file", prompt}
 	return append(args, extra...)
 }
 
@@ -173,22 +175,22 @@ func TestCodexSuccess(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "5", "--label", "consult")...)
+	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "5")...)
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
 	mustContain(t, "stdout", res.stdout,
-		"out-dir: "+outDir,
+		"job: "+outDir,
 		"provider: codex · model (provider default) · effort (provider default) · hard cap 5m",
-		"watch: tail -f",
-		"session: fake-session-id",
-		"takeover-after-terminal: codex resume fake-session-id",
 		"next: let this command run to completion, then collect the job: envoy collect",
-		"tailing the logs is observation only",
 		"status: ok",
-		"takeover: codex resume fake-session-id",
+		"session: fake-session-id",
 		"next: Collect and verify this job: envoy collect",
 	)
+	// The caller is an agent that names the job and collects by that name:
+	// nothing in the dispatch block is a coordinate it must read back, and
+	// nothing addresses a human at a keyboard.
+	mustNotContain(t, "stdout", res.stdout, "takeover", "watch:", "out-dir:")
 	if got := readFile(t, filepath.Join(outDir, "result.md")); got != "fake provider result" {
 		t.Fatalf("result.md = %q", got)
 	}
@@ -210,9 +212,10 @@ func TestCodexSuccess(t *testing.T) {
 		t.Fatalf("evidence = %v", meta["promptStateEvidence"])
 	}
 	// The recorded follow-up is a complete command, not a fragment the caller
-	// has to assemble — and it carries the settings this turn was dispatched with.
+	// has to assemble — it names this job, whose records carry the session and
+	// the settings, and leaves open only what the caller must choose.
 	resume, _ := meta["resumeCommand"].(string)
-	for _, want := range []string{"envoy turn", "--provider codex", "--resume fake-session-id", "--timeout-min 5", "--prompt-file <your-follow-up.md>"} {
+	for _, want := range []string{"envoy run <new-job-name>", "--with @'" + outDir + "'", "--timeout-min 5", "--prompt-file <your-follow-up.md>"} {
 		if !strings.Contains(resume, want) {
 			t.Fatalf("resumeCommand %q is missing %q", resume, want)
 		}
@@ -244,7 +247,7 @@ func TestClaudeSuccessWithUnterminatedFinalLine(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "claude", "--timeout-min", "5")...)
+	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "claude", "--timeout-min", "5")...)
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
@@ -257,9 +260,6 @@ func TestClaudeSuccessWithUnterminatedFinalLine(t *testing.T) {
 	if meta["sessionId"] != "fake-session-id" {
 		t.Fatalf("the result envelope's session id must win, got %v", meta["sessionId"])
 	}
-	if meta["takeoverCommand"] != "claude --resume fake-session-id" {
-		t.Fatalf("takeover = %v", meta["takeoverCommand"])
-	}
 	if meta["costUsd"] != float64(0.01) {
 		t.Fatalf("cost = %v", meta["costUsd"])
 	}
@@ -267,7 +267,7 @@ func TestClaudeSuccessWithUnterminatedFinalLine(t *testing.T) {
 	if tokens["cacheRead"] != float64(4) || tokens["cacheCreation"] != float64(2) {
 		t.Fatalf("tokens = %v", tokens)
 	}
-	mustContain(t, "terminal stdout", res.stdout, "session: fake-session-id", "takeover: claude --resume fake-session-id")
+	mustContain(t, "terminal stdout", res.stdout, "session: fake-session-id")
 
 	// The provider announced its resolved model; the engine records the
 	// observation without inferring anything from the (absent) request.
@@ -300,8 +300,8 @@ func TestCollectOkBlockDoesNotGuessAtModelSubstitution(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "claude", "--model", "opus",
-		"--timeout-min", "5", "--label", "review")...)
+	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "claude:opus",
+		"--timeout-min", "5")...)
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
 	}
@@ -314,11 +314,11 @@ func TestCollectOkBlockDoesNotGuessAtModelSubstitution(t *testing.T) {
 	collected := runEnvoy(t, e, "collect", outDir)
 	mustContain(t, "collect stdout", collected.stdout, "status: ok")
 	mustNotContain(t, "ok block", collected.stdout,
-		"provider: claude · model", "fake-claude-model", "label review")
+		"provider: claude · model", "fake-claude-model", "label job")
 
 	status := runEnvoy(t, e, "collect", "--status-only", outDir)
 	mustContain(t, "status-only stdout", status.stdout,
-		"provider: claude · model opus (ran fake-claude-model) · effort (provider default) · label review")
+		"provider: claude · model opus (ran fake-claude-model) · effort (provider default) · label job")
 }
 
 func TestClaudePartialFailure(t *testing.T) {
@@ -326,7 +326,7 @@ func TestClaudePartialFailure(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "claude", "--timeout-min", "5")...)
+	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "claude", "--timeout-min", "5")...)
 	if res.code != 1 {
 		t.Fatalf("exit = %d, want 1\nstderr:\n%s", res.code, res.stderr)
 	}
@@ -357,7 +357,7 @@ func TestCodexTimeoutRecordsAcceptance(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "0.02")...)
+	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "0.02")...)
 	if res.code != 4 {
 		t.Fatalf("exit = %d, want 4\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
@@ -376,7 +376,7 @@ func TestCodexTimeoutRecordsAcceptance(t *testing.T) {
 	mustContain(t, "error", meta["error"].(string),
 		"the stream had been quiet for", "after 1 event (last: thread.started)")
 	mustContain(t, "recoveryAction", meta["recoveryAction"].(string),
-		"--resume fake-session-id", "--timeout-min 0.02",
+		"--with @'"+outDir+"'", "--timeout-min 0.02",
 		"would repeat work that already happened")
 	mustContain(t, "result.md", readFile(t, filepath.Join(outDir, "result.md")), "# Turn timeout")
 }
@@ -390,7 +390,7 @@ func TestCodexTimeoutReportsTheStreamAsOfTheCap(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "0.02")...)
+	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "0.02")...)
 	if res.code != 4 {
 		t.Fatalf("exit = %d, want 4\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
@@ -417,7 +417,7 @@ func TestCodexTimeoutBeforeAnyOutputReportsAnEmptyStream(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "0.02")...)
+	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "0.02")...)
 	if res.code != 4 {
 		t.Fatalf("exit = %d, want 4\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
@@ -439,7 +439,7 @@ func TestCodexTimeoutSeparatesBytesFromEvents(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "0.02")...)
+	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "0.02")...)
 	if res.code != 4 {
 		t.Fatalf("exit = %d, want 4\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
@@ -457,7 +457,7 @@ func TestCodexTerminalEnvelopeWinsDuringCleanup(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "0.02")...)
+	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "0.02")...)
 	if res.code != 0 {
 		t.Fatalf("an observed turn.completed must beat the cap: exit = %d\nstdout:\n%s\nstderr:\n%s",
 			res.code, res.stdout, res.stderr)
@@ -483,7 +483,7 @@ func TestClaudeStubbornGrandchildTimeout(t *testing.T) {
 	prompt := writePrompt(t, t.TempDir())
 
 	start := time.Now()
-	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "claude", "--timeout-min", "0.02")...)
+	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "claude", "--timeout-min", "0.02")...)
 	if res.code != 4 {
 		t.Fatalf("exit = %d, want 4\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
@@ -514,7 +514,7 @@ func TestClaudeTranscriptRecoveryOnTimeout(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "claude", "--timeout-min", "0.02")...)
+	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "claude", "--timeout-min", "0.02")...)
 	if res.code != 4 {
 		t.Fatalf("exit = %d, want 4\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
@@ -527,22 +527,29 @@ func TestClaudeTranscriptRecoveryOnTimeout(t *testing.T) {
 		"partial work from the Claude transcript")
 }
 
+// Continuing a job whose session another live turn holds is refused before
+// anything is written — and the name the refused run was given goes back
+// into circulation, since nothing ran under it.
 func TestResumeLockConflictFailsFast(t *testing.T) {
-	e := newEnv(t)
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	prompt := writePrompt(t, t.TempDir())
+	first := filepath.Join(t.TempDir(), "consult")
+	if r := runEnvoy(t, e, runArgs(prompt, first, "--with", "codex", "--timeout-min", "5")...); r.code != 0 {
+		t.Fatalf("first turn exit = %d\nstderr:\n%s", r.code, r.stderr)
+	}
 	lockDir := filepath.Join(e.home, ".local", "state", "envoy", "locks")
 	os.MkdirAll(lockDir, 0o755)
 	payload := fmt.Sprintf(`{"pid":%d,"runnerInstanceId":"other","outDir":"/tmp/live-job","startedAt":"2026-07-25T00:00:00.000Z"}`, os.Getpid())
-	os.WriteFile(filepath.Join(lockDir, "locked-session.lock"), []byte(payload), 0o644)
+	os.WriteFile(filepath.Join(lockDir, "fake-session-id.lock"), []byte(payload), 0o644)
 
 	outDir := filepath.Join(t.TempDir(), "job")
-	prompt := writePrompt(t, t.TempDir())
-	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--resume", "locked-session")...)
+	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "@"+first)...)
 	if res.code != 3 {
 		t.Fatalf("exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
 	}
 	mustContain(t, "stderr", res.stderr, "lock error:", "already has a live turn", "/tmp/live-job")
-	if _, err := os.Stat(filepath.Join(outDir, "prompt.md")); !os.IsNotExist(err) {
-		t.Fatal("a refused resume must not touch job artifacts")
+	if _, err := os.Stat(outDir); !os.IsNotExist(err) {
+		t.Fatal("a refused continuation must leave no job dir behind — the name is free again")
 	}
 }
 
@@ -555,7 +562,7 @@ func TestCodexFreshSessionLockCollision(t *testing.T) {
 
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
-	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "5")...)
+	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "5")...)
 	if res.code != 2 {
 		t.Fatalf("exit = %d, want 2\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
@@ -564,18 +571,14 @@ func TestCodexFreshSessionLockCollision(t *testing.T) {
 	if meta["sessionLockConflict"] == nil {
 		t.Fatal("meta must record the lock conflict")
 	}
-	if meta["resumeCommand"] != nil || meta["takeoverCommand"] != nil {
-		t.Fatalf("a conflicted session must suppress resume/takeover coordinates: %v %v",
-			meta["resumeCommand"], meta["takeoverCommand"])
+	if meta["resumeCommand"] != nil {
+		t.Fatalf("a conflicted session must suppress its resume coordinate: %v", meta["resumeCommand"])
 	}
 	if meta["promptStateEvidence"] != "codex thread.started with conflicting session lock" {
 		t.Fatalf("evidence = %v", meta["promptStateEvidence"])
 	}
 	mustContain(t, "result.md", readFile(t, filepath.Join(outDir, "result.md")),
 		"# Turn infra", "another turn already holds")
-	if strings.Contains(res.stdout, "takeover-after-terminal:") {
-		t.Fatal("a conflicted fresh session must not advertise takeover")
-	}
 }
 
 func TestInterruptRecordsPartialAndResume(t *testing.T) {
@@ -586,7 +589,7 @@ func TestInterruptRecordsPartialAndResume(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
-	cmd := exec.Command(binPath, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "5")...)
+	cmd := exec.Command(binPath, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "5")...)
 	cmd.Env = e.build()
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
@@ -623,7 +626,7 @@ func TestInterruptRecordsPartialAndResume(t *testing.T) {
 	}
 	mustContain(t, "error", meta["error"].(string), "stopped codex after receiving SIGINT")
 	mustContain(t, "recoveryAction", meta["recoveryAction"].(string),
-		"envoy turn", "--resume fake-session-id", "--timeout-min 5")
+		"envoy run <new-job-name>", "--with @'"+outDir+"'", "--timeout-min 5")
 }
 
 func TestCollectStampsAndPendingDiscovers(t *testing.T) {
@@ -632,7 +635,7 @@ func TestCollectStampsAndPendingDiscovers(t *testing.T) {
 	outDir := filepath.Join(base, "20260725-120000-consult")
 	prompt := writePrompt(t, t.TempDir())
 
-	if res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "5")...); res.code != 0 {
+	if res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "5")...); res.code != 0 {
 		t.Fatalf("turn failed: %d\n%s", res.code, res.stderr)
 	}
 
@@ -650,8 +653,7 @@ func TestCollectStampsAndPendingDiscovers(t *testing.T) {
 	mustContain(t, "collect stdout", collected.stdout,
 		"job: "+outDir,
 		"status: ok",
-		"resume: envoy turn --provider codex --resume fake-session-id",
-		"takeover: codex resume fake-session-id",
+		"resume: envoy run <new-job-name> --with @'"+outDir+"' --timeout-min 5 --prompt-file <your-follow-up.md>",
 		"--- result.md ---",
 		"fake provider result",
 		"next: result.md above is this turn's return value")
@@ -675,7 +677,7 @@ func TestCollectOkBlockHoldsBackDiagnostics(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
-	if res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "5")...); res.code != 0 {
+	if res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "5")...); res.code != 0 {
 		t.Fatalf("turn failed: %d\n%s", res.code, res.stderr)
 	}
 
@@ -684,8 +686,7 @@ func TestCollectOkBlockHoldsBackDiagnostics(t *testing.T) {
 		"job: "+outDir,
 		"status: ok",
 		"duration: ",
-		"resume: envoy turn --provider codex --resume fake-session-id",
-		"takeover: codex resume fake-session-id",
+		"resume: envoy run <new-job-name> --with @'"+outDir+"'",
 		"fake provider result")
 	mustNotContain(t, "ok block", collected.stdout,
 		"provider: codex",
@@ -693,10 +694,10 @@ func TestCollectOkBlockHoldsBackDiagnostics(t *testing.T) {
 		"prompt: accepted",
 		"result kind: ",
 		"logs: progress ",
-		// The id is in both commands above; a third line of it is one more
-		// chance to hand-assemble a follow-up instead of running the command
-		// that already carries the turn's cwd and write intent.
-		"session: fake-session-id\n")
+		// The continuation names the job, not the session; a bare id line
+		// is one more chance to hand-assemble a follow-up out of it.
+		"session: fake-session-id\n",
+		"takeover")
 
 	status := runEnvoy(t, e, "collect", "--status-only", outDir)
 	mustContain(t, "status-only block", status.stdout,
@@ -722,7 +723,7 @@ func TestCollectFailedBlockCarriesDiagnostics(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
-	if res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "5")...); res.code != 1 {
+	if res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "5")...); res.code != 1 {
 		t.Fatalf("turn exit = %d, want 1\n%s", res.code, res.stderr)
 	}
 
@@ -736,91 +737,10 @@ func TestCollectFailedBlockCarriesDiagnostics(t *testing.T) {
 		"logs: progress "+filepath.Join(outDir, "progress.log"),
 		"raw "+filepath.Join(outDir, "raw.log"),
 		"stderr "+filepath.Join(outDir, "stderr.log"),
-		"resume: envoy turn --provider codex --resume fake-session-id",
+		"resume: envoy run <new-job-name> --with @'"+outDir+"'",
 		"next: The provider accepted this prompt")
 	// Even here the id is not repeated: the resume command carries it.
 	mustNotContain(t, "failed block", collected.stdout, "session: fake-session-id\n")
-}
-
-// The roster is the recovery path for an out-dir the caller no longer has, so
-// every row must carry the coordinate collect takes, verbatim — a listing that
-// prints job names a caller then has to join to a base reintroduces exactly
-// the hand-built path it exists to retire.
-func TestJobsListsThisProjectsCoordinates(t *testing.T) {
-	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
-	base := t.TempDir()
-	prompt := writePrompt(t, t.TempDir())
-
-	empty := runEnvoy(t, e, "jobs", "--base", base)
-	if empty.code != 0 {
-		t.Fatalf("jobs on an empty store = %d\n%s", empty.code, empty.stderr)
-	}
-	mustContain(t, "jobs on an empty store", empty.stdout,
-		"jobs: 0 (under "+base+")",
-		"next: no turn has run in this project yet")
-
-	first := filepath.Join(base, "20260725-120000-consult")
-	if res := runEnvoy(t, e, turnArgs(prompt, first, "--provider", "codex", "--timeout-min", "5")...); res.code != 0 {
-		t.Fatalf("first turn failed: %d\n%s", res.code, res.stderr)
-	}
-	fanDir := filepath.Join(base, "20260725-130000-review")
-	if res := runEnvoy(t, e, fanArgs(prompt, fanDir, "--with", "codex", "--with", "claude:opus", "--timeout-min", "5")...); res.code != 0 {
-		t.Fatalf("fan failed: %d\n%s", res.code, res.stderr)
-	}
-
-	listed := runEnvoy(t, e, "jobs", "--base", base)
-	if listed.code != 0 {
-		t.Fatalf("jobs = %d\n%s", listed.code, listed.stderr)
-	}
-	mustContain(t, "jobs stdout", listed.stdout,
-		"jobs: 2 (under "+base+", newest first)",
-		"[ok] "+fanDir+" · fan-out of 2 ·",
-		"[ok] "+first+" · codex ·",
-		"next: this is a listing only — no result was printed and nothing was marked collected.",
-		"envoy collect <job-dir>")
-
-	// Newest first: the job a caller just dispatched is the one it is looking
-	// for, so it must not be at the bottom of a growing list.
-	if strings.Index(listed.stdout, fanDir) > strings.Index(listed.stdout, first+" ") {
-		t.Fatalf("the newest job must be listed first:\n%s", listed.stdout)
-	}
-
-	// A listing delivers nothing, so — like --status-only — it may not stamp.
-	if meta := readMeta(t, first); meta["collectedAt"] != nil {
-		t.Fatalf("listing a job must not mark it collected: %v", meta["collectedAt"])
-	}
-	mustContain(t, "jobs before collect", listed.stdout, "· owed")
-
-	if res := runEnvoy(t, e, "collect", first); res.code != 0 {
-		t.Fatalf("collect = %d\n%s", res.code, res.stderr)
-	}
-	after := runEnvoy(t, e, "jobs", "--base", base)
-	mustContain(t, "jobs after collect", after.stdout, "[ok] "+first+" · codex · ")
-	if !strings.Contains(after.stdout, "· collected") {
-		t.Fatalf("a delivered result must read as collected:\n%s", after.stdout)
-	}
-
-	// A live turn reads by how long it has been going, not by a duration it
-	// does not have yet — and it is neither collected nor owed, because the
-	// result a caller is owed does not exist until the turn ends.
-	live := filepath.Join(base, "20260725-140000-live")
-	os.MkdirAll(live, 0o755)
-	os.WriteFile(filepath.Join(live, "prompt.md"), []byte("x"), 0o644)
-	liveMeta, _ := json.Marshal(map[string]any{
-		"schemaVersion": 6, "status": "running", "provider": "codex",
-		"startedAt":  time.Now().Add(-7 * time.Minute).UTC().Format(time.RFC3339),
-		"timeoutMin": 30.0, "promptState": "accepted", "runnerPid": 4194304,
-		"nextAction": "wait", "resultKind": "none", "collectedAt": nil,
-	})
-	os.WriteFile(filepath.Join(live, "meta.json"), liveMeta, 0o644)
-
-	withLive := runEnvoy(t, e, "jobs", "--base", base)
-	mustContain(t, "jobs with a live turn", withLive.stdout, "[running] "+live+" · codex · started 7m ago")
-	for line := range strings.SplitSeq(withLive.stdout, "\n") {
-		if strings.Contains(line, live) && (strings.Contains(line, "owed") || strings.Contains(line, "collected")) {
-			t.Fatalf("a running turn owes nothing yet: %q", line)
-		}
-	}
 }
 
 // A store that could not be read is not an empty one. Reporting a mistyped
@@ -828,7 +748,7 @@ func TestJobsListsThisProjectsCoordinates(t *testing.T) {
 // states as fact something the engine never observed. A base that simply does
 // not exist yet is the opposite case: that is exactly how a project looks
 // before its first dispatch, and it must stay quiet and successful.
-func TestJobsAndPendingSeparateAnUnreadableStoreFromAnEmptyOne(t *testing.T) {
+func TestPendingSeparatesAnUnreadableStoreFromAnEmptyOne(t *testing.T) {
 	e := newEnv(t)
 
 	// A base the caller *named* and got wrong raises the same "not found" as a
@@ -836,7 +756,7 @@ func TestJobsAndPendingSeparateAnUnreadableStoreFromAnEmptyOne(t *testing.T) {
 	// the derived default may be waved through: a typo must refuse, or the
 	// listing answers a question about a project the caller never asked about.
 	absent := filepath.Join(t.TempDir(), "never-dispatched")
-	for _, cmd := range []string{"jobs", "pending"} {
+	for _, cmd := range []string{"pending"} {
 		res := runEnvoy(t, e, cmd, "--base", absent)
 		if res.code != 2 {
 			t.Fatalf("%s on an explicit --base that does not exist must refuse, got exit %d\nstdout:\n%s", cmd, res.code, res.stdout)
@@ -847,7 +767,7 @@ func TestJobsAndPendingSeparateAnUnreadableStoreFromAnEmptyOne(t *testing.T) {
 	// The derived default store is created by the first dispatch, so its
 	// absence is exactly how a project looks before it has ever run a turn.
 	project := t.TempDir()
-	for _, cmd := range []string{"jobs", "pending"} {
+	for _, cmd := range []string{"pending"} {
 		res := runEnvoyIn(t, e, project, cmd)
 		if res.code != 0 {
 			t.Fatalf("%s in a project that never dispatched is a normal first run: exit %d\n%s", cmd, res.code, res.stderr)
@@ -859,95 +779,17 @@ func TestJobsAndPendingSeparateAnUnreadableStoreFromAnEmptyOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chmod(sealed, 0o755) })
-	for _, cmd := range []string{"jobs", "pending"} {
+	for _, cmd := range []string{"pending"} {
 		res := runEnvoy(t, e, cmd, "--base", sealed)
 		if res.code != 2 {
 			t.Fatalf("%s over an unreadable store must fail as infra, got exit %d\nstdout:\n%s", cmd, res.code, res.stdout)
 		}
 		mustContain(t, cmd+" stderr", res.stderr, "could not be read", "not the same as an empty store")
-		for _, forbidden := range []string{"no turn has run", "no recovery action is needed"} {
+		for _, forbidden := range []string{"no recovery action is needed"} {
 			if strings.Contains(res.stdout, forbidden) {
 				t.Fatalf("%s must not claim %q over a store it could not read:\n%s", cmd, forbidden, res.stdout)
 			}
 		}
-	}
-}
-
-// Resolving "the newest job for this project" runs through the same discovery,
-// so an unreadable store must refuse there too rather than degrade into "no
-// job dirs" — which reads as an empty project and sends the caller looking for
-// a coordinate instead of at their filesystem.
-func TestDefaultJobDirRefusesAnUnreadableStore(t *testing.T) {
-	e := newEnv(t)
-	project := t.TempDir()
-
-	// The store the project derives, made unreadable rather than absent.
-	base := runEnvoyIn(t, e, project, "jobs").stdout
-	start := strings.Index(base, "(under ") + len("(under ")
-	base = base[start : start+strings.Index(base[start:], ")")]
-	if err := os.MkdirAll(base, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(base, 0o000); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chmod(base, 0o755) })
-
-	supplement := filepath.Join(t.TempDir(), "more.md")
-	os.WriteFile(supplement, []byte("x"), 0o644)
-	for _, args := range [][]string{{"collect"}, {"steer", "--prompt-file", supplement}} {
-		res := runEnvoyIn(t, e, project, args...)
-		if res.code != 2 {
-			t.Fatalf("%v over an unreadable store must fail as infra, got exit %d\n%s", args[0], res.code, res.stderr)
-		}
-		mustContain(t, args[0]+" stderr", res.stderr, "could not be read", "not the same as an empty store")
-		if strings.Contains(res.stderr, "no job dirs under") {
-			t.Fatalf("%s must not report an unreadable store as an empty one: %s", args[0], res.stderr)
-		}
-	}
-}
-
-// The roster is advertised as the way back to a coordinate you lost. A default
-// display cap is fine; a cap with no way past it would make an old coordinate
-// unrecoverable by exactly the command that exists to recover it.
-func TestJobsReachesPastTheDisplayCap(t *testing.T) {
-	// Mirrors the engine's default cap; the number is part of what a caller
-	// sees, so a change to it should surface here.
-	const displayCap, total = 20, 23
-	e := newEnv(t)
-	base := t.TempDir()
-	for i := range total {
-		dir := filepath.Join(base, fmt.Sprintf("20260725-%06d-consult", i))
-		os.MkdirAll(dir, 0o755)
-		os.WriteFile(filepath.Join(dir, "prompt.md"), []byte("x"), 0o644)
-		meta, _ := json.Marshal(map[string]any{
-			"schemaVersion": 6, "status": "ok", "provider": "codex",
-			"startedAt": "2026-07-25T12:00:00Z", "durationMs": 60000, "timeoutMin": 30.0,
-			"promptState": "accepted", "runnerPid": 1, "nextAction": "n",
-			"resultKind": "final", "collectedAt": "2026-07-25T12:01:00Z",
-		})
-		os.WriteFile(filepath.Join(dir, "meta.json"), meta, 0o644)
-	}
-
-	capped := runEnvoy(t, e, "jobs", "--base", base)
-	mustContain(t, "capped listing", capped.stdout,
-		fmt.Sprintf("jobs: %d of %d (under %s, newest first)", displayCap, total, base),
-		"older jobs than these: envoy jobs --all")
-	if got := strings.Count(capped.stdout, "[ok] "); got != displayCap {
-		t.Fatalf("capped listing printed %d rows, want %d", got, displayCap)
-	}
-	// The cap takes the newest, so the oldest job is the one it drops.
-	if strings.Contains(capped.stdout, "20260725-000000-consult") {
-		t.Fatalf("the cap must drop the oldest, not the newest:\n%s", capped.stdout)
-	}
-
-	all := runEnvoy(t, e, "jobs", "--all", "--base", base)
-	if got := strings.Count(all.stdout, "[ok] "); got != total {
-		t.Fatalf("--all printed %d rows, want %d", got, total)
-	}
-	mustContain(t, "--all listing", all.stdout, "20260725-000000-consult")
-	if strings.Contains(all.stdout, "envoy jobs --all") {
-		t.Fatalf("an uncapped listing has nothing older to point at:\n%s", all.stdout)
 	}
 }
 
@@ -976,7 +818,10 @@ func TestCollectReconcilesAbandonedJob(t *testing.T) {
 		"status: abandoned — the process ended without publishing a result",
 		"This turn ended without publishing a result",
 		"continue the same session with a follow-up prompt",
-		"--resume dead-session")
+		"envoy run <new-job-name> --with @'"+outDir+"'")
+	// The persisted command names a verb that no longer exists; it is never
+	// replayed, the records are.
+	mustNotContain(t, "collect stdout", res.stdout, "envoy turn", "--resume dead-session")
 	got := readMeta(t, outDir)
 	if got["status"] != "abandoned" || got["reconciledAt"] == nil {
 		t.Fatalf("reconciled meta = status %v reconciledAt %v", got["status"], got["reconciledAt"])
@@ -989,7 +834,7 @@ func TestExitBeforeStdinDoesNotCrash(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "5")...)
+	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "5")...)
 	if res.code != 2 {
 		t.Fatalf("exit = %d, want 2\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
@@ -1000,45 +845,67 @@ func TestExitBeforeStdinDoesNotCrash(t *testing.T) {
 	mustContain(t, "error", meta["error"].(string), "fake provider exited before reading its prompt")
 }
 
-func TestDefaultStorageIsCentralAndHidden(t *testing.T) {
+// A bare name is an address in the invoking project's central store: the
+// job lands under ~/.local/state/envoy, never inside the project tree, and
+// collect resolves the same name from the same project with no path at all.
+func TestNamedJobsLiveInTheCentralStore(t *testing.T) {
 	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
 	project := t.TempDir()
 	prompt := writePrompt(t, t.TempDir())
 
-	// Dispatch without --out-dir: the job must land in the central store,
-	// never inside the project tree.
-	res := runEnvoyIn(t, e, project, "turn", "--prompt-file", prompt,
-		"--provider", "codex", "--timeout-min", "5", "--label", "consult")
+	res := runEnvoyIn(t, e, project, "run", "consult", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5")
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
 	var outDir string
 	for line := range strings.SplitSeq(res.stdout, "\n") {
-		if after, ok := strings.CutPrefix(line, "out-dir: "); ok {
+		if after, ok := strings.CutPrefix(line, "job: "); ok {
 			outDir = after
 			break
 		}
 	}
 	jobsRoot := filepath.Join(e.home, ".local", "state", "envoy", "jobs")
-	if !strings.HasPrefix(outDir, jobsRoot+string(filepath.Separator)) {
-		t.Fatalf("out-dir %q must live under the central store %q", outDir, jobsRoot)
+	if !strings.HasPrefix(outDir, jobsRoot+string(filepath.Separator)) || filepath.Base(outDir) != "consult" {
+		t.Fatalf("job %q must be <central store>/<project>/consult under %q", outDir, jobsRoot)
 	}
 	entries, _ := os.ReadDir(project)
 	if len(entries) != 0 {
 		t.Fatalf("the project tree must stay untouched, found %v", entries)
 	}
+	if got := readMeta(t, outDir)["label"]; got != "consult" {
+		t.Fatalf("label = %v, want the job's name", got)
+	}
 
-	// A caller collecting from the project needs no path at all.
-	collected := runEnvoyIn(t, e, project, "collect")
+	// Collect by name, from the project; the store is derived the same way.
+	collected := runEnvoyIn(t, e, project, "collect", "consult")
 	if collected.code != 0 {
 		t.Fatalf("collect = %d\n%s", collected.code, collected.stderr)
 	}
 	mustContain(t, "collect stdout", collected.stdout,
 		"job: "+outDir, "status: ok", "fake provider result")
+	// Flags may come before or after the name.
+	if r := runEnvoyIn(t, e, project, "collect", "--status-only", "consult"); r.code != 0 || !strings.Contains(r.stdout, "status: ok") {
+		t.Fatalf("collect --status-only <name> = %d\n%s%s", r.code, r.stdout, r.stderr)
+	}
+
+	// A name is used once.
+	again := runEnvoyIn(t, e, project, "run", "consult", "--prompt-file", prompt, "--with", "codex")
+	if again.code != 3 {
+		t.Fatalf("re-running a taken name: exit = %d, want 3\nstderr:\n%s", again.code, again.stderr)
+	}
+	mustContain(t, "stderr", again.stderr, "already exists", "envoy collect '"+outDir+"'")
 
 	// And pending resolves the same project store from cwd alone.
 	pending := runEnvoyIn(t, e, project, "pending")
 	mustContain(t, "pending stdout", pending.stdout, "pending jobs: 0")
+
+	// collect without a job names nothing: there is no "newest" under
+	// caller-chosen names, and a guess could deliver somebody else's result.
+	bare := runEnvoyIn(t, e, project, "collect")
+	if bare.code != 3 {
+		t.Fatalf("bare collect: exit = %d, want 3\nstderr:\n%s", bare.code, bare.stderr)
+	}
+	mustContain(t, "stderr", bare.stderr, "collect takes the job to print")
 }
 
 // The r.term == nil residual-cleanup chain: the provider exits cleanly while
@@ -1056,7 +923,7 @@ func TestStubbornGrandchildAfterSuccessIsReaped(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "5")...)
+	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "5")...)
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
@@ -1089,7 +956,7 @@ func TestClaudeFragmentedStreamAssembles(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "claude", "--timeout-min", "5")...)
+	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "claude", "--timeout-min", "5")...)
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
@@ -1109,7 +976,7 @@ func TestCodexNonzeroExitAfterResponse(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "5")...)
+	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "5")...)
 	if res.code != 1 {
 		t.Fatalf("exit = %d, want 1\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
@@ -1129,7 +996,7 @@ func TestClaudeInitOnlyIsNotAcceptance(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "claude", "--timeout-min", "0.02")...)
+	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "claude", "--timeout-min", "0.02")...)
 	if res.code != 4 {
 		t.Fatalf("exit = %d, want 4\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
@@ -1142,11 +1009,6 @@ func TestClaudeInitOnlyIsNotAcceptance(t *testing.T) {
 		"silence is not proof", "only once they show it never began")
 }
 
-func fanArgs(prompt, outDir string, extra ...string) []string {
-	args := []string{"fan", "--prompt-file", prompt, "--out-dir", outDir}
-	return append(args, extra...)
-}
-
 // The fan-out contract: one command, one completion, one directory — and
 // underneath it, members that are ordinary turns in every respect.
 func TestFanDispatchesEveryMemberAsAnOrdinaryTurn(t *testing.T) {
@@ -1154,29 +1016,25 @@ func TestFanDispatchesEveryMemberAsAnOrdinaryTurn(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "group")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, fanArgs(prompt, outDir, "--with", "codex", "--with", "claude:opus",
-		"--timeout-min", "5", "--label", "consult")...)
+	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--with", "claude:opus",
+		"--timeout-min", "5")...)
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
 	mustContain(t, "stdout", res.stdout,
-		"out-dir: "+outDir,
+		"job: "+outDir,
 		"fan-out: 2 turns · one prompt · hard cap 5m each",
-		"member codex: model (provider default) · effort (provider default) · out-dir "+filepath.Join(outDir, "codex"),
-		"member claude-opus: model opus · effort (provider default) · out-dir "+filepath.Join(outDir, "claude-opus"),
-		// Runnable as printed: every member's progress log spelled out and
-		// quoted — a glob inside shell quotes would match a literal filename.
-		"watch: tail -f '"+filepath.Join(outDir, "codex", "progress.log")+"' '"+filepath.Join(outDir, "claude-opus", "progress.log")+"'",
+		"member codex: model (provider default) · effort (provider default) · dir "+filepath.Join(outDir, "codex"),
+		"member claude-opus: model opus · effort (provider default) · dir "+filepath.Join(outDir, "claude-opus"),
 		"next: let this command run to completion — it exits once every member is done",
-		"nothing to track per member",
 		"status: ok — all 2 turns returned a result",
 		"member codex: ok · result ",
 		"member claude-opus: ok · result ",
 		"next: Collect the fan-out: envoy collect ",
 	)
 	// A member's stdout block would interleave with its siblings', so the
-	// single-turn coordinates stay in each member's own meta.json.
-	if strings.Contains(res.stdout, "takeover-after-terminal:") {
+	// single-turn lines stay in each member's own meta.json.
+	if strings.Contains(res.stdout, "next: Collect and verify this job") {
 		t.Fatalf("member turn blocks must not reach the fan-out's stdout:\n%s", res.stdout)
 	}
 
@@ -1191,7 +1049,7 @@ func TestFanDispatchesEveryMemberAsAnOrdinaryTurn(t *testing.T) {
 		}
 		// Recovery is per member: each carries its own complete follow-up.
 		resume, _ := meta["resumeCommand"].(string)
-		mustContain(t, name+" resumeCommand", resume, "envoy turn", "--provider "+wantProvider, "--resume ")
+		mustContain(t, name+" resumeCommand", resume, "envoy run <new-job-name>", "--with @'"+memberDir+"'")
 		if got := readFile(t, filepath.Join(memberDir, "result.md")); got != "fake provider result" {
 			t.Fatalf("%s result.md = %q", name, got)
 		}
@@ -1245,7 +1103,7 @@ func TestFanPartialOutcomeCollectsPerMember(t *testing.T) {
 	outDir := filepath.Join(base, "20260726-120000-consult")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, fanArgs(prompt, outDir, "--with", "codex", "--with", "claude",
+	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--with", "claude",
 		"--baseline", "deadbeef", "--timeout-min", "0.02")...)
 	if res.code != 6 {
 		t.Fatalf("exit = %d, want 6 (partial)\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
@@ -1284,7 +1142,7 @@ func TestFanPartialOutcomeCollectsPerMember(t *testing.T) {
 		"status: timeout — the wall-clock cap elapsed",
 		// the timed-out member's own recovery, not the group's
 		"silence is not proof that nothing ran",
-		"envoy turn --provider claude --resume ",
+		"envoy run <new-job-name> --with @'"+filepath.Join(outDir, "claude")+"'",
 		"next: the member results above are usable as they are",
 	)
 	// The ok member keeps its own single-turn closing line inside its section.
@@ -1314,7 +1172,7 @@ func TestFanInterruptStopsEveryMember(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "group")
 	prompt := writePrompt(t, t.TempDir())
 
-	cmd := exec.Command(binPath, fanArgs(prompt, outDir, "--with", "codex", "--with", "claude", "--timeout-min", "5")...)
+	cmd := exec.Command(binPath, runArgs(prompt, outDir, "--with", "codex", "--with", "claude", "--timeout-min", "5")...)
 	cmd.Env = e.build()
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
@@ -1367,7 +1225,7 @@ func TestFanDuplicateMembersGetDistinctJobDirs(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "group")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, fanArgs(prompt, outDir, "--with", "claude:opus", "--with", "claude:opus", "--timeout-min", "5")...)
+	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "claude:opus", "--with", "claude:opus", "--timeout-min", "5")...)
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
@@ -1379,118 +1237,100 @@ func TestFanDuplicateMembersGetDistinctJobDirs(t *testing.T) {
 	}
 }
 
-// A turn flag aimed at a fan-out is refused in the fan-out's own terms: each
-// refusal names the alternative, because the caller's next move is a different
-// command, not a different prompt.
-func TestFanRefusesTurnOnlyFlags(t *testing.T) {
+// A roster that cannot mean anything is refused in its own terms, before
+// any voice spawns and without a job directory left behind.
+func TestRunRefusesMalformedRosters(t *testing.T) {
 	e := newEnv(t)
 	prompt := writePrompt(t, t.TempDir())
-	both := []string{"--with", "codex", "--with", "claude"}
 	cases := []struct {
-		extra []string
-		want  string
-	}{
-		{[]string{"--allow-write"}, "its members share one working tree"},
-		{[]string{"--resume", "sess-1"}, "a session id names one conversation"},
-		{[]string{"--model", "opus"}, "--model is not available on a fan-out"},
-		{[]string{"--effort", "high"}, "Put it in the member spec instead"},
-		{[]string{"--provider", "codex"}, "--provider is not available on a fan-out"},
-	}
-	for _, c := range cases {
-		args := append([]string{"fan", "--prompt-file", prompt}, both...)
-		res := runEnvoy(t, e, append(args, c.extra...)...)
-		if res.code != 3 {
-			t.Fatalf("%v: exit = %d, want 3\nstderr:\n%s", c.extra, res.code, res.stderr)
-		}
-		mustContain(t, fmt.Sprintf("stderr of %v", c.extra), res.stderr, c.want)
-	}
-
-	specCases := []struct {
 		args []string
 		want string
 	}{
-		{[]string{"fan", "--prompt-file", prompt, "--with", "codex"}, "a fan-out needs at least two members"},
-		{[]string{"fan", "--prompt-file", prompt, "--with", "codex", "--with", "gemini"}, "must name provider claude or codex"},
-		{[]string{"fan", "--prompt-file", prompt, "--with", "codex", "--with", "claude:opus:minimal"}, "claude has no 'minimal'"},
-		{[]string{"fan", "--prompt-file", prompt, "--with", "codex", "--with", "claude:opus:high:extra"}, "has too many fields"},
-		{[]string{"fan", "--prompt-file", prompt, "--with", "codex", "--with", "claude", "codex"}, "each member is passed as --with"},
-		{[]string{"fan", "--with", "codex", "--with", "claude"}, "--prompt-file <path> is required"},
+		{[]string{"--with", "codex", "--with", "claude", "--allow-write"}, "--allow-write needs exactly one --with"},
+		{[]string{"--with", "codex", "--with", "gemini"}, "must name provider claude or codex"},
+		{[]string{"--with", "codex", "--with", "claude:opus:minimal"}, "claude has no 'minimal'"},
+		{[]string{"--with", "codex", "--with", "claude:opus:high:extra"}, "has too many fields"},
+		{[]string{"--with", "codex", "--with", "claude", "codex"}, "unexpected argument"},
+		{[]string{"--with", "codex", "--model", "opus"}, "flag provided but not defined: -model"},
 	}
-	for _, c := range specCases {
-		res := runEnvoy(t, e, c.args...)
+	for _, c := range cases {
+		dir := filepath.Join(t.TempDir(), "job")
+		res := runEnvoy(t, e, runArgs(prompt, dir, c.args...)...)
 		if res.code != 3 {
 			t.Fatalf("%v: exit = %d, want 3\nstderr:\n%s", c.args, res.code, res.stderr)
 		}
 		mustContain(t, fmt.Sprintf("stderr of %v", c.args), res.stderr, c.want)
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("%v: a refused run must leave no job dir", c.args)
+		}
 	}
 }
 
 // An explicit help request is not a usage error: agents read exit codes.
 //
 // The page is also the tool description a caller reads before driving envoy,
-// so it has to stand alone: the loop, what a turn leaves behind, the facts
-// that decide whether a retry is safe, and what each exit code licenses. A
-// caller that has read this should need no other instructions.
+// so it has to stand alone: the loop, the voice grammar, what a job leaves
+// behind, the facts that decide whether a retry is safe, and what each exit
+// code licenses. A caller that has read this should need no other
+// instructions — and nothing on it addresses a human at a keyboard.
 func TestHelpIsSelfSufficient(t *testing.T) {
 	res := runEnvoy(t, newEnv(t), "collect", "--help")
 	if res.code != 0 {
 		t.Fatalf("collect --help exit = %d, want 0\nstderr:\n%s", res.code, res.stderr)
 	}
 	mustContain(t, "stdout", res.stdout,
-		"envoy turn --provider",            // the dispatch form
-		"THE LOOP",                         // dispatch → run to completion → collect
-		"envoy collect",                    // the read path
-		"shows progress, never completion", // a quiet log is not done
-		"WHAT A TURN LEAVES BEHIND",        // the artifacts
-		"BEFORE YOU DISPATCH",              // the facts a caller cannot discover
-		"envoy never substitutes",          // no model substitution
-		"not a sandbox",                    // --allow-write is intent
-		"One live turn per session",        // the concurrency rule
-		"takes a NEW prompt file",          // resume discipline
-		"--resume-from DIR",                // record-anchored continuation
-		"--with-from <consult-job-dir>",    // a warm voice beside a cold one
-		"counts healthy work",              // cap semantics
+		"envoy run <job> --prompt-file <F> --with <voice>", // the dispatch form
+		"THE LOOP",                // name → dispatch → collect
+		"envoy collect review-r1", // the read path, by name
+		"nothing to read back",    // why the name is chosen up front
+		"used once",               // the reservation rule
+		"VOICES",
+		"--with codex::high", // effort without a model
+		"--with @<job>",      // continuation
+		"--with @consult-r1/codex --with claude:opus", // warm beside cold
+		"stands alone", // a fan-out reference
+		"WHAT A JOB LEAVES BEHIND",
+		"FACTS THE FLAGS CANNOT TELL YOU",
+		"envoy never substitutes", // no model substitution
+		"not a sandbox",           // --allow-write is intent
+		"One live\n  turn per session",
+		"takes a NEW prompt file", // resume discipline
+		"counts healthy work",     // cap semantics
 		"EXIT CODES, AND WHAT EACH ONE LICENSES",
-		"claude: low medium high xhigh max", // rendered from the provider map
-		// the fan-out: what it is for, how a member is spelled, and the two
-		// facts a caller cannot discover from the flags
-		"ONE PROMPT, SEVERAL MODELS",
-		"envoy fan --prompt-file",
-		"--with codex --with claude:opus",
-		"recovery stays per member",
-		"A fan-out is read-only",
 		"6 partial",
-		// Two facts a caller reads off every finished block and cannot
-		// otherwise derive: which of the two follow-up commands is the one to
-		// run, and that a request/report model difference is the provider's
-		// own aliasing rather than something to report as a substitution.
-		"Two ways in, for different hands",
-		"waiting for a human at a keyboard",
-		"the provider's own naming",
+		"claude: low medium high xhigh max", // rendered from the provider map
 	)
+	mustNotContain(t, "stdout", res.stdout, "takeover", "watch:", "envoy turn", "envoy fan", "--coordinate-file", "--resume-from", "--with-from", "envoy steer", "envoy jobs")
 }
 
 func TestUsageErrors(t *testing.T) {
 	e := newEnv(t)
 	prompt := writePrompt(t, t.TempDir())
+	job := filepath.Join(t.TempDir(), "job")
 	cases := []struct {
 		args []string
 		want string
 	}{
-		{[]string{"turn", "--prompt-file", prompt}, "--provider <claude|codex> is required"},
-		{[]string{"turn", "--provider", "gemini", "--prompt-file", prompt}, "must be claude or codex"},
-		{[]string{"turn", "--provider", "codex"}, "--prompt-file <path> is required"},
-		{[]string{"turn", "--provider", "claude", "--prompt-file", prompt, "--effort", "minimal"}, "claude has no 'minimal'"},
-		{[]string{"turn", "--provider", "codex", "--prompt-file", prompt, "--max-budget-usd", "1"}, "exists only on claude"},
-		{[]string{"turn", "--provider", "codex", "--prompt-file", prompt, "--timeout-min", "-1"}, "--timeout-min must be a number >= 0"},
+		{[]string{"run", "--prompt-file", prompt, "--with", "codex"}, "a job name is required"},
+		{[]string{"run", "bad name", "--prompt-file", prompt, "--with", "codex"}, "one path segment"},
+		{[]string{"run", job, "--prompt-file", prompt}, "at least one --with is required"},
+		{[]string{"run", job, "--with", "gemini", "--prompt-file", prompt}, "must name provider claude or codex"},
+		{[]string{"run", job, "--with", "codex"}, "--prompt-file <path> is required"},
+		{[]string{"run", job, "--with", "claude::minimal", "--prompt-file", prompt}, "claude has no 'minimal'"},
+		{[]string{"run", job, "--with", "codex", "--prompt-file", prompt, "--timeout-min", "-1"}, "--timeout-min must be a number >= 0"},
+		{[]string{"run", job, "--with", "codex", "--prompt-file", prompt, "--max-budget-usd", "1"}, "caps one claude voice"},
+		{[]string{"run", job, "--with", "claude", "--with", "codex", "--prompt-file", prompt, "--max-budget-usd", "1"}, "caps one claude voice"},
 		{[]string{"nonsense"}, "unknown command"},
 	}
 	for _, c := range cases {
 		res := runEnvoy(t, e, c.args...)
 		if res.code != 3 {
-			t.Fatalf("%v: exit = %d, want 3", c.args, res.code)
+			t.Fatalf("%v: exit = %d, want 3\nstderr:\n%s", c.args, res.code, res.stderr)
 		}
 		mustContain(t, fmt.Sprintf("stderr of %v", c.args), res.stderr, c.want)
+	}
+	if _, err := os.Stat(job); !os.IsNotExist(err) {
+		t.Fatal("no refused run may leave a job dir behind")
 	}
 }
 
@@ -1519,8 +1359,8 @@ func TestFanResumeFromContinuesEveryMember(t *testing.T) {
 	r1 := filepath.Join(t.TempDir(), "round1")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, fanArgs(prompt, r1, "--with", "codex", "--with", "claude:opus",
-		"--timeout-min", "5", "--label", "consult")...)
+	res := runEnvoy(t, e, runArgs(prompt, r1, "--with", "codex", "--with", "claude:opus",
+		"--timeout-min", "5")...)
 	if res.code != 0 {
 		t.Fatalf("round 1 exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
@@ -1529,15 +1369,14 @@ func TestFanResumeFromContinuesEveryMember(t *testing.T) {
 	// printed, with the prompt file left as the placeholder a round 2 must fill.
 	col := runEnvoy(t, e, "collect", r1)
 	mustContain(t, "collect stdout", col.stdout,
-		"resume: envoy fan --resume-from '"+r1+"' --timeout-min 5 --prompt-file <your-follow-up.md>")
+		"resume: envoy run <new-job-name> --with @'"+r1+"' --timeout-min 5 --prompt-file <your-follow-up.md>")
 
 	round2 := filepath.Join(t.TempDir(), "round2.md")
 	if err := os.WriteFile(round2, []byte("round-2 prompt body\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	r2 := filepath.Join(t.TempDir(), "round2-group")
-	res = runEnvoy(t, e, "fan", "--resume-from", r1, "--prompt-file", round2,
-		"--out-dir", r2, "--timeout-min", "5", "--label", "consult-r2")
+	res = runEnvoy(t, e, "run", r2, "--with", "@"+r1, "--prompt-file", round2, "--timeout-min", "5")
 	if res.code != 0 {
 		t.Fatalf("round 2 exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
@@ -1577,39 +1416,36 @@ func TestFanResumeFromContinuesEveryMember(t *testing.T) {
 	}
 }
 
-// The redirects each carry the caller's actual next command rather than a
-// shape to imitate.
-func TestFanResumeFromRefusals(t *testing.T) {
+// The shapes a fan-out reference cannot take are refused with the voices
+// that would work, before anything spawns.
+func TestFanReferenceRefusals(t *testing.T) {
 	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
 	prompt := writePrompt(t, t.TempDir())
+	fanDir := filepath.Join(t.TempDir(), "fan")
+	if r := runEnvoy(t, e, runArgs(prompt, fanDir, "--with", "codex", "--with", "claude", "--timeout-min", "5")...); r.code != 0 {
+		t.Fatalf("fan exit = %d\nstderr:\n%s", r.code, r.stderr)
+	}
 
-	// The roster comes from the manifest, so member specs cannot combine with it.
-	res := runEnvoy(t, e, "fan", "--resume-from", t.TempDir(), "--with", "codex", "--with", "claude",
-		"--prompt-file", prompt)
+	// A fan-out reference continues every member, so beside another voice
+	// it is refused — with each eligible member offered as the voice to name.
+	next := filepath.Join(t.TempDir(), "next")
+	res := runEnvoy(t, e, runArgs(prompt, next, "--with", "@"+fanDir, "--with", "codex")...)
 	if res.code != 3 {
-		t.Fatalf("with+resume-from exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
+		t.Fatalf("fan ref beside a cold voice: exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
 	}
-	mustContain(t, "stderr", res.stderr, "mutually exclusive")
-
-	// Aimed at a single turn, the refusal hands over that turn's own resume command.
-	turnDir := filepath.Join(t.TempDir(), "turn")
-	if r := runEnvoy(t, e, turnArgs(prompt, turnDir, "--provider", "codex", "--timeout-min", "5")...); r.code != 0 {
-		t.Fatalf("turn exit = %d\nstderr:\n%s", r.code, r.stderr)
+	mustContain(t, "stderr", res.stderr, "stands alone",
+		"--with @'"+filepath.Join(fanDir, "codex")+"'  (codex)",
+		"--with @'"+filepath.Join(fanDir, "claude")+"'  (claude)")
+	if _, err := os.Stat(next); !os.IsNotExist(err) {
+		t.Fatal("a refused run must leave no job dir")
 	}
-	res = runEnvoy(t, e, "fan", "--resume-from", turnDir, "--prompt-file", prompt)
-	if res.code != 3 {
-		t.Fatalf("single-turn resume-from exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
-	}
-	mustContain(t, "stderr", res.stderr, "is a single turn",
-		"envoy turn --provider codex --resume fake-session-id")
 
 	// Nothing at the path at all.
-	res = runEnvoy(t, e, "fan", "--resume-from", filepath.Join(t.TempDir(), "nowhere"),
-		"--prompt-file", prompt)
+	res = runEnvoy(t, e, runArgs(prompt, next, "--with", "@"+filepath.Join(t.TempDir(), "nowhere"))...)
 	if res.code != 3 {
-		t.Fatalf("missing-dir resume-from exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
+		t.Fatalf("missing job: exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
 	}
-	mustContain(t, "stderr", res.stderr, "no group.json")
+	mustContain(t, "stderr", res.stderr, "no job found there")
 }
 
 // The resume set is whole or refused: a member that never published a session
@@ -1621,18 +1457,18 @@ func TestFanResumeFromRefusesIncompleteSet(t *testing.T) {
 		set("ENVOY_FAKE_SCENARIO_CLAUDE", "success")
 	r1 := filepath.Join(t.TempDir(), "round1")
 	prompt := writePrompt(t, t.TempDir())
-	res := runEnvoy(t, e, fanArgs(prompt, r1, "--with", "codex", "--with", "claude:opus",
+	res := runEnvoy(t, e, runArgs(prompt, r1, "--with", "codex", "--with", "claude:opus",
 		"--timeout-min", "5")...)
 	if res.code != 6 {
 		t.Fatalf("mixed fan exit = %d, want 6\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
 
-	res = runEnvoy(t, e, "fan", "--resume-from", r1, "--prompt-file", prompt)
+	res = runEnvoy(t, e, runArgs(prompt, filepath.Join(t.TempDir(), "round2"), "--with", "@"+r1)...)
 	if res.code != 3 {
-		t.Fatalf("incomplete-set resume-from exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
+		t.Fatalf("incomplete-set continuation exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
 	}
 	mustContain(t, "stderr", res.stderr,
-		"cannot be resumed as a set",
+		"cannot be continued as a set",
 		"member codex never published a session id")
 }
 
@@ -1643,7 +1479,7 @@ func TestCollectStatusOnlyLeavesTheResultOwed(t *testing.T) {
 	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
-	if r := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "5")...); r.code != 0 {
+	if r := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "5")...); r.code != 0 {
 		t.Fatalf("turn exit = %d\nstderr:\n%s", r.code, r.stderr)
 	}
 
@@ -1653,7 +1489,7 @@ func TestCollectStatusOnlyLeavesTheResultOwed(t *testing.T) {
 	}
 	mustContain(t, "stdout", res.stdout,
 		"status: ok",
-		"resume: envoy turn --provider codex --resume fake-session-id",
+		"resume: envoy run <new-job-name> --with @'"+outDir+"'",
 		"next: this was a status check only",
 	)
 	for _, banned := range []string{"--- result.md ---", "fake provider result"} {
@@ -1681,7 +1517,7 @@ func TestCollectResultOnly(t *testing.T) {
 	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
-	if r := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "5")...); r.code != 0 {
+	if r := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "5")...); r.code != 0 {
 		t.Fatalf("turn exit = %d\nstderr:\n%s", r.code, r.stderr)
 	}
 	res := runEnvoy(t, e, "collect", "--result-only", outDir)
@@ -1701,7 +1537,7 @@ func TestCollectResultOnly(t *testing.T) {
 	// A failed turn has no payload to hand back alone.
 	failDir := filepath.Join(t.TempDir(), "failed")
 	e2 := newEnv(t).set("ENVOY_FAKE_SCENARIO", "nonzero-final")
-	if r := runEnvoy(t, e2, turnArgs(prompt, failDir, "--provider", "codex", "--timeout-min", "5")...); r.code != 1 {
+	if r := runEnvoy(t, e2, runArgs(prompt, failDir, "--with", "codex", "--timeout-min", "5")...); r.code != 1 {
 		t.Fatalf("failed turn exit = %d, want 1", r.code)
 	}
 	res = runEnvoy(t, e2, "collect", "--result-only", failDir)
@@ -1724,7 +1560,7 @@ func TestFanCollectResultOnly(t *testing.T) {
 	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
 	outDir := filepath.Join(t.TempDir(), "group")
 	prompt := writePrompt(t, t.TempDir())
-	if r := runEnvoy(t, e, fanArgs(prompt, outDir, "--with", "codex", "--with", "claude:opus",
+	if r := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--with", "claude:opus",
 		"--timeout-min", "5")...); r.code != 0 {
 		t.Fatalf("fan exit = %d\nstderr:\n%s", r.code, r.stderr)
 	}
@@ -1756,7 +1592,7 @@ func TestFanResumeFromRefusesWhenASessionIsHeld(t *testing.T) {
 		set("ENVOY_FAKE_SESSION_ID_CLAUDE", "sess-claude-free")
 	r1 := filepath.Join(t.TempDir(), "round1")
 	prompt := writePrompt(t, t.TempDir())
-	if res := runEnvoy(t, e, fanArgs(prompt, r1, "--with", "codex", "--with", "claude:opus",
+	if res := runEnvoy(t, e, runArgs(prompt, r1, "--with", "codex", "--with", "claude:opus",
 		"--timeout-min", "5")...); res.code != 0 {
 		t.Fatalf("round 1 exit = %d\nstderr:\n%s", res.code, res.stderr)
 	}
@@ -1774,8 +1610,7 @@ func TestFanResumeFromRefusesWhenASessionIsHeld(t *testing.T) {
 	}
 
 	r2 := filepath.Join(t.TempDir(), "round2")
-	res := runEnvoy(t, e, "fan", "--resume-from", r1, "--prompt-file", prompt,
-		"--out-dir", r2, "--timeout-min", "5")
+	res := runEnvoy(t, e, runArgs(prompt, r2, "--with", "@"+r1, "--timeout-min", "5")...)
 	if res.code != 3 {
 		t.Fatalf("held-session resume exit = %d, want 3\nstdout:\n%s\nstderr:\n%s",
 			res.code, res.stdout, res.stderr)
@@ -1783,6 +1618,11 @@ func TestFanResumeFromRefusesWhenASessionIsHeld(t *testing.T) {
 	mustContain(t, "stderr", res.stderr, "sess-codex-held")
 	if _, err := os.Stat(filepath.Join(r2, "claude-opus", "meta.json")); err == nil {
 		t.Fatal("a sibling turn ran while the set was refused")
+	}
+	// The refusal happened after the name was reserved and before anything
+	// ran under it, so the name is given back rather than left occupied.
+	if _, err := os.Stat(r2); !os.IsNotExist(err) {
+		t.Fatal("a refused round must leave no job dir behind")
 	}
 }
 
@@ -1813,12 +1653,12 @@ func TestConflictedMemberIsNotSetResumable(t *testing.T) {
 	os.WriteFile(filepath.Join(opusDir, "result.md"), []byte("opus partial"), 0o644)
 
 	col := runEnvoy(t, e, "collect", dir)
-	if strings.Contains(col.stdout, "envoy fan --resume-from") {
+	if strings.Contains(col.stdout, "--with @'"+dir+"'") {
 		t.Fatalf("a conflicted member must suppress the set-level resume line:\n%s", col.stdout)
 	}
 
 	prompt := writePrompt(t, t.TempDir())
-	res := runEnvoy(t, e, "fan", "--resume-from", dir, "--prompt-file", prompt)
+	res := runEnvoy(t, e, runArgs(prompt, filepath.Join(t.TempDir(), "next"), "--with", "@"+dir)...)
 	if res.code != 3 {
 		t.Fatalf("conflicted-member resume exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
 	}
@@ -1910,7 +1750,7 @@ func TestCodexReconnectEventsAreObservedNotJudged(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "5")...)
+	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "5")...)
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
@@ -1927,63 +1767,9 @@ func TestCodexReconnectEventsAreObservedNotJudged(t *testing.T) {
 	// A clean turn records zero — an observation, distinct from an older
 	// engine's meta that never counted.
 	clean := filepath.Join(t.TempDir(), "clean")
-	runEnvoy(t, newEnv(t).set("ENVOY_FAKE_SCENARIO", "success"), turnArgs(prompt, clean, "--provider", "codex", "--timeout-min", "5")...)
+	runEnvoy(t, newEnv(t).set("ENVOY_FAKE_SCENARIO", "success"), runArgs(prompt, clean, "--with", "codex", "--timeout-min", "5")...)
 	cleanStatus := runEnvoy(t, e, "collect", "--status-only", clean)
 	mustContain(t, "clean status block", cleanStatus.stdout, "provider stream: no connection-error events recognized by this engine version")
-}
-
-// --coordinate-file is the dispatch handoff a background task's hidden
-// stdout cannot be: the same startup block, landed atomically before the
-// provider spawns, at a path the caller chose and can correlate.
-func TestCoordinateFileMirrorsTheStartupBlock(t *testing.T) {
-	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
-	outDir := filepath.Join(t.TempDir(), "job")
-	coord := filepath.Join(t.TempDir(), "handoff", "turn.txt")
-	prompt := writePrompt(t, t.TempDir())
-
-	res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "codex", "--timeout-min", "5", "--coordinate-file", coord)...)
-	if res.code != 0 {
-		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
-	}
-	block := readFile(t, coord)
-	if !strings.HasPrefix(res.stdout, block) {
-		t.Fatalf("coordinate file must be the exact head of stdout\nfile:\n%s\nstdout:\n%s", block, res.stdout)
-	}
-	mustContain(t, "coordinate file", block, "out-dir: "+outDir, "watch: tail -f", "next: let this command run to completion")
-	if _, err := os.Stat(coord + ".tmp"); err == nil {
-		t.Fatalf("the temp file must be renamed away")
-	}
-
-	fanDir := filepath.Join(t.TempDir(), "fan")
-	fanCoord := filepath.Join(t.TempDir(), "fan.txt")
-	fres := runEnvoy(t, e, "fan", "--prompt-file", prompt, "--out-dir", fanDir, "--with", "codex", "--with", "claude",
-		"--timeout-min", "5", "--coordinate-file", fanCoord)
-	if fres.code != 0 {
-		t.Fatalf("fan exit = %d\nstderr:\n%s", fres.code, fres.stderr)
-	}
-	fblock := readFile(t, fanCoord)
-	if !strings.HasPrefix(fres.stdout, fblock) {
-		t.Fatalf("fan coordinate file must be the exact head of stdout\nfile:\n%s\nstdout:\n%s", fblock, fres.stdout)
-	}
-	mustContain(t, "fan coordinate file", fblock, "out-dir: "+fanDir, "fan-out: 2 turns", "member codex:", "member claude:")
-
-	// An unwritable handoff path is refused before anything spawns: the caller
-	// is about to block on that file, so a warning after launch would leave it
-	// waiting on a job that is already running.
-	bad := filepath.Join(t.TempDir(), "not-a-dir")
-	if err := os.WriteFile(bad, []byte("file"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	refusedOutDir := filepath.Join(t.TempDir(), "never")
-	refused := runEnvoy(t, e, turnArgs(prompt, refusedOutDir, "--provider", "codex",
-		"--coordinate-file", filepath.Join(bad, "x.coords"))...)
-	if refused.code != 3 {
-		t.Fatalf("unwritable coordinate path: exit = %d, want 3\nstderr:\n%s", refused.code, refused.stderr)
-	}
-	mustContain(t, "refusal", refused.stderr, "--coordinate-file", "nothing was dispatched")
-	if _, err := os.Stat(refusedOutDir); err == nil {
-		t.Fatalf("no job dir may exist after a refused dispatch: %s", refusedOutDir)
-	}
 }
 
 // A driver that does not observe connection errors gets no tally: a claude
@@ -1993,7 +1779,7 @@ func TestClaudeBlockCarriesNoConnectionTally(t *testing.T) {
 	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
-	if res := runEnvoy(t, e, turnArgs(prompt, outDir, "--provider", "claude", "--model", "opus", "--timeout-min", "5")...); res.code != 0 {
+	if res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "claude:opus", "--timeout-min", "5")...); res.code != 0 {
 		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
 	}
 	if v, has := readMeta(t, outDir)["connectionErrors"]; !has || v != nil {

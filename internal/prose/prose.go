@@ -17,57 +17,82 @@ import (
 	"github.com/qiushiyan/envoy/internal/text"
 )
 
-// Turn is what a dispatched turn needs to be rebuilt as a command.
+// Turn is what a dispatched turn needs to be rebuilt as a command: the job
+// it ran as (its records carry the session and settings a continuation
+// inherits) and the settings a fresh re-dispatch of the same prompt needs.
 type Turn struct {
+	Dir        string
 	Provider   string
 	SessionID  string
 	Cwd        string
 	Model      string
 	Effort     string
 	AllowWrite bool
+	Baseline   string
+	PromptFile string
 	TimeoutMin float64
 }
 
 // promptPlaceholder is the slot every follow-up command leaves open: a resumed
 // turn needs a NEW prompt, and only the caller knows which file that will be.
-// Commands are always rendered from structured fields — never edited as
-// strings afterwards — so a path that happens to contain this text can never
-// collide with the slot.
-const promptPlaceholder = "<your-follow-up.md>"
+// jobPlaceholder is the other slot: a follow-up is a new job, and its name is
+// the caller's to choose. Commands are always rendered from structured fields
+// — never edited as strings afterwards — so a path that happens to contain
+// this text can never collide with the slot.
+const (
+	promptPlaceholder = "<your-follow-up.md>"
+	jobPlaceholder    = "<new-job-name>"
+)
 
-// ResumeCommand is the complete command that continues this provider session,
-// carrying the original turn's settings so a follow-up cannot silently drop
-// write intent or run against another tree. The prompt file is a placeholder:
-// a resumed turn needs a new prompt, never the original one again.
+// ContinueCommand is the complete command that continues the conversation(s)
+// a finished job holds — one turn's session, or every member of a fan-out —
+// as a new job. The records supply provider, session, model, effort, write
+// intent, tree and baseline; the cap is phase policy and is carried from the
+// job so the caller sees the number it will get. The prompt file is a
+// placeholder: a continuation needs a new prompt, never the original again.
+func ContinueCommand(dir string, timeoutMin float64) string {
+	return fmt.Sprintf("envoy run %s --with @%s --timeout-min %g --prompt-file %s",
+		jobPlaceholder, text.ShellQuote(dir), timeoutMin, promptPlaceholder)
+}
+
+// Voice spells a member the way a caller types it: provider[:model[:effort]].
+// An effort without a model keeps the middle slot empty (codex::high).
+func Voice(provider, model, effort string) string {
+	switch {
+	case effort != "":
+		return provider + ":" + model + ":" + effort
+	case model != "":
+		return provider + ":" + model
+	}
+	return provider
+}
+
+// ResumeCommand continues this turn's session as a new job.
 func (t Turn) ResumeCommand() string {
-	return t.resumeCommand(promptPlaceholder)
-}
-
-// ResumeCommandWith renders the follow-up with an existing prompt file in the
-// slot — steer's case, the one place the placeholder closes because the new
-// prompt is already in the caller's hand.
-func (t Turn) ResumeCommandWith(promptFile string) string {
-	return t.resumeCommand(text.ShellQuote(promptFile))
-}
-
-func (t Turn) resumeCommand(promptArg string) string {
-	if t.SessionID == "" {
+	if t.SessionID == "" || t.Dir == "" {
 		return ""
 	}
-	parts := []string{"envoy turn", "--provider " + t.Provider, "--resume " + t.SessionID}
-	if t.Model != "" {
-		parts = append(parts, "--model "+t.Model)
+	return ContinueCommand(t.Dir, t.TimeoutMin)
+}
+
+// RedispatchCommand sends this turn's prompt again as a fresh conversation
+// under a new job name — the follow-up for a prompt the provider provably
+// never received, where re-running is safe and the old name is now taken.
+func (t Turn) RedispatchCommand() string {
+	if t.PromptFile == "" {
+		return ""
 	}
-	if t.Effort != "" {
-		parts = append(parts, "--effort "+t.Effort)
-	}
+	parts := []string{"envoy run", jobPlaceholder, "--with " + Voice(t.Provider, t.Model, t.Effort), "--prompt-file " + text.ShellQuote(t.PromptFile)}
 	if t.AllowWrite {
 		parts = append(parts, "--allow-write")
+	}
+	if t.Baseline != "" {
+		parts = append(parts, "--baseline "+t.Baseline)
 	}
 	if t.Cwd != "" {
 		parts = append(parts, "--cwd "+text.ShellQuote(t.Cwd))
 	}
-	parts = append(parts, fmt.Sprintf("--timeout-min %g", t.TimeoutMin), "--prompt-file "+promptArg)
+	parts = append(parts, fmt.Sprintf("--timeout-min %g", t.TimeoutMin))
 	return strings.Join(parts, " ")
 }
 
@@ -166,13 +191,15 @@ func eventCount(n int64) string {
 
 // Recovery prescribes the next move from the prompt state alone — the only
 // thing the engine can actually prove about a turn that did not return a
-// result. remedy is an optional cause-specific clause the caller must handle
-// first (an exhausted budget cap, say); "" when the cause needs no fixing.
+// result. resumeCmd continues the session, redispatchCmd re-sends the prompt
+// as a new job; either is "" when the records cannot render it. remedy is an
+// optional cause-specific clause the caller must handle first (an exhausted
+// budget cap, say); "" when the cause needs no fixing.
 //
 // The three states carry different licenses, and confusing them is the
 // expensive mistake: re-sending a prompt the provider already accepted
 // duplicates work that may already have changed the tree.
-func Recovery(promptState, resumeCmd, remedy string) string {
+func Recovery(promptState, resumeCmd, redispatchCmd, remedy string) string {
 	fix := ""
 	if remedy != "" {
 		fix = " " + strings.TrimSpace(remedy)
@@ -188,17 +215,21 @@ func Recovery(promptState, resumeCmd, remedy string) string {
 			"\nSending the original prompt again would repeat work that already happened."
 
 	case job.PromptNotStarted:
-		return "The provider never started, so this prompt did not run and nothing was changed." + fix +
-			" Re-run the identical command once; if it fails the same way, the provider CLI itself is the problem to report."
+		body := "The provider never started, so this prompt did not run and nothing was changed." + fix
+		if redispatchCmd == "" {
+			return body + " Dispatch it once more under a new job name; if it fails the same way, the provider CLI itself is the problem to report."
+		}
+		return body + " Dispatch it once more under a new job name (this name is now taken):\n  " + redispatchCmd +
+			"\nIf it fails the same way, the provider CLI itself is the problem to report."
 
 	default: // unknown
 		body := "Whether the provider began work is unproven — silence is not proof that nothing ran." + fix +
 			" Read progress.log, raw.log, stderr.log, and the working tree."
 		if resumeCmd == "" {
-			return body + " Re-dispatch only once they show the prompt never began."
+			return body + " Re-dispatch under a new job name only once they show the prompt never began."
 		}
 		return body + " If any of them show work, continue the same session with a follow-up prompt:\n  " + resumeCmd +
-			"\nRe-dispatch the original prompt only once they show it never began."
+			"\nRe-dispatch the original prompt under a new job name only once they show it never began."
 	}
 }
 
@@ -260,17 +291,12 @@ func StatusLine(status string) string {
 // DispatchNext is the nudge printed the moment a turn starts, when the caller
 // is deciding whether to wait, poll, or walk away.
 func DispatchNext(outDir string) string {
-	return "let this command run to completion, then collect the job: " + CollectCommand(outDir) +
-		" · tailing the logs is observation only, and output going quiet never means finished"
+	return "let this command run to completion, then collect the job: " + CollectCommand(outDir)
 }
 
 // RunningNext is what a caller that collects too early should do instead.
-func RunningNext(outDir, watchCommand string) string {
-	line := "This turn is still running. Wait for its process to exit, then collect it again: " + CollectCommand(outDir) + "."
-	if watchCommand != "" {
-		line += " Watching progress meanwhile is fine (" + watchCommand + "), but a quiet log is not completion."
-	}
-	return line
+func RunningNext(outDir string) string {
+	return "This turn is still running. Wait for its process to exit, then collect it again: " + CollectCommand(outDir) + "."
 }
 
 // CollectedOK closes a successful collection by pointing at the payload.
@@ -305,49 +331,9 @@ func Stopping() string {
 }
 
 // SpawnFailed reports a provider that never launched — the one failure where
-// an identical retry is provably safe.
+// re-sending the same prompt is provably safe.
 func SpawnFailed(provider string, err error) string {
 	return fmt.Sprintf("envoy could not start %s: %s", provider, err)
-}
-
-// ---------- the job roster ----------
-//
-// The out-dir printed at dispatch stays the retained coordinate. The roster is
-// what answers a caller that no longer has it — before it existed, callers
-// rebuilt job paths by hand from the stamp-and-label convention, and the stamp
-// is the dispatch second nobody knows. It hands back coordinates and nothing
-// else: which job to read, and whether to read it at all, stays the caller's
-// judgment.
-
-// JobsHeader opens the roster: how many jobs it names, of how many the project
-// holds, and where they live.
-func JobsHeader(shown, total int, base string) string {
-	switch {
-	case total == 0:
-		return fmt.Sprintf("jobs: 0 (under %s)", base)
-	case shown < total:
-		return fmt.Sprintf("jobs: %d of %d (under %s, newest first)", shown, total, base)
-	}
-	return fmt.Sprintf("jobs: %d (under %s, newest first)", total, base)
-}
-
-// JobsNext closes the roster. A listing delivers no result, so — like
-// --status-only — it marks nothing collected and every job it names stays owed.
-// truncated adds the way to reach the jobs this listing left out, so an old
-// coordinate never becomes unrecoverable.
-func JobsNext(truncated bool) string {
-	line := "this is a listing only — no result was printed and nothing was marked collected. " +
-		"Print one job in full by passing its dir above: envoy collect <job-dir>"
-	if truncated {
-		line += " · older jobs than these: envoy jobs --all"
-	}
-	return line
-}
-
-// JobsNone answers a project that has never dispatched a turn, which is not a
-// lost coordinate but an empty store.
-func JobsNone() string {
-	return "no turn has run in this project yet — dispatch one with envoy turn or envoy fan"
 }
 
 // UnreadableStore refuses to report an unreadable job root as an empty one.
@@ -362,19 +348,17 @@ func UnreadableStore(base string, err error) string {
 
 // ---------- continuing a finished job ----------
 //
-// --resume-from (a whole turn, or a whole fan-out) and --with-from (one
-// finished job's session as a member of a new fan-out) anchor a follow-up on
-// a job's own records instead of a hand-carried session id. The records are
-// the safer coordinate: a resumed claude conversation continues under a fresh
-// id, so the id a caller remembers goes stale while the job dir's meta always
-// names the current one. The wording below covers the two questions that
-// surface raises: which jobs can be continued, and which command fits the
-// shape at hand.
+// A voice spelled @<job> continues that job's conversation as a member of
+// the new job, settings read from its records instead of a hand-carried
+// session id. The records are the safer coordinate: a resumed claude
+// conversation continues under a fresh id, so the id a caller remembers goes
+// stale while the job dir's meta always names the current one. A fan-out
+// reference continues every member at once and therefore stands alone.
 
 // ResumeBlockerKind classifies why a job's session cannot be continued. The
 // kinds are prose vocabulary shared by every surface that reports one — the
-// fan facade's refusal, collect's resume line, and the --resume-from and
-// --with-from refusals — so one situation is worded one way everywhere.
+// dispatch refusal and collect's resume line — so one situation is worded
+// one way everywhere.
 type ResumeBlockerKind string
 
 const (
@@ -384,40 +368,15 @@ const (
 	BlockerLockConflict   ResumeBlockerKind = "lock-conflict"
 )
 
-// TurnResumeFromCommand is the complete command that continues a finished
-// turn's session by naming its job dir, settings read from that job's own
-// records. The prompt file stays the placeholder: a resumed turn needs a NEW
-// prompt.
-func TurnResumeFromCommand(dir string) string {
-	return "envoy turn --resume-from " + text.ShellQuote(dir) + " --prompt-file " + promptPlaceholder
+// ContinueNoTurn rejects an @<job> that holds no readable job. cause is the
+// observation ("no job found there (no meta.json)", a parse error).
+func ContinueNoTurn(dir string, cause error) string {
+	return fmt.Sprintf("--with @%s: %s. Name a finished job — by the name it was run as, or by its directory.", dir, cause)
 }
 
-// ResumeFromAndResume explains why the two ways of naming a conversation
-// cannot combine on one turn.
-func ResumeFromAndResume() string {
-	return "--resume-from and --resume are mutually exclusive: both name the conversation to continue. " +
-		"Point --resume-from at the job dir to let its records supply the session and settings, " +
-		"or use --resume <session-id> and spell the settings yourself."
-}
-
-// ResumeFromAndProvider explains why --resume-from takes no provider flag.
-func ResumeFromAndProvider() string {
-	return "--provider is already decided by --resume-from: the job's records name it, and a conversation " +
-		"cannot move to another provider. Drop --provider; --model and --effort still override how the follow-up runs."
-}
-
-// ResumeFromNoTurn rejects a --resume-from/--with-from path that holds no
-// readable turn. cause is the observation ("no turn found there (no
-// meta.json)", a parse error); the prescription is the same for all of them.
-func ResumeFromNoTurn(flag, dir string, cause error) string {
-	return fmt.Sprintf("%s %s: %s. Pass the out-dir printed when the job was dispatched — or a fan-out member's directory.",
-		flag, dir, cause)
-}
-
-// FanMemberCandidate is one member of the fan-out a job-dir flag was aimed
-// at: the coordinate the caller can name instead of the group, with the
-// eligibility observation still structured — Blocked, and the kind and
-// detail that word it — so rendering happens here, once.
+// FanMemberCandidate is one member of a fan-out named beside other voices:
+// the coordinate the caller can name instead of the group, with the
+// eligibility observation still structured so rendering happens here, once.
 type FanMemberCandidate struct {
 	Name    string
 	Dir     string
@@ -426,65 +385,23 @@ type FanMemberCandidate struct {
 	Detail  string
 }
 
-// fanOutRedirectHead opens both refusals for a job-dir flag aimed at a group.
-func fanOutRedirectHead(flag, dir string) string {
-	return fmt.Sprintf("%s %s: this is a fan-out, and its members hold their own sessions.", flag, dir)
-}
-
-// fanOutOffers splits the roster into the members offered (rendered by
-// offer) and the blockers, worded once in the shared vocabulary.
-func fanOutOffers(members []FanMemberCandidate, offer func(FanMemberCandidate) string) (offered, blocked []string) {
+// GroupRefMustStandAlone refuses @<fan-out> mixed with other voices: a
+// fan-out reference continues every member as one round, so beside other
+// voices it would silently turn "continue the round" into roster
+// composition. The eligible members are offered as the voices to name.
+func GroupRefMustStandAlone(dir string, members []FanMemberCandidate) string {
+	var offered, blocked []string
 	for _, m := range members {
 		if m.Blocked {
 			blocked = append(blocked, "  "+FanResumeBlockerLine(m.Name, m.Kind, m.Detail))
 			continue
 		}
-		offered = append(offered, "  "+offer(m))
+		offered = append(offered, fmt.Sprintf("  --with @%s  (%s)", text.ShellQuote(m.Dir), m.Name))
 	}
-	return offered, blocked
-}
-
-// WithFromIsFanOut refuses fan --with-from aimed at a group: that flag seats
-// one continued member beside cold ones, so it is handed copy-ready member
-// flags for the eligible members and the whole-set round only as an aside —
-// a round continues every member and starts nobody cold. roundCmd is "" when
-// the manifest is unreadable.
-func WithFromIsFanOut(dir string, members []FanMemberCandidate, roundCmd string) string {
-	offered, blocked := fanOutOffers(members, func(m FanMemberCandidate) string {
-		return fmt.Sprintf("--with-from %s  (%s)", text.ShellQuote(m.Dir), m.Name)
-	})
 	var b strings.Builder
-	b.WriteString(fanOutRedirectHead("--with-from", dir))
+	b.WriteString(fmt.Sprintf("--with @%s names a fan-out, which continues every member as one round and so stands alone as the only --with.", dir))
 	if len(offered) > 0 {
-		b.WriteString(" Continue one member's session beside cold members by naming its directory:\n" + strings.Join(offered, "\n"))
-	} else {
-		b.WriteString(" Name one member's directory to continue that session beside cold members.")
-	}
-	if len(blocked) > 0 {
-		b.WriteString("\nNot continuable:\n" + strings.Join(blocked, "\n"))
-	}
-	if roundCmd != "" {
-		b.WriteString("\n(To continue every member as one round, with no cold member: " + roundCmd + ")")
-	}
-	return b.String()
-}
-
-// ResumeFromIsFanOut refuses turn --resume-from aimed at a group: the round
-// that continues the whole set comes first, then each eligible member's own
-// turn command. roundCmd is "" when the manifest is unreadable.
-func ResumeFromIsFanOut(dir string, members []FanMemberCandidate, roundCmd string) string {
-	offered, blocked := fanOutOffers(members, func(m FanMemberCandidate) string {
-		return fmt.Sprintf("%s  (%s)", TurnResumeFromCommand(m.Dir), m.Name)
-	})
-	var b strings.Builder
-	b.WriteString(fanOutRedirectHead("--resume-from", dir))
-	if roundCmd != "" {
-		b.WriteString(" Continue every member as one round:\n  " + roundCmd)
-	}
-	if len(offered) > 0 {
-		b.WriteString("\nOr continue one member's directory alone:\n" + strings.Join(offered, "\n"))
-	} else if roundCmd == "" {
-		b.WriteString(" Name one member's directory to continue that voice alone, or continue every member as one round with envoy fan --resume-from.")
+		b.WriteString(" To seat one member's conversation beside other voices, name that member:\n" + strings.Join(offered, "\n"))
 	}
 	if len(blocked) > 0 {
 		b.WriteString("\nNot continuable:\n" + strings.Join(blocked, "\n"))
@@ -492,11 +409,11 @@ func ResumeFromIsFanOut(dir string, members []FanMemberCandidate, roundCmd strin
 	return b.String()
 }
 
-// ResumeFromBlocked refuses to continue a job whose session is not provably
+// ContinueBlocked refuses to continue a job whose session is not provably
 // free to continue, naming the observation and the one safe next step.
-func ResumeFromBlocked(flag, dir string, kind ResumeBlockerKind) string {
+func ContinueBlocked(dir string, kind ResumeBlockerKind) string {
 	collect := CollectCommand(dir)
-	head := fmt.Sprintf("%s %s: ", flag, dir)
+	head := fmt.Sprintf("--with @%s: ", dir)
 	switch kind {
 	case BlockerRunning:
 		return head + "this job still records status running, and a session admits one live turn at a time. " +
@@ -509,6 +426,63 @@ func ResumeFromBlocked(flag, dir string, kind ResumeBlockerKind) string {
 		return head + "this job never published a session id, so it holds no conversation to continue. " +
 			"Collect it — " + collect + " — to see what recovery it licenses; a fresh dispatch may be the right move."
 	}
+}
+
+// ---------- naming and rostering a run ----------
+
+// JobExists refuses a name that is already taken. The name is the address the
+// caller will collect from, so it is never silently suffixed.
+func JobExists(dir string) string {
+	return fmt.Sprintf("job %s already exists — a job name is used once. Pick a new name (review-r2 after review-r1, say); "+
+		"to read the existing job: %s", dir, CollectCommand(dir))
+}
+
+// RunNeedsVoice refuses a run with no member at all.
+func RunNeedsVoice() string {
+	return "at least one --with is required: a cold voice as provider[:model[:effort]] (codex, claude:opus, codex:gpt-6-astra:high), " +
+		"or @<job> to continue a finished job's conversation"
+}
+
+// AllowWriteNeedsOneVoice explains why write intent belongs to a single
+// voice: several turns editing one tree race each other.
+func AllowWriteNeedsOneVoice() string {
+	return "--allow-write needs exactly one --with: a fan-out's members share one working tree, and turns editing the " +
+		"same files concurrently overwrite each other's work. For parallel write work, give each turn its own tree — " +
+		"a git worktree per turn — and run them as separate jobs with --cwd <tree>."
+}
+
+// WriteSourceInRoster refuses to seat a write conversation beside other
+// voices, whose members are read-only: silently narrowing the conversation's
+// write intent is the exact drop the inheritance contract forbids.
+func WriteSourceInRoster(dir string, timeoutMin float64) string {
+	return fmt.Sprintf("--with @%s: that job ran with --allow-write, and a fan-out's members are read-only — "+
+		"they share one working tree. Continue this conversation alone, keeping its write intent:\n  %s",
+		dir, ContinueCommand(dir, timeoutMin))
+}
+
+// DuplicateConversation refuses a roster that names one conversation twice:
+// a session admits a single live turn, so the second member could never
+// dispatch.
+func DuplicateConversation(session, firstDir, secondDir string) string {
+	return fmt.Sprintf("the roster names the same conversation twice (session %s, from %s and %s), and a session "+
+		"admits one live turn at a time. Name each conversation once.", session, firstDir, secondDir)
+}
+
+// CwdMix asks for an explicit tree when the continued jobs do not share one:
+// a job's members run in a single working directory, and the engine will not
+// choose between the recorded ones.
+func CwdMix(firstDir, firstCwd, secondDir, secondCwd string) string {
+	return fmt.Sprintf("the continued jobs ran in different working directories (%s ran in %s; %s ran in %s). "+
+		"A job's members share one tree — pass --cwd to choose it.", firstDir, firstCwd, secondDir, secondCwd)
+}
+
+// BaselineMix asks for an explicit anchor when the continued jobs recorded
+// different ones: a job reports one reviewed range, and the engine will not
+// choose which conversation's anchor wins.
+func BaselineMix(firstDir, firstBaseline, secondDir, secondBaseline string) string {
+	return fmt.Sprintf("the continued jobs recorded different baselines (%s recorded %s; %s recorded %s). "+
+		"A job reports one reviewed range — pass --baseline to choose the anchor.",
+		firstDir, firstBaseline, secondDir, secondBaseline)
 }
 
 // ---------- fan-out ----------
@@ -594,9 +568,8 @@ func FanUndispatched() string {
 // caller is deciding how many things it now has to keep track of. The answer
 // is one.
 func FanDispatchNext(groupDir string) string {
-	return "let this command run to completion — it exits once every member is done — then collect the fan-out once: " +
-		CollectCommand(groupDir) +
-		" · that single command returns every member's result, so there is nothing to track per member"
+	return "let this command run to completion — it exits once every member is done — then collect the job once: " +
+		CollectCommand(groupDir) + " · that single command returns every member's result"
 }
 
 // FanStopping is what to do while a stop is in flight across every member.
@@ -644,94 +617,6 @@ func FanCollected(groupDir string, statuses []string) string {
 	}
 }
 
-// FanAllowWriteRefused explains why a fan-out is read-only. Several turns
-// editing one tree race each other, and the engine cannot make that safe.
-func FanAllowWriteRefused() string {
-	return "--allow-write is not available on a fan-out: its members share one working tree, and turns editing the " +
-		"same files concurrently overwrite each other's work. For parallel write work, give each turn its own tree — " +
-		"a git worktree per turn — and dispatch them as separate `envoy turn --allow-write --cwd <tree>` commands."
-}
-
-// FanResumeRefused explains why a bare session id cannot continue a fan-out,
-// and where each of the follow-up shapes lives.
-func FanResumeRefused() string {
-	return "--resume is not available on a fan-out: a session id names one conversation, and a fan-out runs several. " +
-		"Resume one member with `envoy turn --resume <session>`, continue every member of a finished fan-out on one " +
-		"new prompt with `envoy fan --resume-from <fan-out-dir>` — `envoy collect` prints both commands — or continue " +
-		"one finished job's session as a member of a new roster with `--with-from <its-job-dir>`."
-}
-
-// FanResumeFromAndWith explains why a resumed fan-out takes no member specs.
-func FanResumeFromAndWith() string {
-	return "--resume-from and --with are mutually exclusive: a resumed fan-out continues the members recorded in the " +
-		"original fan-out's manifest, so the roster is already decided. Drop --with, or drop --resume-from to dispatch " +
-		"a fresh fan-out."
-}
-
-// FanResumeFromAndWithFrom keeps the two continuation shapes apart: the whole
-// original set, or a new roster built member by member.
-func FanResumeFromAndWithFrom() string {
-	return "--resume-from and --with-from are mutually exclusive: a resumed fan-out already continues every member of " +
-		"the original, so there is no roster to build. Use --resume-from alone to continue the whole set, or compose a " +
-		"new roster from --with-from and --with members."
-}
-
-// FanSingleWithFrom redirects a one-member fan-out to the single-turn form,
-// with the caller's actual dir already in the command.
-func FanSingleWithFrom(dir string) string {
-	return "a fan-out needs at least two members. To continue this one session by itself, use:\n  " +
-		TurnResumeFromCommand(dir) +
-		"\nOr add more voices: another --with-from <job-dir>, or a fresh --with provider[:model[:effort]]."
-}
-
-// FanWithFromDuplicateSession refuses a roster that names one conversation
-// twice: a session admits a single live turn, so the second member could
-// never dispatch.
-func FanWithFromDuplicateSession(session, firstDir, secondDir string) string {
-	return fmt.Sprintf("--with-from names the same conversation twice (session %s, from %s and %s), and a session "+
-		"admits one live turn at a time. Name each conversation once; add fresh voices with --with.",
-		session, firstDir, secondDir)
-}
-
-// FanWithFromCwdMix asks for an explicit tree when the continued jobs do not
-// share one: a fan-out's members run in a single working directory, and the
-// engine will not choose between the recorded ones.
-func FanWithFromCwdMix(firstDir, firstCwd, secondDir, secondCwd string) string {
-	return fmt.Sprintf("the jobs named by --with-from ran in different working directories (%s ran in %s; %s ran in %s). "+
-		"A fan-out's members share one tree — pass --cwd to choose it.",
-		firstDir, firstCwd, secondDir, secondCwd)
-}
-
-// FanWithFromBaselineMix asks for an explicit anchor when the continued jobs
-// recorded different ones: a fan-out reports one reviewed range, and the
-// engine will not choose which conversation's anchor wins.
-func FanWithFromBaselineMix(firstDir, firstBaseline, secondDir, secondBaseline string) string {
-	return fmt.Sprintf("the jobs named by --with-from recorded different baselines (%s recorded %s; %s recorded %s). "+
-		"A fan-out reports one reviewed range — pass --baseline to choose the anchor.",
-		firstDir, firstBaseline, secondDir, secondBaseline)
-}
-
-// FanWithFromWriteSource refuses to continue a write conversation inside a
-// fan-out, whose members are read-only: silently narrowing the conversation's
-// write intent is the exact drop the inheritance contract forbids, so the
-// intent is kept by continuing the conversation alone.
-func FanWithFromWriteSource(dir string) string {
-	return fmt.Sprintf("--with-from %s: that job ran with --allow-write, and a fan-out's members are read-only — "+
-		"they share one working tree. Continue this conversation alone, keeping its write intent:\n  %s",
-		dir, TurnResumeFromCommand(dir))
-}
-
-// FanResumeFromNotAFanOut redirects a --resume-from aimed at a single turn.
-// When that turn published a session, the redirect carries its actual resume
-// command instead of a shape to imitate.
-func FanResumeFromNotAFanOut(dir, resumeCmd string) string {
-	head := fmt.Sprintf("--resume-from needs a fan-out directory, and %s is a single turn.", dir)
-	if resumeCmd != "" {
-		return head + " Continue it directly:\n  " + resumeCmd
-	}
-	return head + " Collect it to see what it licenses: " + CollectCommand(dir) + "."
-}
-
 // FanResumeBlockerLine words one member's blocker as an observation, in the
 // shared ResumeBlockerKind vocabulary. detail carries the read error for an
 // unreadable meta and is ignored otherwise.
@@ -748,15 +633,15 @@ func FanResumeBlockerLine(member string, kind ResumeBlockerKind, detail string) 
 	}
 }
 
-// FanResumeFromBlocked refuses a resume whose set is not whole: every member
+// FanContinueBlocked refuses a round whose set is not whole: every member
 // is continued together or not at all, because dispatching the ready ones now
 // would leave the blocked voices out of the round with no record of why.
-func FanResumeFromBlocked(dir string, reasons []string) string {
-	return fmt.Sprintf("this fan-out cannot be resumed as a set yet — %s. A resumed fan-out continues every member "+
+func FanContinueBlocked(dir string, reasons []string) string {
+	return fmt.Sprintf("--with @%s: this fan-out cannot be continued as a set yet — %s. A resumed fan-out continues every member "+
 		"together. Collect it first (%s): that reconciles members that died without a status, and each section carries "+
-		"its own recovery; once every member is finished with a session, resume the set — or continue just the ready "+
-		"members individually with the `envoy turn --resume` command their sections print.",
-		strings.Join(reasons, "; "), CollectCommand(dir))
+		"its own recovery; once every member is finished with a session, continue the set — or continue just the ready "+
+		"members individually with the command their sections print.",
+		dir, strings.Join(reasons, "; "), CollectCommand(dir))
 }
 
 // FanResumeSessionHeld refuses a round whose session reservation found a
@@ -768,20 +653,15 @@ func FanResumeSessionHeld(member, conflict string) string {
 		member, strings.TrimRight(conflict, ". \t\n")+".")
 }
 
-// FanResumeFromNoGroup rejects a --resume-from path that holds no fan-out.
-func FanResumeFromNoGroup(dir string) string {
-	return fmt.Sprintf("--resume-from %s: no fan-out found there (no group.json). Pass the fan-out's out-dir printed at dispatch", dir)
-}
-
-// FanResumeFromUnreadableManifest rejects a fan-out whose manifest cannot be
+// FanContinueUnreadableManifest rejects a fan-out whose manifest cannot be
 // parsed — nothing about its roster can be trusted, so nothing is dispatched.
-func FanResumeFromUnreadableManifest(dir string, err error) string {
-	return fmt.Sprintf("--resume-from %s: group.json is unreadable (%s)", dir, err)
+func FanContinueUnreadableManifest(dir string, err error) string {
+	return fmt.Sprintf("--with @%s: group.json is unreadable (%s)", dir, err)
 }
 
-// FanResumeFromEmptyManifest rejects a manifest that names no members.
-func FanResumeFromEmptyManifest(dir string) string {
-	return fmt.Sprintf("--resume-from %s: the manifest lists no members", dir)
+// FanContinueEmptyManifest rejects a manifest that names no members.
+func FanContinueEmptyManifest(dir string) string {
+	return fmt.Sprintf("--with @%s: the manifest lists no members", dir)
 }
 
 // FanUndeliveredResults closes a group collection in which a member finished
@@ -795,131 +675,4 @@ func FanUndeliveredResults(members []string) string {
 	return fmt.Sprintf("not every result above was delivered: %s %s finished ok but the result body could not be read, "+
 		"and that section carries the recovery. Delivered results are usable as they are; act on the rest per member.",
 		noun, strings.Join(members, ", "))
-}
-
-// FanResumeCommand is the complete command that continues every member of this
-// fan-out, mirroring Turn.ResumeCommand: settings carried, prompt file left as
-// the placeholder a follow-up must fill.
-func FanResumeCommand(dir string, timeoutMin float64) string {
-	return fanResumeCommand(dir, timeoutMin, promptPlaceholder)
-}
-
-// FanResumeCommandWith renders the round with an existing prompt file in the
-// slot, mirroring Turn.ResumeCommandWith.
-func FanResumeCommandWith(dir string, timeoutMin float64, promptFile string) string {
-	return fanResumeCommand(dir, timeoutMin, text.ShellQuote(promptFile))
-}
-
-func fanResumeCommand(dir string, timeoutMin float64, promptArg string) string {
-	return fmt.Sprintf("envoy fan --resume-from %s --timeout-min %g --prompt-file %s",
-		text.ShellQuote(dir), timeoutMin, promptArg)
-}
-
-// FanMemberFlagRefused catches a turn flag aimed at a fan-out, where it would
-// have to mean something different for each member.
-func FanMemberFlagRefused(flag string) string {
-	return fmt.Sprintf("%s is not available on a fan-out, where each member has its own. Put it in the member spec instead: "+
-		"--with provider[:model[:effort]], for example --with codex --with claude:opus:high.", flag)
-}
-
-// ---------- steer ----------
-//
-// `envoy steer` answers one question about a dispatched job: can a
-// supplemental prompt still reach it? The answer is always no — no provider
-// accepts input into a running turn (claude's streaming input would queue it
-// as a separate turn; codex exec reads its instructions once, at dispatch) —
-// so every report below opens with "not delivered" and hands over the one
-// command that does carry the supplement: the follow-up turn that continues
-// the same session, with the supplement already in its --prompt-file slot.
-// The engine delivers nothing, mutates nothing, and stamps nothing collected.
-
-// SteerReport is the whole answer to one steer request: why the supplement
-// was not delivered, and the one action that carries it forward.
-type SteerReport struct {
-	Why  string // one clause, printed after "not delivered — "
-	Next string // the action, possibly spanning lines with indented commands
-}
-
-// Block renders the complete steer answer, so the "not delivered" verdict —
-// the one fact every steer report shares — is worded here with the rest of
-// the vocabulary rather than at the printing surface.
-func (r SteerReport) Block(outDir string) string {
-	return "steer: not delivered — " + r.Why + "\n" +
-		"job: " + outDir + "\n" +
-		"next: " + r.Next + "\n"
-}
-
-// SteerCommand is the steer invocation for one job dir, spelled out so a
-// fan-out's members can each be handed their own runnable line.
-func SteerCommand(promptFile, outDir string) string {
-	return "envoy steer --prompt-file " + text.ShellQuote(promptFile) + " " + text.ShellQuote(outDir)
-}
-
-// SteerLive reports a genuinely live turn. resumeCmd is the follow-up command
-// with the supplement already filled in, or "" when the turn has not published
-// a session id yet (a fresh codex thread before thread.started).
-func SteerLive(provider, resumeCmd, outDir string) SteerReport {
-	var why string
-	switch provider {
-	case "claude":
-		why = "this turn is still running, and claude takes no input into a turn in flight — " +
-			"its streaming input would only queue the supplement as a second turn after this one finishes"
-	case "codex":
-		why = "this turn is still running, and codex takes no input after dispatch — " +
-			"codex exec reads its instructions once, at start"
-	default:
-		why = "this turn is still running, and no provider accepts input into a turn in flight"
-	}
-	if resumeCmd == "" {
-		return SteerReport{Why: why, Next: "no session id has been published yet, so the follow-up command " +
-			"cannot be printed here. Wait for this job to finish, then collect it (" + CollectCommand(outDir) +
-			") and give this supplement to the resume command it prints."}
-	}
-	return SteerReport{Why: why, Next: "wait for this job to finish and read its result — it may already cover " +
-		"this — then send the supplement as the same session's follow-up prompt:\n  " + resumeCmd}
-}
-
-// SteerStale reports a job whose meta says running while its runner is gone.
-// Steer prescribes nothing itself: collect owns the stranded-turn diagnosis,
-// and a second reader would drift from it.
-func SteerStale(kind, outDir string) SteerReport {
-	return SteerReport{
-		Why: "this job records status running but its runner process is gone (" + kind + "), so nothing is listening for input",
-		Next: "collect the job: " + CollectCommand(outDir) + " — that diagnoses the stranded turn and prescribes " +
-			"the safe continuation; give this supplement to whatever follow-up command it prints.",
-	}
-}
-
-// SteerTerminalOK reports a finished ok turn: the supplement is simply the
-// session's next prompt. An uncollected result is read first — it may already
-// cover what the supplement asks.
-func SteerTerminalOK(resumeCmd, outDir string, collected bool) SteerReport {
-	why := "this job is already terminal (status ok), so there is no running turn to reach"
-	if !collected {
-		return SteerReport{Why: why, Next: "read the result first — it may already cover this: " + CollectCommand(outDir) +
-			". Then send the supplement as the same session's follow-up prompt:\n  " + resumeCmd}
-	}
-	return SteerReport{Why: why, Next: "send the supplement as the same session's follow-up prompt:\n  " + resumeCmd}
-}
-
-// SteerTerminalNotOK reports a finished non-ok turn without prescribing a
-// resume: whether that session may continue is the job's own recovery
-// decision, which follows from its prompt state and is printed by collect.
-func SteerTerminalNotOK(status, outDir string) SteerReport {
-	return SteerReport{
-		Why: "this job is already terminal (status " + status + "), so there is no running turn to reach",
-		Next: "whether its session may continue is that job's own recovery decision. Collect it and follow its " +
-			"next line, giving this supplement to any follow-up command it prints: " + CollectCommand(outDir),
-	}
-}
-
-// SteerGroup redirects a steer aimed at a fan-out directory: members hold
-// independent sessions, so the supplement goes to one member — or to all of
-// them as a new round once the set is finished.
-func SteerGroup(memberCmds []string, fanResumeCmd string) SteerReport {
-	return SteerReport{
-		Why: "this is a fan-out, and its members hold independent sessions that can be in different states",
-		Next: "steer one member:\n  " + strings.Join(memberCmds, "\n  ") +
-			"\nOr send the supplement to every member as one new round once the fan-out is finished:\n  " + fanResumeCmd,
-	}
 }

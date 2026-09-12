@@ -5,9 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
-
-	"github.com/qiushiyan/envoy/internal/text"
 )
 
 // ExitPartial reports a fan-out where some members returned a result and
@@ -79,7 +76,6 @@ type Group struct {
 	TimeoutMin    float64       `json:"timeoutMin"`
 	GitBaseline   *string       `json:"gitBaseline"`
 	OutDir        string        `json:"outDir"`
-	WatchCommand  string        `json:"watchCommand"`
 	SupervisorPid int           `json:"supervisorPid"`
 	ResumedFrom   *string       `json:"resumedFrom,omitempty"` // the fan-out whose sessions this one continues
 	Members       []GroupMember `json:"members"`
@@ -129,19 +125,6 @@ func (g GroupWorkspace) PromptPath() string { return filepath.Join(g.Dir, "promp
 // Member is the job workspace of one named member.
 func (g GroupWorkspace) Member(name string) Workspace {
 	return Workspace{Dir: filepath.Join(g.Dir, name)}
-}
-
-// WatchCommand tails every member's progress at once. Observation only — a
-// quiet log never means finished. Each member's path is spelled out and
-// quoted rather than globbed: the command is handed to a caller's shell
-// verbatim, and a glob inside quotes never expands.
-func (g GroupWorkspace) WatchCommand(members []GroupMember) string {
-	parts := make([]string, 0, len(members)+1)
-	parts = append(parts, "tail -f")
-	for _, m := range members {
-		parts = append(parts, text.ShellQuote(Workspace{Dir: m.OutDir}.ProgressLogPath()))
-	}
-	return strings.Join(parts, " ")
 }
 
 // Prepare copies the shared prompt into the fan-out directory, so the group

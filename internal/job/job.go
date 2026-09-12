@@ -17,7 +17,6 @@ import (
 	"uuid"
 
 	"github.com/qiushiyan/envoy/internal/gitx"
-	"github.com/qiushiyan/envoy/internal/text"
 )
 
 // Exit codes are part of the caller interface; see ENGINE contract.
@@ -151,47 +150,10 @@ func ProjectSlug(cwd string) string {
 	return base + "-" + hex.EncodeToString(sum[:4])
 }
 
-// DefaultBase is where a project's jobs land when --out-dir is not given.
-// Storage is always central — never inside the project tree — and callers
-// are not expected to construct this path: the dispatch coordinate block
-// carries the out-dir, and collect/pending re-derive the base from cwd.
+// DefaultBase is where a project's named jobs live: central, never inside
+// the project tree. A bare job name resolves under it (see ResolveRef).
 func DefaultBase(cwd string) string {
 	return filepath.Join(StateDir(), "jobs", ProjectSlug(cwd))
-}
-
-// ResolveOutDir creates and returns the job directory for a new turn.
-func ResolveOutDir(explicit, cwd, label, provider string, now time.Time) (string, error) {
-	if explicit != "" {
-		return explicit, os.MkdirAll(explicit, 0o755)
-	}
-	base := DefaultBase(cwd)
-	if err := os.MkdirAll(base, 0o755); err != nil {
-		return "", err
-	}
-	stamp := now.Format("20060102-150405")
-	slugSrc := label
-	if slugSrc == "" {
-		slugSrc = provider
-	}
-	slug := slugUnsafe.ReplaceAllString(strings.ToLower(slugSrc), "-")
-	if len(slug) > 40 {
-		slug = slug[:40]
-	}
-	// os.Mkdir, not MkdirAll: MkdirAll succeeds on a directory that already
-	// exists, so two turns dispatched in the same second with the same label
-	// would silently share one dir and overwrite each other's artifacts. Mkdir
-	// makes creation the collision check, with no stat-then-create window.
-	dir := filepath.Join(base, stamp+"-"+slug)
-	if err := os.Mkdir(dir, 0o755); err == nil || !os.IsExist(err) {
-		return dir, err
-	}
-	for range 4 {
-		suffixed := dir + "-" + RandomHex(2)
-		if err := os.Mkdir(suffixed, 0o755); err == nil || !os.IsExist(err) {
-			return suffixed, err
-		}
-	}
-	return "", fmt.Errorf("cannot create a unique job dir near %s", dir)
 }
 
 // Workspace is one job directory and the fixed names inside it.
@@ -206,12 +168,6 @@ func (w Workspace) RawLogPath() string      { return filepath.Join(w.Dir, "raw.l
 func (w Workspace) StderrLogPath() string   { return filepath.Join(w.Dir, "stderr.log") }
 func (w Workspace) ProgressLogPath() string { return filepath.Join(w.Dir, "progress.log") }
 func (w Workspace) LastMessagePath() string { return filepath.Join(w.Dir, "last-message.txt") }
-
-// WatchCommand is the optional live view offered to the caller. Observation
-// only — never a completion signal.
-func (w Workspace) WatchCommand() string {
-	return fmt.Sprintf("tail -f %s %s", text.ShellQuote(w.ProgressLogPath()), text.ShellQuote(w.RawLogPath()))
-}
 
 // Prepare copies the dispatched prompt in and truncates the log files, so a
 // crashed job still leaves a complete, self-describing directory.

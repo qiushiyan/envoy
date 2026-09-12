@@ -72,31 +72,43 @@ func TestTimedOutCarriesTheStreamItObserved(t *testing.T) {
 // a follow-up that silently drops --allow-write turns a write turn read-only,
 // and one without --cwd runs against whatever tree the caller happens to be in.
 func TestResumeCommandCarriesDispatchSettings(t *testing.T) {
-	got := Turn{
+	turn := Turn{
+		Dir:        "/jobs/proj/delegate-r1",
 		Provider:   "codex",
 		SessionID:  "tid-1",
 		Cwd:        "/repo",
 		Model:      "gpt-5.3",
 		Effort:     "xhigh",
 		AllowWrite: true,
+		Baseline:   "abc123",
+		PromptFile: "/jobs/proj/delegate-r1/prompt.md",
 		TimeoutMin: 180,
-	}.ResumeCommand()
-
-	for _, want := range []string{
-		"envoy turn", "--provider codex", "--resume tid-1", "--model gpt-5.3",
-		"--effort xhigh", "--allow-write", "--cwd '/repo'", "--timeout-min 180",
-		"--prompt-file <your-follow-up.md>",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("resume command %q is missing %q", got, want)
-		}
 	}
-	if (Turn{Provider: "claude"}).ResumeCommand() != "" {
+	// A continuation names the job, never the session: the records carry the
+	// provider, session, model, effort, tree and write intent, so the command
+	// spells only what the caller must still choose — a new name, a new prompt.
+	if got, want := turn.ResumeCommand(), "envoy run <new-job-name> --with @'/jobs/proj/delegate-r1' --timeout-min 180 --prompt-file <your-follow-up.md>"; got != want {
+		t.Fatalf("resume command = %q, want %q", got, want)
+	}
+	if (Turn{Provider: "claude", Dir: "/jobs/x"}).ResumeCommand() != "" {
 		t.Fatal("no session id means no resume command")
 	}
-	// An omitted model must stay omitted — the engine never fills one in.
-	if cmd := (Turn{Provider: "claude", SessionID: "s1", TimeoutMin: 30}).ResumeCommand(); strings.Contains(cmd, "--model") {
-		t.Fatalf("resume command invented a model: %q", cmd)
+	// A re-dispatch is a fresh conversation, so it spells the voice and every
+	// setting the records held — and never invents a model that was omitted.
+	got := turn.RedispatchCommand()
+	for _, want := range []string{
+		"envoy run <new-job-name>", "--with codex:gpt-5.3:xhigh", "--prompt-file '/jobs/proj/delegate-r1/prompt.md'",
+		"--allow-write", "--baseline abc123", "--cwd '/repo'", "--timeout-min 180",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("redispatch command %q is missing %q", got, want)
+		}
+	}
+	if cmd := (Turn{Provider: "claude", PromptFile: "/p.md", TimeoutMin: 30}).RedispatchCommand(); !strings.Contains(cmd, "--with claude ") {
+		t.Fatalf("redispatch command invented a model: %q", cmd)
+	}
+	if got := Voice("codex", "", "high"); got != "codex::high" {
+		t.Fatalf("effort without a model = %q, want the empty model slot kept", got)
 	}
 }
 
@@ -104,23 +116,28 @@ func TestResumeCommandCarriesDispatchSettings(t *testing.T) {
 // "unknown" may offer the resume path: prescribing resume after a provider
 // that never started sends the caller down a session that does not exist.
 func TestRecoveryCoversEveryPromptState(t *testing.T) {
-	const resume = "envoy turn --provider claude --resume s1 --timeout-min 30 --prompt-file <your-follow-up.md>"
+	const resume = "envoy run <new-job-name> --with @'/jobs/j1' --timeout-min 30 --prompt-file <your-follow-up.md>"
+	const redispatch = "envoy run <new-job-name> --with claude --prompt-file '/jobs/j1/prompt.md' --timeout-min 30"
 	cases := []struct {
-		state       string
-		wantResume  bool
-		wantPhrases []string
+		state          string
+		wantResume     bool
+		wantRedispatch bool
+		wantPhrases    []string
 	}{
-		{job.PromptAccepted, true, []string{"accepted this prompt", "would repeat work"}},
-		{job.PromptNotStarted, false, []string{"never started", "Re-run the identical command once"}},
-		{job.PromptUnknown, true, []string{"unproven", "silence is not proof"}},
+		{job.PromptAccepted, true, false, []string{"accepted this prompt", "would repeat work"}},
+		{job.PromptNotStarted, false, true, []string{"never started", "new job name", "this name is now taken"}},
+		{job.PromptUnknown, true, false, []string{"unproven", "silence is not proof"}},
 	}
 	for _, c := range cases {
-		got := Recovery(c.state, resume, "")
+		got := Recovery(c.state, resume, redispatch, "")
 		if strings.TrimSpace(got) == "" {
 			t.Fatalf("%s: no prescription", c.state)
 		}
 		if strings.Contains(got, resume) != c.wantResume {
 			t.Fatalf("%s: resume offered = %v, want %v\n%s", c.state, !c.wantResume, c.wantResume, got)
+		}
+		if strings.Contains(got, redispatch) != c.wantRedispatch {
+			t.Fatalf("%s: redispatch offered = %v, want %v\n%s", c.state, !c.wantRedispatch, c.wantRedispatch, got)
 		}
 		for _, phrase := range c.wantPhrases {
 			if !strings.Contains(got, phrase) {
@@ -130,11 +147,11 @@ func TestRecoveryCoversEveryPromptState(t *testing.T) {
 	}
 
 	// A cause-specific fix rides along with the prescription.
-	if got := Recovery(job.PromptAccepted, resume, "Raise the budget cap first."); !strings.Contains(got, "Raise the budget cap first.") {
+	if got := Recovery(job.PromptAccepted, resume, redispatch, "Raise the budget cap first."); !strings.Contains(got, "Raise the budget cap first.") {
 		t.Fatalf("remedy dropped: %s", got)
 	}
 	// Without a session, the prescriptions stay honest about what is possible.
-	if got := Recovery(job.PromptUnknown, "", ""); strings.Contains(got, "envoy turn") {
+	if got := Recovery(job.PromptUnknown, "", "", ""); strings.Contains(got, "envoy run") {
 		t.Fatalf("no session must mean no resume command: %s", got)
 	}
 }
@@ -208,32 +225,13 @@ func TestFanNextPrescribesPerMemberRecovery(t *testing.T) {
 // The filled command is rendered from the turn's structured fields, never by
 // editing the placeholder out of a finished string — so a dispatched path that
 // happens to contain the placeholder text cannot collide with the slot.
-func TestResumeCommandWith(t *testing.T) {
-	turn := Turn{Provider: "codex", SessionID: "s1", Cwd: "/tmp/<your-follow-up.md>/repo", TimeoutMin: 30}
-	got := turn.ResumeCommandWith("/tmp/supp file.md")
-	if !strings.Contains(got, "--cwd '/tmp/<your-follow-up.md>/repo'") {
-		t.Fatalf("cwd corrupted: %q", got)
-	}
-	if !strings.Contains(got, "--prompt-file '/tmp/supp file.md'") {
-		t.Fatalf("prompt slot not filled or unquoted: %q", got)
-	}
-	if (Turn{Provider: "codex"}).ResumeCommandWith("/tmp/s.md") != "" {
-		t.Fatal("no session id means no follow-up command, filled or not")
-	}
-	round := FanResumeCommandWith("/jobs/<your-follow-up.md>", 30, "/tmp/s.md")
-	if !strings.Contains(round, "--resume-from '/jobs/<your-follow-up.md>'") ||
-		!strings.Contains(round, "--prompt-file '/tmp/s.md'") {
-		t.Fatalf("fan round rendered wrong: %q", round)
-	}
-}
-
-// Every refusal of a job-dir continuation must carry a runnable next step —
-// the reader is an agent whose next move is a command, not a diagnosis — and
-// may prescribe only what the blocker actually observed: a running job gets
+// Every refusal of a continuation must carry a runnable next step — the
+// reader is an agent whose next move is a command, not a diagnosis — and may
+// prescribe only what the blocker actually observed: a running job gets
 // "wait", never a resume beside a possibly live turn.
-func TestResumeFromVocabulary(t *testing.T) {
-	if got := TurnResumeFromCommand("/jobs/consult"); got != "envoy turn --resume-from '/jobs/consult' --prompt-file <your-follow-up.md>" {
-		t.Fatalf("TurnResumeFromCommand = %q", got)
+func TestContinueVocabulary(t *testing.T) {
+	if got, want := ContinueCommand("/jobs/consult", 30), "envoy run <new-job-name> --with @'/jobs/consult' --timeout-min 30 --prompt-file <your-follow-up.md>"; got != want {
+		t.Fatalf("ContinueCommand = %q, want %q", got, want)
 	}
 
 	blocked := map[ResumeBlockerKind][]string{
@@ -242,117 +240,43 @@ func TestResumeFromVocabulary(t *testing.T) {
 		BlockerNoSession:    {"never published a session id", "no conversation to continue", "fresh dispatch"},
 	}
 	for kind, wants := range blocked {
-		got := ResumeFromBlocked("--resume-from", "/jobs/j1", kind)
-		for _, want := range append(wants, "--resume-from /jobs/j1", "envoy collect '/jobs/j1'") {
+		got := ContinueBlocked("/jobs/j1", kind)
+		for _, want := range append(wants, "--with @/jobs/j1", "envoy collect '/jobs/j1'") {
 			if !strings.Contains(got, want) {
 				t.Fatalf("%s: %q is missing %q", kind, got, want)
 			}
 		}
 	}
 
+	// A fan-out reference beside other voices: copy-ready member voices for
+	// the eligible members only, and the blocked one named as an observation.
 	members := []FanMemberCandidate{
 		{Name: "codex", Dir: "/jobs/fan/codex"},
 		{Name: "claude-opus", Dir: "/jobs/fan/claude-opus", Blocked: true, Kind: BlockerRunning},
 	}
-	round := "envoy fan --resume-from '/jobs/fan' --timeout-min 30 --prompt-file <your-follow-up.md>"
-	fanned := ResumeFromIsFanOut("/jobs/fan", members, round)
-	for _, want := range []string{"this is a fan-out", "envoy fan --resume-from '/jobs/fan'", "one member's directory",
-		"envoy turn --resume-from '/jobs/fan/codex'", "member claude-opus is still running"} {
-		if !strings.Contains(fanned, want) {
-			t.Fatalf("fan redirect %q is missing %q", fanned, want)
+	mixed := GroupRefMustStandAlone("/jobs/fan", members)
+	for _, want := range []string{"names a fan-out", "stands alone", "--with @'/jobs/fan/codex'  (codex)", "member claude-opus is still running"} {
+		if !strings.Contains(mixed, want) {
+			t.Fatalf("group-ref refusal %q is missing %q", mixed, want)
 		}
 	}
-	// --with-from seats one voice warm: copy-ready member flags, the eligible
-	// member only, and the whole-set round demoted to a parenthetical — it
-	// continues every member warm and starts no cold member.
-	warm := WithFromIsFanOut("/jobs/fan", members, round)
-	for _, want := range []string{"--with-from '/jobs/fan/codex'  (codex)", "member claude-opus is still running", "no cold member"} {
-		if !strings.Contains(warm, want) {
-			t.Fatalf("with-from redirect %q is missing %q", warm, want)
-		}
-	}
-	if strings.Contains(warm, "--with-from '/jobs/fan/claude-opus'") || strings.Index(warm, "--with-from '/jobs/fan/codex'") > strings.Index(warm, round) {
-		t.Fatalf("with-from redirect must offer only eligible members, before the round: %q", warm)
+	if strings.Contains(mixed, "--with @'/jobs/fan/claude-opus'") {
+		t.Fatalf("group-ref refusal must offer only eligible members: %q", mixed)
 	}
 
-	single := FanSingleWithFrom("/jobs/consult")
-	if !strings.Contains(single, "envoy turn --resume-from '/jobs/consult' --prompt-file <your-follow-up.md>") {
-		t.Fatalf("single with-from must hand over the runnable turn form: %q", single)
-	}
-
-	dup := FanWithFromDuplicateSession("s1", "/jobs/a", "/jobs/b")
+	dup := DuplicateConversation("s1", "/jobs/a", "/jobs/b")
 	for _, want := range []string{"same conversation twice", "session s1", "/jobs/a", "/jobs/b", "one live turn at a time"} {
 		if !strings.Contains(dup, want) {
 			t.Fatalf("duplicate-session refusal %q is missing %q", dup, want)
 		}
 	}
-}
 
-// Steer's whole vocabulary answers one question — can a supplement still reach
-// this job? — and the honest answer is always no. Each wording must say why in
-// the provider's own terms and hand over a runnable continuation, and the
-// non-ok terminal wording must never prescribe a resume the job's recovery has
-// not licensed.
-func TestSteerVocabulary(t *testing.T) {
-	const filled = "envoy turn --provider claude --resume s1 --timeout-min 30 --prompt-file '/tmp/supp.md'"
-
-	live := SteerLive("claude", filled, "/jobs/j1")
-	if !strings.Contains(live.Why, "claude takes no input into a turn in flight") ||
-		!strings.Contains(live.Why, "queue the supplement as a second turn") {
-		t.Fatalf("claude live why = %q", live.Why)
+	// A taken name is refused with the way to read what holds it, and a
+	// write conversation is kept whole by continuing alone.
+	if got := JobExists("/jobs/r1"); !strings.Contains(got, "already exists") || !strings.Contains(got, "envoy collect '/jobs/r1'") {
+		t.Fatalf("JobExists = %q", got)
 	}
-	if !strings.Contains(live.Next, filled) {
-		t.Fatalf("claude live next must hand over the filled command: %q", live.Next)
-	}
-
-	codexLive := SteerLive("codex", filled, "/jobs/j1")
-	if !strings.Contains(codexLive.Why, "codex takes no input after dispatch") {
-		t.Fatalf("codex live why = %q", codexLive.Why)
-	}
-
-	// No session yet: nothing runnable exists, and inventing one is forbidden —
-	// the caller is pointed at collect, which prints the command once it exists.
-	noSession := SteerLive("codex", "", "/jobs/j1")
-	if strings.Contains(noSession.Next, "envoy turn") {
-		t.Fatalf("no session must mean no resume command: %q", noSession.Next)
-	}
-	if !strings.Contains(noSession.Next, "envoy collect '/jobs/j1'") {
-		t.Fatalf("no-session next must point at collect: %q", noSession.Next)
-	}
-
-	stale := SteerStale("abandoned", "/jobs/j1")
-	if !strings.Contains(stale.Why, "runner process is gone (abandoned)") ||
-		!strings.Contains(stale.Next, "envoy collect '/jobs/j1'") {
-		t.Fatalf("stale = %+v", stale)
-	}
-
-	okFresh := SteerTerminalOK(filled, "/jobs/j1", false)
-	if !strings.Contains(okFresh.Next, "read the result first") || !strings.Contains(okFresh.Next, filled) {
-		t.Fatalf("uncollected ok next = %q", okFresh.Next)
-	}
-	okCollected := SteerTerminalOK(filled, "/jobs/j1", true)
-	if strings.Contains(okCollected.Next, "read the result first") || !strings.Contains(okCollected.Next, filled) {
-		t.Fatalf("collected ok next = %q", okCollected.Next)
-	}
-
-	failed := SteerTerminalNotOK(job.StatusFailed, "/jobs/j1")
-	if strings.Contains(failed.Next, "envoy turn") {
-		t.Fatalf("a non-ok terminal steer must not prescribe a resume: %q", failed.Next)
-	}
-	if !strings.Contains(failed.Why, "status failed") || !strings.Contains(failed.Next, "envoy collect '/jobs/j1'") {
-		t.Fatalf("failed = %+v", failed)
-	}
-
-	group := SteerGroup(
-		[]string{SteerCommand("/tmp/supp.md", "/jobs/fan/codex"), SteerCommand("/tmp/supp.md", "/jobs/fan/claude")},
-		"envoy fan --resume-from '/jobs/fan' --timeout-min 30 --prompt-file '/tmp/supp.md'")
-	for _, want := range []string{
-		"envoy steer --prompt-file '/tmp/supp.md' '/jobs/fan/codex'",
-		"envoy steer --prompt-file '/tmp/supp.md' '/jobs/fan/claude'",
-		"envoy fan --resume-from '/jobs/fan'",
-	} {
-		if !strings.Contains(group.Next, want) {
-			t.Fatalf("group next missing %q:\n%s", want, group.Next)
-		}
+	if got := WriteSourceInRoster("/jobs/w", 60); !strings.Contains(got, "--allow-write") || !strings.Contains(got, ContinueCommand("/jobs/w", 60)) {
+		t.Fatalf("WriteSourceInRoster = %q", got)
 	}
 }

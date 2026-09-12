@@ -1,6 +1,7 @@
 package job
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,76 +38,87 @@ func TestWriteFileAtomic(t *testing.T) {
 	}
 }
 
-func TestResolveOutDirIsAlwaysCentral(t *testing.T) {
+// A bare name is an address in the invoking project's central store; a path
+// is taken as given; and nothing is ever written inside the project tree.
+func TestResolveRefNamesLandInTheCentralStore(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	repo := t.TempDir()
 	run(t, repo, "git", "init", "-q")
 	subdir := filepath.Join(repo, "pkg", "inner")
 	os.MkdirAll(subdir, 0o755)
-	now := time.Date(2026, 7, 25, 11, 0, 0, 0, time.Local)
 
-	dir, err := ResolveOutDir("", repo, "My Label!", "codex", now)
+	dir, err := ResolveRef("review-r1", repo)
 	if err != nil {
 		t.Fatal(err)
 	}
 	jobsRoot := filepath.Join(home, ".local", "state", "envoy", "jobs")
-	if filepath.Dir(filepath.Dir(dir)) != jobsRoot {
-		t.Fatalf("dir = %q, want under %q/<slug>", dir, jobsRoot)
+	if filepath.Dir(filepath.Dir(dir)) != jobsRoot || filepath.Base(dir) != "review-r1" {
+		t.Fatalf("dir = %q, want %q/<project>/review-r1", dir, jobsRoot)
 	}
-	if !strings.HasPrefix(filepath.Base(dir), "20260725-110000-my-label") {
-		t.Fatalf("dir name = %q", filepath.Base(dir))
+	// The name round-trips exactly: no lowercasing, no slugging.
+	if d, _ := ResolveRef("Review.R1_x", repo); filepath.Base(d) != "Review.R1_x" {
+		t.Fatalf("name was rewritten: %q", d)
 	}
-	// Nothing may be written inside the project tree.
+	// A subdirectory dispatch belongs to the same project store.
+	if sub, _ := ResolveRef("review-r1", subdir); sub != dir {
+		t.Fatalf("subdir resolves %q, want %q", sub, dir)
+	}
+	// A path is a path.
+	if p, _ := ResolveRef("./jobs/x", repo); !filepath.IsAbs(p) || filepath.Base(p) != "x" {
+		t.Fatalf("path ref = %q", p)
+	}
+	for _, bad := range []string{"", "-lead", "a b", "a/b/../c!"} {
+		if IsPath(bad) {
+			continue
+		}
+		if _, err := ResolveRef(bad, repo); err == nil {
+			t.Fatalf("ResolveRef(%q) must refuse", bad)
+		}
+	}
 	if _, err := os.Stat(filepath.Join(repo, ".envoy")); !os.IsNotExist(err) {
 		t.Fatal("central storage must not create dirs inside the repo")
 	}
-
-	// A subdirectory dispatch belongs to the same project store.
-	if DefaultBase(subdir) != DefaultBase(repo) {
-		t.Fatalf("subdir base %q must equal repo base %q", DefaultBase(subdir), DefaultBase(repo))
-	}
-
-	// A same-second collision must uniquify, not reuse.
-	dir2, err := ResolveOutDir("", repo, "My Label!", "codex", now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if dir2 == dir {
-		t.Fatal("colliding stamps must not share a dir")
-	}
 }
 
-// Two turns dispatched in the same second with the same label must never share
-// a job dir: sharing one means both runners overwrite the same meta.json and
-// result.md, and one turn's artifacts are lost. Creation itself has to be the
-// collision check — a stat-then-create window loses this race.
-func TestResolveOutDirConcurrentSameSecondDispatches(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	cwd := t.TempDir()
-	now := time.Date(2026, 7, 27, 10, 7, 40, 0, time.Local)
+// A name is used once. Reserving it twice — from two dispatches racing for
+// the same name, or one re-run — must succeed exactly once, and creation
+// itself is the check: a stat-then-create window loses this race.
+func TestReserveIsAtomicAndRefusesAnExistingName(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "proj", "review-r1")
 
 	const n = 8
-	dirs := make([]string, n)
 	errs := make([]error, n)
 	var wg sync.WaitGroup
 	for i := range n {
-		wg.Go(func() {
-			dirs[i], errs[i] = ResolveOutDir("", cwd, "review-r2", "codex", now)
-		})
+		wg.Go(func() { errs[i] = Reserve(dir) })
 	}
 	wg.Wait()
-
-	seen := make(map[string]bool, n)
+	won := 0
 	for i := range n {
-		if errs[i] != nil {
-			t.Fatalf("dispatch %d: %v", i, errs[i])
+		switch {
+		case errs[i] == nil:
+			won++
+		case !errors.Is(errs[i], ErrJobExists):
+			t.Fatalf("reserve %d: %v", i, errs[i])
 		}
-		if seen[dirs[i]] {
-			t.Fatalf("two dispatches share %s", dirs[i])
-		}
-		seen[dirs[i]] = true
+	}
+	if won != 1 {
+		t.Fatalf("%d reservations won, want exactly 1", won)
+	}
+	if err := Reserve(dir); !errors.Is(err, ErrJobExists) {
+		t.Fatalf("second reservation = %v, want ErrJobExists", err)
+	}
+	// A refusal before anything ran gives the name back; content keeps it.
+	Unreserve(dir)
+	if err := Reserve(dir); err != nil {
+		t.Fatalf("after Unreserve: %v", err)
+	}
+	os.WriteFile(filepath.Join(dir, "meta.json"), []byte("{}"), 0o644)
+	Unreserve(dir)
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatal("Unreserve must not remove a directory with content")
 	}
 }
 

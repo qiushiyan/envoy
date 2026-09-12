@@ -180,7 +180,7 @@ func (r *run) onChildDone(exit exitResult) {
 			status: job.StatusInfra,
 			errorText: fmt.Sprintf("%s was killed by signal %s, which envoy did not send.",
 				r.opts.Provider, *exit.signal),
-			recovery:            prose.Recovery(promptState, r.resumeCommand(), ""),
+			recovery:            prose.Recovery(promptState, r.resumeCommand(), r.redispatchCommand(), ""),
 			partial:             ev.Partial,
 			tokens:              ev.Tokens,
 			costUSD:             ev.CostUSD,
@@ -210,7 +210,7 @@ func (r *run) onChildDone(exit exitResult) {
 		if promptState == "" {
 			promptState = r.meta.PromptState
 		}
-		recovery = prose.Recovery(promptState, r.resumeCommand(), outcome.Remedy)
+		recovery = prose.Recovery(promptState, r.resumeCommand(), r.redispatchCommand(), outcome.Remedy)
 	}
 	r.finish(finishArgs{
 		status:              outcome.Status,
@@ -258,7 +258,7 @@ func (r *run) finishAfterStop(exit exitResult) {
 	r.finish(finishArgs{
 		status:              status,
 		errorText:           stopped,
-		recovery:            prose.Recovery(promptState, r.resumeCommand(), ""),
+		recovery:            prose.Recovery(promptState, r.resumeCommand(), r.redispatchCommand(), ""),
 		partial:             ev.Partial,
 		tokens:              ev.Tokens,
 		costUSD:             ev.CostUSD,

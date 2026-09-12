@@ -287,13 +287,6 @@ func (c *claude) Conclude(exit ExitInfo) Outcome {
 // envelope's own error text, and no classification of them has been built.
 func (c *claude) ObservesConnectionErrors() bool { return false }
 
-func (c *claude) Takeover() string {
-	if c.sessionID == "" {
-		return ""
-	}
-	return "claude --resume " + c.sessionID
-}
-
 // ---------- result envelope parsing ----------
 
 type claudeParse struct {

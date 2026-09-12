@@ -1,7 +1,7 @@
-// Package envoy runs one headless AI-session turn (claude or codex) as a
-// background-friendly job and returns it as durable data: result.md is the
-// return value, meta.json the coordinates and recovery state, progress.log the
-// live semantic view.
+// Package envoy runs headless AI-session turns (claude or codex) as named,
+// background-friendly jobs and returns them as durable data: result.md is the
+// return value, meta.json the coordinates and recovery state, progress.log
+// the live semantic view.
 //
 // This package is the embeddable facade over the engine; cmd/envoy is the CLI
 // skin. Functions return process exit codes and write agent-facing text to the
@@ -9,6 +9,7 @@
 package envoy
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -25,10 +26,10 @@ import (
 )
 
 // Version of the engine, reported by `envoy version`.
-const Version = "0.5.0"
+const Version = "0.6.0"
 
 // Exit codes: 0 ok · 1 provider failure · 2 infra · 3 usage · 4 timeout ·
-// 5 interrupted · 6 partial (fan-out only).
+// 5 interrupted · 6 partial (several voices only).
 const (
 	ExitOK          = job.ExitOK
 	ExitFailed      = job.ExitFailed
@@ -39,39 +40,33 @@ const (
 	ExitPartial     = job.ExitPartial
 )
 
-// TurnRequest describes one turn. Zero values mean "provider default" for
-// Model/Effort, a fresh session for Resume, the current directory for Cwd,
-// a derived job dir for OutDir — and the engine's 30-minute safety cap for
-// TimeoutMin. Running uncapped requires saying so with NoTimeout: the
-// dangerous state must not be the zero value.
+// RunRequest describes one job: a caller-chosen name (or directory), one
+// prompt, and one voice per turn. With holds each voice as the caller spells
+// it — provider[:model[:effort]] for a cold session, or @<job> to continue a
+// finished job's conversation (a fan-out reference continues every member and
+// must be the only voice). One voice runs as a single turn in the job
+// directory itself; several run as a fan-out with a member directory each.
 //
-// ResumeFrom instead names a finished job whose session this turn continues:
-// the provider, session, and — unless set here explicitly — model, effort,
-// write intent, cwd, and baseline all come from that job's own records, so a
-// later phase can build on an earlier one without hand-carrying a session id
-// that may already be stale. Provider and Resume must be empty with it; the
-// timeout stays this request's own, because the cap is phase policy, not a
-// property of the conversation.
-type TurnRequest struct {
-	Provider     string
-	PromptFile   string
-	Model        string
-	Effort       string
-	Resume       string
-	ResumeFrom   string
-	Baseline     string
-	AllowWrite   bool
-	Cwd          string
-	OutDir       string
-	TimeoutMin   float64 // hard wall-clock cap in minutes; 0 = the 30-minute default
-	NoTimeout    bool    // explicitly disable the cap (leave TimeoutMin zero)
+// Zero values mean the current directory for Cwd and the engine's 30-minute
+// safety cap for TimeoutMin. Running uncapped requires saying so with
+// NoTimeout: the dangerous state must not be the zero value. A continued
+// voice inherits its provider, session, model, effort, cwd, baseline and
+// write intent from the job's own records; explicit Cwd and Baseline win, and
+// AllowWrite may only widen a single continued voice, never narrow it.
+type RunRequest struct {
+	Job        string
+	With       []string
+	PromptFile string
+	Baseline   string
+	AllowWrite bool
+	Cwd        string
+	TimeoutMin float64 // hard wall-clock cap in minutes; 0 = the 30-minute default
+	NoTimeout  bool    // explicitly disable the cap (leave TimeoutMin zero)
+	// MaxBudgetUSD caps one claude voice's spend — the safety a program
+	// dispatching unattended turns needs; nil = no cap.
 	MaxBudgetUSD *float64
-	Label        string
-	// CoordinateFile receives the startup block a background dispatch's
-	// stdout cannot show the caller; "" writes none.
-	CoordinateFile string
 
-	Stdout io.Writer // coordinate blocks; defaults to os.Stdout
+	Stdout io.Writer // dispatch and terminal blocks; defaults to os.Stdout
 	Stderr io.Writer // errors and warnings; defaults to os.Stderr
 }
 
@@ -80,20 +75,20 @@ const defaultTimeoutMin = 30
 
 // resolveTimeout maps the request's (TimeoutMin, NoTimeout) pair onto the
 // runner's single value, where 0 means "no cap".
-func resolveTimeout(req TurnRequest) (float64, error) {
-	if math.IsNaN(req.TimeoutMin) || math.IsInf(req.TimeoutMin, 0) || req.TimeoutMin < 0 {
+func resolveTimeout(timeoutMin float64, noTimeout bool) (float64, error) {
+	if math.IsNaN(timeoutMin) || math.IsInf(timeoutMin, 0) || timeoutMin < 0 {
 		return 0, fmt.Errorf("--timeout-min must be a number >= 0 (0 = no cap)")
 	}
-	if req.NoTimeout {
-		if req.TimeoutMin != 0 {
+	if noTimeout {
+		if timeoutMin != 0 {
 			return 0, fmt.Errorf("NoTimeout and a non-zero TimeoutMin are mutually exclusive")
 		}
 		return 0, nil
 	}
-	if req.TimeoutMin == 0 {
+	if timeoutMin == 0 {
 		return defaultTimeoutMin, nil
 	}
-	return req.TimeoutMin, nil
+	return timeoutMin, nil
 }
 
 // Efforts lists the effort values a provider accepts, so callers can render
@@ -105,54 +100,34 @@ func usageError(w io.Writer, format string, args ...any) int {
 	return ExitUsage
 }
 
-// Turn validates the request and runs one turn to terminal state.
-func Turn(req TurnRequest) int {
+// plan is a run request resolved into what dispatch needs: the members, the
+// tree and anchor they share, and the write intent — every refusal decided
+// before a directory is reserved or a session locked.
+type plan struct {
+	members    []fan.Member
+	cwd        string
+	baseline   string
+	allowWrite bool
+	// groupRef is the fan-out directory every member continues, "" when the
+	// roster was composed voice by voice.
+	groupRef string
+}
+
+// Run validates the request, reserves the job, and runs it to terminal state.
+func Run(req RunRequest) int {
 	stdout, stderr := defaultWriters(req.Stdout, req.Stderr)
 
-	resumedFrom := ""
-	if req.ResumeFrom != "" {
-		if req.Resume != "" {
-			return usageError(stderr, "%s", prose.ResumeFromAndResume())
-		}
-		if req.Provider != "" {
-			return usageError(stderr, "%s", prose.ResumeFromAndProvider())
-		}
-		source, errText := resumableTurn("--resume-from", absOrSelf(req.ResumeFrom))
-		if errText != "" {
-			return usageError(stderr, "%s", errText)
-		}
-		// The records supply what the caller left unsaid; explicit fields win.
-		// Write intent can only widen — the follow-up of a write turn must not
-		// silently go read-only.
-		req.Provider = source.Provider
-		req.Resume = source.Session
-		if req.Model == "" {
-			req.Model = source.Model
-		}
-		if req.Effort == "" {
-			req.Effort = source.Effort
-		}
-		if !req.AllowWrite {
-			req.AllowWrite = source.AllowWrite
-		}
-		if req.Cwd == "" {
-			req.Cwd = source.Cwd
-		}
-		if req.Baseline == "" {
-			req.Baseline = source.Baseline
-		}
-		resumedFrom = absOrSelf(req.ResumeFrom)
+	invocationCwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "envoy: cannot determine cwd: %s\n", err)
+		return ExitInfra
 	}
-
-	if req.Provider == "" {
-		return usageError(stderr, "--provider <claude|codex> is required")
+	dir, err := job.ResolveRef(req.Job, invocationCwd)
+	if err != nil {
+		return usageError(stderr, "%s", err)
 	}
-	if req.Provider != "claude" && req.Provider != "codex" {
-		if p, model, ok := strings.Cut(req.Provider, ":"); ok && (p == "claude" || p == "codex") {
-			// The fan member spec, aimed at a turn: teach the turn's own flags.
-			return usageError(stderr, "--provider must be claude or codex, got '%s'; on a turn the model is its own flag: --provider %s --model %s", req.Provider, p, strings.SplitN(model, ":", 2)[0])
-		}
-		return usageError(stderr, "--provider must be claude or codex, got '%s'", req.Provider)
+	if len(req.With) == 0 {
+		return usageError(stderr, "%s", prose.RunNeedsVoice())
 	}
 	if req.PromptFile == "" {
 		return usageError(stderr, "--prompt-file <path> is required")
@@ -160,314 +135,249 @@ func Turn(req TurnRequest) int {
 	if _, err := os.Stat(req.PromptFile); err != nil {
 		return usageError(stderr, "prompt file not found: %s", req.PromptFile)
 	}
-	cwd := req.Cwd
-	if cwd == "" {
-		var err error
-		if cwd, err = os.Getwd(); err != nil {
-			fmt.Fprintf(stderr, "envoy: cannot determine cwd: %s\n", err)
-			return ExitInfra
-		}
-	}
-	cwd = absOrSelf(cwd)
-	if info, err := os.Stat(cwd); err != nil || !info.IsDir() {
-		return usageError(stderr, "cwd not found: %s", cwd)
-	}
-	timeoutMin, err := resolveTimeout(req)
+	timeoutMin, err := resolveTimeout(req.TimeoutMin, req.NoTimeout)
 	if err != nil {
 		return usageError(stderr, "%s", err)
 	}
-	if err := provider.ValidateEffort(req.Provider, req.Effort); err != nil {
-		return usageError(stderr, "%s", err)
+
+	p, errText := resolvePlan(req, invocationCwd, timeoutMin)
+	if errText != "" {
+		return usageError(stderr, "%s", errText)
 	}
 	if req.MaxBudgetUSD != nil {
-		if req.Provider != "claude" {
-			return usageError(stderr, "--max-budget-usd exists only on claude; codex has no budget flag")
+		if len(p.members) != 1 || p.members[0].Provider != "claude" {
+			return usageError(stderr, "--max-budget-usd caps one claude voice; codex has no budget flag")
 		}
 		if math.IsNaN(*req.MaxBudgetUSD) || math.IsInf(*req.MaxBudgetUSD, 0) || *req.MaxBudgetUSD <= 0 {
 			return usageError(stderr, "--max-budget-usd must be a positive number")
 		}
 	}
-
-	outDir := req.OutDir
-	if outDir != "" {
-		outDir = absOrSelf(outDir)
-	}
-	coordinate, err := prepareCoordinateFile(req.CoordinateFile)
-	if err != nil {
-		return usageError(stderr, "%s", err)
-	}
-	return runner.Run(runner.Options{
-		Provider:       req.Provider,
-		PromptFile:     req.PromptFile,
-		Cwd:            cwd,
-		Baseline:       req.Baseline,
-		Label:          req.Label,
-		OutDir:         outDir,
-		ResumedFrom:    resumedFrom,
-		CoordinateFile: coordinate,
-		Turn: provider.Options{
-			Model:        req.Model,
-			Effort:       req.Effort,
-			Resume:       req.Resume,
-			AllowWrite:   req.AllowWrite,
-			TimeoutMin:   timeoutMin,
-			MaxBudgetUSD: req.MaxBudgetUSD,
-		},
-		Stdout: stdout,
-		Stderr: stderr,
-	}).ExitCode
-}
-
-// FanRequest describes one fan-out: the same prompt dispatched to several
-// turns, supervised as a single job. With holds one member spec per turn,
-// spelled provider[:model[:effort]] — the same form a caller types — so the
-// CLI and an embedding program get identical parsing and identical errors.
-// WithFrom adds members that continue finished jobs' sessions: each entry
-// names a job dir, and that member's provider, model, effort, and session
-// come from the job's own records — a warm voice beside With's cold ones.
-// ResumeFrom instead names a finished fan-out whose members this one
-// continues: the roster, each member's session, the working directory, and
-// the baseline all come from that fan-out's own records, and With and
-// WithFrom must be empty.
-//
-// Everything else is shared by every member. There is deliberately no write
-// intent and no bare session-id resume: members share one working tree, and a
-// single session id cannot name several conversations. TimeoutMin follows
-// TurnRequest — zero means the 30-minute cap.
-type FanRequest struct {
-	With       []string
-	WithFrom   []string
-	ResumeFrom string
-	PromptFile string
-	Baseline   string
-	Cwd        string
-	OutDir     string
-	TimeoutMin float64
-	NoTimeout  bool
-	Label      string
-	// CoordinateFile receives the dispatch block a background dispatch's
-	// stdout cannot show the caller; "" writes none.
-	CoordinateFile string
-
-	Stdout io.Writer
-	Stderr io.Writer
-}
-
-// Fan validates the request and runs every member to terminal state. It returns
-// when the last one is done: 0 when all of them returned a result, ExitPartial
-// when some did, otherwise the most dispatch-side of their failures.
-func Fan(req FanRequest) int {
-	stdout, stderr := defaultWriters(req.Stdout, req.Stderr)
-
-	var members []fan.Member
-	resumedFrom := ""
-	if req.ResumeFrom != "" {
-		if len(req.With) > 0 {
-			return usageError(stderr, "%s", prose.FanResumeFromAndWith())
-		}
-		if len(req.WithFrom) > 0 {
-			return usageError(stderr, "%s", prose.FanResumeFromAndWithFrom())
-		}
-		resumedFrom = absOrSelf(req.ResumeFrom)
-		resolved, group, errText := resumableMembers(resumedFrom)
-		if errText != "" {
-			return usageError(stderr, "%s", errText)
-		}
-		members = resolved
-		// A resumed conversation continues in the tree and against the anchor
-		// it was dispatched with; explicit flags still win.
-		if req.Cwd == "" {
-			req.Cwd = group.Cwd
-		}
-		if req.Baseline == "" && group.GitBaseline != nil {
-			req.Baseline = *group.GitBaseline
-		}
-	} else {
-		// Continued members are resolved before anything else — the
-		// two-member minimum included — so every refusal is about the job
-		// actually named: a lone --with-from that names no continuable turn
-		// reports that, never a redirect to a command that would fail the
-		// same way.
-		//
-		// Continued members come first in the roster: each names one
-		// finished job whose session becomes this member's conversation.
-		// One conversation, one member — a session admits a single live
-		// turn. A write-recorded source is refused outright: fan members
-		// are read-only, and silently narrowing the conversation's write
-		// intent is the exact drop the inheritance contract forbids. And
-		// unless --cwd/--baseline say otherwise, the continued
-		// conversations keep the tree and the anchor they were dispatched
-		// with — which therefore have to agree across sources.
-		members = make([]fan.Member, 0, len(req.With)+len(req.WithFrom))
-		sessionDirs := map[string]string{}
-		inheritedCwd, inheritedCwdDir := "", ""
-		inheritedBaseline, inheritedBaselineDir := "", ""
-		for _, raw := range req.WithFrom {
-			dir := absOrSelf(raw)
-			source, errText := resumableTurn("--with-from", dir)
-			if errText != "" {
-				return usageError(stderr, "%s", errText)
-			}
-			if source.AllowWrite {
-				return usageError(stderr, "%s", prose.FanWithFromWriteSource(dir))
-			}
-			if prev, dup := sessionDirs[source.Session]; dup {
-				return usageError(stderr, "%s", prose.FanWithFromDuplicateSession(source.Session, prev, dir))
-			}
-			sessionDirs[source.Session] = dir
-			if req.Cwd == "" {
-				if inheritedCwd == "" {
-					inheritedCwd, inheritedCwdDir = source.Cwd, dir
-				} else if source.Cwd != inheritedCwd {
-					return usageError(stderr, "%s", prose.FanWithFromCwdMix(inheritedCwdDir, inheritedCwd, dir, source.Cwd))
-				}
-			}
-			if req.Baseline == "" && source.Baseline != "" {
-				if inheritedBaseline == "" {
-					inheritedBaseline, inheritedBaselineDir = source.Baseline, dir
-				} else if source.Baseline != inheritedBaseline {
-					return usageError(stderr, "%s", prose.FanWithFromBaselineMix(inheritedBaselineDir, inheritedBaseline, dir, source.Baseline))
-				}
-			}
-			members = append(members, fan.Member{
-				Provider:    source.Provider,
-				Model:       source.Model,
-				Effort:      source.Effort,
-				Resume:      source.Session,
-				ResumedFrom: dir,
-			})
-		}
-		if req.Cwd == "" {
-			req.Cwd = inheritedCwd
-		}
-		if req.Baseline == "" {
-			req.Baseline = inheritedBaseline
-		}
-		if len(members)+len(req.With) < 2 {
-			if len(members) == 1 && len(req.With) == 0 {
-				return usageError(stderr, "%s", prose.FanSingleWithFrom(members[0].ResumedFrom))
-			}
-			return usageError(stderr,
-				"a fan-out needs at least two members: --with provider[:model[:effort]] per cold member, "+
-					"--with-from <job-dir> per member that continues a finished job's session. "+
-					"For one turn, use envoy turn")
-		}
-		for _, spec := range req.With {
-			m, err := parseMember(spec)
-			if err != nil {
-				return usageError(stderr, "%s", err)
-			}
-			members = append(members, m)
-		}
-	}
-	if req.PromptFile == "" {
-		return usageError(stderr, "--prompt-file <path> is required")
-	}
-	if _, err := os.Stat(req.PromptFile); err != nil {
-		return usageError(stderr, "prompt file not found: %s", req.PromptFile)
-	}
-	cwd := req.Cwd
+	cwd := p.cwd
 	if cwd == "" {
-		var err error
-		if cwd, err = os.Getwd(); err != nil {
-			fmt.Fprintf(stderr, "envoy: cannot determine cwd: %s\n", err)
-			return ExitInfra
-		}
+		cwd = invocationCwd
 	}
 	cwd = absOrSelf(cwd)
 	if info, err := os.Stat(cwd); err != nil || !info.IsDir() {
 		return usageError(stderr, "cwd not found: %s", cwd)
 	}
-	timeoutMin, err := resolveTimeout(TurnRequest{TimeoutMin: req.TimeoutMin, NoTimeout: req.NoTimeout})
-	if err != nil {
-		return usageError(stderr, "%s", err)
+
+	// The name is reserved last, after every refusal that needs no
+	// reservation, and released again on any refusal that happens before the
+	// job wrote its first record.
+	if err := job.Reserve(dir); err != nil {
+		if errors.Is(err, job.ErrJobExists) {
+			return usageError(stderr, "%s", prose.JobExists(dir))
+		}
+		fmt.Fprintf(stderr, "envoy: cannot create job dir: %s\n", err)
+		return ExitInfra
 	}
-	outDir := req.OutDir
-	if outDir != "" {
-		outDir = absOrSelf(outDir)
+	label := filepath.Base(dir)
+
+	if len(p.members) == 1 {
+		m := p.members[0]
+		code := runner.Run(runner.Options{
+			Provider:    m.Provider,
+			PromptFile:  req.PromptFile,
+			Cwd:         cwd,
+			Baseline:    p.baseline,
+			Label:       label,
+			OutDir:      dir,
+			ResumedFrom: m.ResumedFrom,
+			Turn: provider.Options{
+				Model:        m.Model,
+				Effort:       m.Effort,
+				Resume:       m.Resume,
+				AllowWrite:   p.allowWrite,
+				TimeoutMin:   timeoutMin,
+				MaxBudgetUSD: req.MaxBudgetUSD,
+			},
+			Stdout: stdout,
+			Stderr: stderr,
+		}).ExitCode
+		releaseIfUnstarted(dir, job.Workspace{Dir: dir}.MetaPath())
+		return code
 	}
-	coordinate, err := prepareCoordinateFile(req.CoordinateFile)
-	if err != nil {
-		return usageError(stderr, "%s", err)
-	}
-	return fan.Run(fan.Options{
-		Members:        members,
-		PromptFile:     req.PromptFile,
-		Cwd:            cwd,
-		Baseline:       req.Baseline,
-		Label:          req.Label,
-		OutDir:         outDir,
-		ResumedFrom:    resumedFrom,
-		TimeoutMin:     timeoutMin,
-		CoordinateFile: coordinate,
-		Stdout:         stdout,
-		Stderr:         stderr,
+	code := fan.Run(fan.Options{
+		Members:     p.members,
+		PromptFile:  req.PromptFile,
+		Cwd:         cwd,
+		Baseline:    p.baseline,
+		Label:       label,
+		OutDir:      dir,
+		ResumedFrom: p.groupRef,
+		TimeoutMin:  timeoutMin,
+		Stdout:      stdout,
+		Stderr:      stderr,
 	})
+	releaseIfUnstarted(dir, job.GroupWorkspace{Dir: dir}.GroupPath())
+	return code
 }
 
-// resumableTurn resolves a job dir named by --resume-from or --with-from into
-// the turn it may continue, through collect's typed inspection so the
-// dispatch decision and collect's own resume line can never disagree about
-// which jobs may continue. flag names the surface for the refusal wording;
-// errText is "" exactly when the turn is continuable.
-func resumableTurn(flag, dir string) (*collect.ResumableTurn, string) {
-	if job.IsGroupDir(dir) {
-		round := ""
-		var candidates []prose.FanMemberCandidate
-		if state, err := collect.InspectFanResume(dir); err == nil {
-			round = prose.FanResumeCommand(dir, state.Group.TimeoutMin)
-			// Members in roster order, each through the one eligibility
-			// definition, so the refusal never names a member dispatch refuses.
-			for _, m := range state.Group.Members {
-				c := prose.FanMemberCandidate{Name: m.Name, Dir: m.OutDir}
-				for _, b := range state.Blockers {
-					if b.Member == m.Name {
-						c.Blocked, c.Kind, c.Detail = true, b.Kind, b.Detail
-					}
-				}
-				candidates = append(candidates, c)
+// releaseIfUnstarted gives a reserved name back when nothing ran under it: a
+// refusal after reservation (a held session, an unreadable prompt) leaves no
+// record, and an occupied name with nothing to collect would be invisible.
+// Once a record exists the directory is evidence and stays.
+func releaseIfUnstarted(dir, recordPath string) {
+	if _, err := os.Stat(recordPath); err == nil {
+		return
+	}
+	os.RemoveAll(dir)
+}
+
+// resolvePlan turns the voices into a roster. Continued voices are resolved
+// first, through collect's typed inspection, so the dispatch decision and
+// collect's own resume line can never disagree about which jobs may
+// continue; every refusal names the job actually named. errText is "" exactly
+// when the plan is dispatchable.
+func resolvePlan(req RunRequest, invocationCwd string, timeoutMin float64) (plan, string) {
+	p := plan{cwd: req.Cwd, baseline: req.Baseline}
+	sessionDirs := map[string]string{}
+	inheritedCwd, inheritedCwdDir := "", ""
+	inheritedBaseline, inheritedBaselineDir := "", ""
+	var writeSources []string
+
+	inherit := func(dir, cwd, baseline string) string {
+		if req.Cwd == "" && cwd != "" {
+			if inheritedCwd == "" {
+				inheritedCwd, inheritedCwdDir = cwd, dir
+			} else if cwd != inheritedCwd {
+				return prose.CwdMix(inheritedCwdDir, inheritedCwd, dir, cwd)
 			}
 		}
-		if flag == "--with-from" {
-			return nil, prose.WithFromIsFanOut(dir, candidates, round)
+		if req.Baseline == "" && baseline != "" {
+			if inheritedBaseline == "" {
+				inheritedBaseline, inheritedBaselineDir = baseline, dir
+			} else if baseline != inheritedBaseline {
+				return prose.BaselineMix(inheritedBaselineDir, inheritedBaseline, dir, baseline)
+			}
 		}
-		return nil, prose.ResumeFromIsFanOut(dir, candidates, round)
+		return ""
 	}
+
+	for _, spec := range req.With {
+		if !strings.HasPrefix(spec, "@") {
+			m, err := parseMember(spec)
+			if err != nil {
+				return plan{}, err.Error()
+			}
+			p.members = append(p.members, m)
+			continue
+		}
+		ref, err := job.ResolveRef(strings.TrimPrefix(spec, "@"), invocationCwd)
+		if err != nil {
+			return plan{}, fmt.Sprintf("--with %s: %s", spec, err)
+		}
+		if job.IsGroupDir(ref) {
+			if len(req.With) > 1 {
+				return plan{}, prose.GroupRefMustStandAlone(ref, fanCandidates(ref))
+			}
+			members, group, errText := resumableMembers(ref)
+			if errText != "" {
+				return plan{}, errText
+			}
+			if errText := inherit(ref, group.Cwd, derefString(group.GitBaseline)); errText != "" {
+				return plan{}, errText
+			}
+			p.members = members
+			p.groupRef = ref
+			break
+		}
+		source, errText := resumableTurn(ref)
+		if errText != "" {
+			return plan{}, errText
+		}
+		if prev, dup := sessionDirs[source.Session]; dup {
+			return plan{}, prose.DuplicateConversation(source.Session, prev, ref)
+		}
+		sessionDirs[source.Session] = ref
+		if source.AllowWrite {
+			writeSources = append(writeSources, ref)
+		}
+		if errText := inherit(ref, source.Cwd, source.Baseline); errText != "" {
+			return plan{}, errText
+		}
+		p.members = append(p.members, fan.Member{
+			Provider:    source.Provider,
+			Model:       source.Model,
+			Effort:      source.Effort,
+			Resume:      source.Session,
+			ResumedFrom: ref,
+		})
+	}
+	if p.cwd == "" {
+		p.cwd = inheritedCwd
+	}
+	if p.baseline == "" {
+		p.baseline = inheritedBaseline
+	}
+
+	// Write intent is checked after expansion: a roster is read-only unless
+	// it is one voice, and a continued write conversation keeps its intent
+	// only by continuing alone.
+	if len(p.members) == 1 {
+		p.allowWrite = req.AllowWrite || len(writeSources) == 1
+		return p, ""
+	}
+	if req.AllowWrite {
+		return plan{}, prose.AllowWriteNeedsOneVoice()
+	}
+	if len(writeSources) > 0 {
+		return plan{}, prose.WriteSourceInRoster(writeSources[0], timeoutMin)
+	}
+	return p, ""
+}
+
+// resumableTurn resolves a job dir named by @<job> into the turn it may
+// continue. errText is "" exactly when the turn is continuable.
+func resumableTurn(dir string) (*collect.ResumableTurn, string) {
 	source, blocker, err := collect.InspectTurnResume(dir)
 	if err != nil {
-		return nil, prose.ResumeFromNoTurn(flag, dir, err)
+		return nil, prose.ContinueNoTurn(dir, err)
 	}
 	if blocker != "" {
-		return nil, prose.ResumeFromBlocked(flag, dir, blocker)
+		return nil, prose.ContinueBlocked(dir, blocker)
 	}
 	return source, ""
 }
 
-// resumableMembers resolves a --resume-from directory into the members of a
-// new round, through collect's typed inspection so the dispatch decision and
-// collect's own resume line can never disagree about who can continue. The
-// set is whole or refused: any blocked member refuses the round rather than
-// being silently left out of it.
-func resumableMembers(dir string) ([]fan.Member, *job.Group, string) {
-	if !job.IsGroupDir(dir) {
-		if cmd, isTurn := collect.TurnResume(dir); isTurn {
-			return nil, nil, prose.FanResumeFromNotAFanOut(dir, cmd)
-		}
-		return nil, nil, prose.FanResumeFromNoGroup(dir)
-	}
+// fanCandidates lists a fan-out's members in roster order, each through the
+// one eligibility definition, so a refusal never offers a member dispatch
+// would refuse.
+func fanCandidates(dir string) []prose.FanMemberCandidate {
 	state, err := collect.InspectFanResume(dir)
 	if err != nil {
-		return nil, nil, prose.FanResumeFromUnreadableManifest(dir, err)
+		return nil
+	}
+	var candidates []prose.FanMemberCandidate
+	for _, m := range state.Group.Members {
+		c := prose.FanMemberCandidate{Name: m.Name, Dir: m.OutDir}
+		for _, b := range state.Blockers {
+			if b.Member == m.Name {
+				c.Blocked, c.Kind, c.Detail = true, b.Kind, b.Detail
+			}
+		}
+		candidates = append(candidates, c)
+	}
+	return candidates
+}
+
+// resumableMembers resolves a fan-out directory into the members of a new
+// round, through collect's typed inspection. The set is whole or refused: any
+// blocked member refuses the round rather than being silently left out of it.
+func resumableMembers(dir string) ([]fan.Member, *job.Group, string) {
+	state, err := collect.InspectFanResume(dir)
+	if err != nil {
+		return nil, nil, prose.FanContinueUnreadableManifest(dir, err)
 	}
 	if len(state.Members) == 0 && len(state.Blockers) == 0 {
-		return nil, nil, prose.FanResumeFromEmptyManifest(dir)
+		return nil, nil, prose.FanContinueEmptyManifest(dir)
 	}
 	if len(state.Blockers) > 0 {
 		reasons := make([]string, len(state.Blockers))
 		for i, b := range state.Blockers {
 			reasons[i] = prose.FanResumeBlockerLine(b.Member, b.Kind, b.Detail)
 		}
-		return nil, nil, prose.FanResumeFromBlocked(dir, reasons)
+		return nil, nil, prose.FanContinueBlocked(dir, reasons)
 	}
 	members := make([]fan.Member, len(state.Members))
 	for i, m := range state.Members {
@@ -483,10 +393,10 @@ func resumableMembers(dir string) ([]fan.Member, *job.Group, string) {
 	return members, state.Group, ""
 }
 
-// parseMember reads one member spec. The colon form keeps a member's settings
-// unambiguously attached to that member — no provider name, model name or
-// effort value contains a colon — where repeated --model/--effort flags could
-// not say which member they belonged to.
+// parseMember reads one cold voice. The colon form keeps a voice's settings
+// unambiguously attached to it — no provider name, model name or effort value
+// contains a colon — where repeated flags could not say which voice they
+// belonged to.
 func parseMember(spec string) (fan.Member, error) {
 	parts := strings.Split(spec, ":")
 	if len(parts) > 3 {
@@ -510,15 +420,14 @@ func parseMember(spec string) (fan.Member, error) {
 
 // CollectRequest selects one job and which of its sections to print.
 type CollectRequest struct {
-	OutDir     string // "" = the newest job for the current directory's project
+	Job        string // the job's name in this project's store, or its directory
 	ResultOnly bool   // an ok job's result body alone; a non-ok job prints its full block
 	StatusOnly bool   // everything except the result body; marks nothing collected
 	Stdout     io.Writer
 	Stderr     io.Writer
 }
 
-// Collect prints one job (or the latest job for the current directory when
-// OutDir is "") and stamps first terminal collection — except under
+// Collect prints one job and stamps first terminal collection — except under
 // StatusOnly, which delivers no result and therefore stamps nothing.
 func Collect(req CollectRequest) int {
 	stdout, stderr := defaultWriters(req.Stdout, req.Stderr)
@@ -532,71 +441,19 @@ func Collect(req CollectRequest) int {
 	case req.StatusOnly:
 		mode = collect.ModeStatusOnly
 	}
-	outDir := req.OutDir
-	if outDir == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			fmt.Fprintf(stderr, "collect error: cannot determine cwd: %s\n", err)
-			return ExitUsage
-		}
-		base := job.DefaultBase(cwd)
-		latest, err := collect.LatestJobDir(base)
-		if err != nil && !collect.FirstRun(err, true) {
-			fmt.Fprintf(stderr, "collect error: %s\n", prose.UnreadableStore(base, err))
-			return ExitInfra
-		}
-		if latest == "" {
-			fmt.Fprintf(stderr, "collect error: no job dirs under %s; pass an out-dir explicitly\n", base)
-			return ExitUsage
-		}
-		outDir = latest
+	invocationCwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "collect error: cannot determine cwd: %s\n", err)
+		return ExitInfra
 	}
-	return collect.Collect(absOrSelf(outDir), mode, stdout, stderr)
-}
-
-// SteerRequest names a supplement file and the job it was meant for.
-type SteerRequest struct {
-	PromptFile string // the supplemental prompt, as a file — required
-	OutDir     string // "" = the newest job for the current directory's project
-	Stdout     io.Writer
-	Stderr     io.Writer
-}
-
-// Steer answers whether a supplemental prompt can still reach a dispatched
-// job. It cannot — no provider accepts input into a running turn — so the
-// engine's whole job here is the honest report: why not, and the exact
-// follow-up command that carries the supplement to the same session. Steer
-// delivers nothing and mutates nothing.
-func Steer(req SteerRequest) int {
-	stdout, stderr := defaultWriters(req.Stdout, req.Stderr)
-	if req.PromptFile == "" {
-		return usageError(stderr, "--prompt-file <path> is required: write the supplement to a file first — it becomes the follow-up turn's prompt")
+	if req.Job == "" {
+		return usageError(stderr, "collect takes the job to print: the name it was run as, or its directory")
 	}
-	if _, err := os.Stat(req.PromptFile); err != nil {
-		return usageError(stderr, "prompt file not found: %s", req.PromptFile)
+	dir, err := job.ResolveRef(req.Job, invocationCwd)
+	if err != nil {
+		return usageError(stderr, "%s", err)
 	}
-	outDir := req.OutDir
-	if outDir == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			fmt.Fprintf(stderr, "steer error: cannot determine cwd: %s\n", err)
-			return ExitUsage
-		}
-		base := job.DefaultBase(cwd)
-		latest, err := collect.LatestJobDir(base)
-		if err != nil && !collect.FirstRun(err, true) {
-			fmt.Fprintf(stderr, "steer error: %s\n", prose.UnreadableStore(base, err))
-			return ExitInfra
-		}
-		if latest == "" {
-			fmt.Fprintf(stderr, "steer error: no job dirs under %s; pass an out-dir explicitly\n", base)
-			return ExitUsage
-		}
-		outDir = latest
-	}
-	// Both paths are printed into commands that may run from any directory,
-	// so they must survive leaving this one.
-	return collect.Steer(absOrSelf(outDir), absOrSelf(req.PromptFile), stdout, stderr)
+	return collect.Collect(dir, mode, stdout, stderr)
 }
 
 // Pending prints the discovery-only recovery index for base ("" = the default
@@ -613,23 +470,6 @@ func Pending(base string, stdout, stderr io.Writer) int {
 		base = job.DefaultBase(cwd)
 	}
 	return collect.Pending(absOrSelf(base), derived, stdout, stderr)
-}
-
-// Jobs prints this project's job roster for base ("" = the default job root
-// for the current directory), newest first. all disables the display cap. It
-// is a listing only: no result is printed and nothing is marked collected.
-func Jobs(base string, all bool, stdout, stderr io.Writer) int {
-	stdout, stderr = defaultWriters(stdout, stderr)
-	derived := base == ""
-	if base == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			fmt.Fprintf(stderr, "jobs error: cannot determine cwd: %s\n", err)
-			return ExitUsage
-		}
-		base = job.DefaultBase(cwd)
-	}
-	return collect.Jobs(absOrSelf(base), derived, all, stdout, stderr)
 }
 
 func defaultWriters(stdout, stderr io.Writer) (io.Writer, io.Writer) {
@@ -650,17 +490,9 @@ func absOrSelf(p string) string {
 	return abs
 }
 
-// prepareCoordinateFile proves the caller's coordinate path writable before
-// anything spawns — a handoff the caller is about to block on must not fail
-// after the provider is already running — by landing an empty file there
-// (the caller waits for a non-empty one). "" stays "".
-func prepareCoordinateFile(path string) (string, error) {
-	if path == "" {
-		return "", nil
+func derefString(s *string) string {
+	if s == nil {
+		return ""
 	}
-	path = absOrSelf(path)
-	if err := job.WriteCoordinateFile(path, nil); err != nil {
-		return "", fmt.Errorf("--coordinate-file %s: cannot write there (%s); nothing was dispatched", path, err)
-	}
-	return path, nil
+	return *s
 }

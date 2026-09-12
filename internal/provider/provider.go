@@ -116,9 +116,6 @@ type Driver interface {
 	Recovery() (Evidence, []Event)
 	// Conclude assembles the outcome for a normally-ended process.
 	Conclude(exit ExitInfo) Outcome
-	// Takeover is the provider's own command for continuing this session
-	// interactively, once the turn is terminal.
-	Takeover() string
 	// ObservesConnectionErrors reports whether this driver recognizes its
 	// provider's connection-error events at all. A driver that does not is
 	// never given a tally — a zero it could not have counted would read as

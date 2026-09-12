@@ -53,14 +53,11 @@ type Options struct {
 	Cwd         string
 	Baseline    string
 	Label       string
-	OutDir      string // "" = derive from cwd/label
+	OutDir      string // the fan-out directory, already reserved by the caller
 	ResumedFrom string // "" = a fresh fan-out; else the fan-out whose sessions this one continues
 	TimeoutMin  float64
-	// CoordinateFile, when set, receives the exact dispatch block that stdout
-	// prints, written atomically before any member spawns.
-	CoordinateFile string
-	Stdout         io.Writer
-	Stderr         io.Writer
+	Stdout      io.Writer
+	Stderr      io.Writer
 }
 
 // outcome is one member's terminal state as the group reports it.
@@ -78,11 +75,7 @@ func Run(opts Options) int {
 	startedAt := time.Now().Round(0)
 	names := memberNames(opts.Members)
 
-	dir, err := job.ResolveOutDir(opts.OutDir, opts.Cwd, opts.Label, "fan", startedAt)
-	if err != nil {
-		fmt.Fprintf(opts.Stderr, "envoy: cannot create out-dir: %s\n", err)
-		return job.ExitInfra
-	}
+	dir := opts.OutDir
 	gw := job.GroupWorkspace{Dir: dir}
 	members := make([]job.GroupMember, len(opts.Members))
 	for i, m := range opts.Members {
@@ -111,8 +104,7 @@ func Run(opts Options) int {
 		fmt.Fprintf(opts.Stderr, "envoy: cannot prepare fan-out dir: %s\n", err)
 		return job.ExitInfra
 	}
-	// Member dirs exist before the coordinates are published, so the watch
-	// command works from the moment the caller reads it.
+	// Member dirs exist before the manifest names them.
 	for i := range members {
 		if err := os.MkdirAll(members[i].OutDir, 0o755); err != nil {
 			releaseAll(handles)
@@ -130,7 +122,6 @@ func Run(opts Options) int {
 		TimeoutMin:    opts.TimeoutMin,
 		GitBaseline:   ptrIfNonEmpty(opts.Baseline),
 		OutDir:        dir,
-		WatchCommand:  gw.WatchCommand(members),
 		SupervisorPid: os.Getpid(),
 		ResumedFrom:   ptrIfNonEmpty(opts.ResumedFrom),
 		Members:       members,
@@ -253,9 +244,8 @@ func releaseAll(handles []*lock.Handle) {
 }
 
 func printDispatchBlock(opts Options, gw job.GroupWorkspace, members []job.GroupMember) {
-	var block bytes.Buffer
-	w := &block
-	fmt.Fprintf(w, "out-dir: %s\n", gw.Dir)
+	w := opts.Stdout
+	fmt.Fprintf(w, "job: %s\n", gw.Dir)
 	fmt.Fprintf(w, "fan-out: %d turns · one prompt · hard cap %s each\n", len(members), text.HardCap(opts.TimeoutMin))
 	if opts.ResumedFrom != "" {
 		fmt.Fprintf(w, "resumed-from: %s\n", opts.ResumedFrom)
@@ -265,7 +255,7 @@ func printDispatchBlock(opts Options, gw job.GroupWorkspace, members []job.Group
 	// on a mixed roster — which conversation it continues. A resumed round
 	// says that once in its own resumed-from line instead of on every member.
 	for i, m := range members {
-		fmt.Fprintf(w, "member %s: model %s · effort %s · out-dir %s",
+		fmt.Fprintf(w, "member %s: model %s · effort %s · dir %s",
 			m.Name, display(m.Model), display(m.Effort), m.OutDir)
 		if opts.ResumedFrom == "" && opts.Members[i].ResumedFrom != "" {
 			fmt.Fprintf(w, " · continues %s", opts.Members[i].ResumedFrom)
@@ -275,14 +265,7 @@ func printDispatchBlock(opts Options, gw job.GroupWorkspace, members []job.Group
 	if opts.Baseline != "" {
 		fmt.Fprintf(w, "baseline: %s\n", opts.Baseline)
 	}
-	fmt.Fprintf(w, "watch: %s\n", gw.WatchCommand(members))
 	fmt.Fprintf(w, "next: %s\n", prose.FanDispatchNext(gw.Dir))
-	opts.Stdout.Write(block.Bytes())
-	if opts.CoordinateFile != "" {
-		if err := job.WriteCoordinateFile(opts.CoordinateFile, block.Bytes()); err != nil {
-			fmt.Fprintf(opts.Stderr, "coordinate file warning: %s\n", err)
-		}
-	}
 }
 
 func printTerminalBlock(opts Options, dir string, outcomes []outcome, statuses []string) {

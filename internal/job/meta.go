@@ -59,7 +59,6 @@ type Meta struct {
 	SessionID                 *string  `json:"sessionId"`
 	ResumedFrom               *string  `json:"resumedFrom,omitempty"` // job dir whose session this turn continues; absent = a fresh conversation or a bare --resume
 	ResumeCommand             *string  `json:"resumeCommand"`         // complete follow-up command, prompt file left as a placeholder
-	TakeoverCommand           *string  `json:"takeoverCommand"`
 	SessionLockConflict       *string  `json:"sessionLockConflict"`
 	StartedAt                 string   `json:"startedAt"`
 	EndedAt                   *string  `json:"endedAt"`
@@ -72,7 +71,6 @@ type Meta struct {
 	RawPath                   string   `json:"rawPath"`
 	StderrPath                string   `json:"stderrPath"`
 	ProgressPath              string   `json:"progressPath"`
-	WatchCommand              string   `json:"watchCommand"`
 	ProviderArgv              []string `json:"providerArgv"`
 	RunnerPid                 int      `json:"runnerPid"`
 	RunnerInstanceID          string   `json:"runnerInstanceId"`
@@ -97,6 +95,8 @@ type Meta struct {
 	// ConnectionErrors counts the provider's own connection-error events over
 	// the turn. Non-nil from schema 7 on (a zero count is a real observation);
 	// nil means an older engine wrote this meta and never looked.
+	// Schema 8 dropped takeoverCommand and watchCommand: the caller is an
+	// agent, and neither line was ever run.
 	ConnectionErrors *ConnectionErrors `json:"connectionErrors"`
 	Tokens           *Tokens           `json:"tokens"`
 	CostUSD          *float64          `json:"costUsd"`
@@ -109,7 +109,7 @@ type Meta struct {
 }
 
 // SchemaVersion for meta.json written by this engine.
-const MetaSchemaVersion = 7
+const MetaSchemaVersion = 8
 
 // Marshal renders the canonical on-disk form.
 func (m *Meta) Marshal() ([]byte, error) {
