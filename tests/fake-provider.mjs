@@ -130,7 +130,35 @@ function startGrandchild({ ignoreSigterm = false } = {}) {
 }
 
 if (provider === 'claude') {
-  if (scenario === 'success') {
+  if (scenario === 'usage-capture') {
+    const fixture = new URL('../internal/provider/testdata/claude-2.1.270-usage.jsonl', import.meta.url);
+    const records = fs.readFileSync(fixture, 'utf8').trim().split('\n').map(JSON.parse);
+    for (const [i, event] of records.slice(0, -1).entries()) {
+      emit(event);
+      // The test releases each gate only after reading the new live snapshot.
+      // A long heartbeat prevents periodic writes from hiding a missing event write.
+      if (process.env.ENVOY_FAKE_USAGE_GATE && (i === 1 || i === 3)) {
+        const gate = `${process.env.ENVOY_FAKE_USAGE_GATE}-${i}`;
+        const deadline = Date.now() + 10000;
+        while (!fs.existsSync(gate)) {
+          if (Date.now() > deadline) throw new Error('usage test gate timed out');
+          await sleep(10);
+        }
+      }
+    }
+    const ending = process.env.ENVOY_FAKE_USAGE_END ?? 'success';
+    const result = records.at(-1);
+    result.session_id = claudeArgSessionId();
+    if (ending === 'missing') delete result.usage;
+    if (ending === 'budget') result.subtype = 'error_max_budget_usd';
+    if (ending === 'crash') {
+      result.subtype = 'error_during_execution';
+      result.is_error = true;
+      result.usage = { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0 };
+    }
+    if (ending === 'hang') await sleep(60000);
+    if (ending !== 'eof') process.stdout.write(JSON.stringify(result));
+  } else if (scenario === 'success') {
     emit(claudeInit());
     emit(claudeAssistant('claude is finishing the fake task'));
     process.stdout.write(JSON.stringify(claudeResult())); // no final newline exercises close-time flush
