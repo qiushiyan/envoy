@@ -45,11 +45,15 @@ demand). The durable files in the job dir are authoritative:
 - **`prompt.md`:** the exact dispatched prompt.
 - **`result.md`:** final provider text, or failure + recovered partial output.
 - **`meta.json`:** machine-readable lifecycle and recovery facts, atomically
-  replaced; every command collect prints is rendered from it.
+  replaced, plus supported usage measurements; collect renders commands from it.
 - **`progress.log`:** runner-owned semantic progress + 30s heartbeat.
 - **`raw.log`:** verbatim provider stdout (stream-json / JSONL).
 - **`stderr.log`:** provider stderr.
 - **`last-message.txt`:** codex's `-o` recovery surface (codex turns only).
+
+Claude jobs expose live primary-turn context samples in `meta.json.usage`;
+`collect --status-only` shows the context diagnostic, with unknown or incomplete
+evidence explicit. The contract lives in `DESIGN.md` § Primary-turn usage.
 
 Several `--with` voices run as a fan-out: one prompt to each, supervised as a
 single job — one background command, one completion, one collect. Each member
@@ -139,5 +143,6 @@ grandchildren, lock collisions, transcript recovery — without billing a model.
 Runtime tunables (`ENVOY_HEARTBEAT_MS`, `ENVOY_TIMEOUT_POLL_MS`,
 `ENVOY_SIGKILL_AFTER_MS`, `ENVOY_CLOSE_GRACE_MS`) exist for the tests.
 
-Argv facts verified against Claude Code 2.1.207 and codex-cli 0.144.1 — after
-a provider CLI upgrade, re-check `--help` before blaming a parser.
+Provider verification baselines live in `CLAUDE.md` and the captured evidence
+in `EVIDENCE.md`. After a CLI upgrade, re-check `--help` and stream shapes
+before blaming a parser.

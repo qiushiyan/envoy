@@ -77,10 +77,10 @@ sandbox once broke the calling session's own tooling).
   reinterpret. `next:` lines exist so the caller never has to derive the next
   move from status codes.
 - **Background is the default posture.** Collection is notification-driven;
-  polling a live job is a smell, and there is no watch command to tempt it: a
-  live stream was once read as evidence of a hang it did not show (EVIDENCE.md,
-  2026-07-11). The process exiting is the completion signal, so there is no
-  `--detach` either.
+  the process exiting is the completion signal. Callers can sample durable
+  usage observations while a turn runs; sample age cannot establish a hang
+  or completion (EVIDENCE.md, 2026-07-11). There is no watch command or
+  `--detach` mode.
 - **The name is the address.** The caller chooses the job's name before
   dispatch and collects by it, so nothing printed by a dispatch whose stdout
   the harness hides has to be read back. Two handoffs were tried and paid for
@@ -203,12 +203,11 @@ and next action *are* its result, and handing back silence in their place
 would manufacture a payload that does not exist.
 
 **The block itself is tiered on a narrower question: did the payload land?**
-Half the preamble — the settings the caller passed, the token counts, the
-prompt-state evidence, the result kind, the three log paths — is diagnostic,
-answering only what a turn the caller must now investigate raises. A turn that
-reports ok *and* whose `result.md` reads holds that half back and prints what
-remains to act on (coordinate, status, duration, the follow-up commands, the
-payload, the next action); everything else prints the whole preamble, and
+Settings, token counts, context usage, prompt-state evidence, result kind and
+log paths belong to the diagnostic tier. A turn that reports ok *and* whose
+`result.md` reads holds that tier back and prints what remains to act on
+(coordinate, status, duration, follow-up commands, payload, next action);
+everything else prints the whole preamble, and
 `--status-only` prints it on demand. Note the asymmetry with the stamp above: a
 non-ok turn's block *is* a delivered deliverable and gets stamped, yet it still
 prints in full, because what it delivers is the diagnosis. Keying the tier on
@@ -228,6 +227,76 @@ substitution and the "exception" fires on the most ordinary dispatch there is.
 And keeping the bare `session:` line beside the commands that already spell the
 id out: three copies of one identifier is three invitations to hand-assemble a
 follow-up instead of running the one carrying the turn's cwd and write intent.
+
+## Primary-turn usage
+
+`meta.json.usage` lets a caller read Claude's primary-turn measurements without
+interpreting the provider stream. The Claude driver owns attribution,
+deduplication and reconciliation; `KindUsage` carries independent snapshots
+that the runner atomically publishes as they arrive, without waiting for a
+heartbeat. `internal/job/usage.go` owns the record, and
+`internal/provider/claude_usage.go` owns the accounting. The measurement adds
+no lifecycle decisions: callers own any policy about context pressure.
+
+The scope is one job's primary turn. A continuation starts fresh counters and
+a fresh peak, even though its first request includes earlier conversation
+context. Fan-out members keep their own measurements. Codex leaves `usage`
+absent; absence in an older record likewise means unavailable.
+
+- **Context and freshness.** `latestContextTokens` is the last valid
+  response's input plus cache-read plus cache-creation tokens.
+  `peakContextTokens` is the largest such sample in this turn; compaction can
+  lower latest without lowering peak. `sampledAt` is Envoy's receipt time for
+  that sample. Neither count includes subsequent generated output or tool
+  results, so it cannot predict the next request's size.
+- **Response accounting.** `responses` counts distinct attributed primary
+  message IDs, even when a response lacks usable input usage. Repeated IDs
+  change nothing, including the sample time. Non-null `parent_tool_use_id`
+  excludes a record before deduplication. `inputTokens`, `cacheReadInputTokens`
+  and `cacheCreationInputTokens` accumulate valid input measurements;
+  `outputTokens` stays null until terminal reconciliation accepts a complete
+  output total. Missing or invalid measurements remain unknown, never zero.
+- **Attribution.** `attribution` starts `unknown`; the reported session model
+  establishes `complete` attribution until a response has missing or differing
+  model evidence. Such a response leaves the last valid sample intact and
+  marks attribution `incomplete`; `unexpectedModel` holds the last differing
+  model. Later valid samples advance the measurement, but the issue persists.
+  The comparison uses provider-reported models, never a requested alias.
+- **Window and terminal totals.** `contextWindowTokens` stays null until the
+  terminal record gives a positive window for the session's reported model.
+  It is the only figure taken from `modelUsage`, whose totals include work
+  outside the primary loop. `terminalTokens` preserves the terminal
+  `result.usage` fields as `input`, `cacheRead`, `cacheCreation` and `output`,
+  with missing or invalid fields null. Complete totals are accepted only
+  when they agree with observed inputs and attribution permits reconciliation.
+  Missing fields, budget stops, zeroed crash usage or contradictory totals
+  preserve observed inputs and leave full output unknown. Terminal totals
+  cannot reconstruct a missing context sample or peak.
+- **Finality and completeness.** `state` is `unmeasured` until a valid context
+  sample, then `live`. Once `final` is true, it is `settled` when there are no
+  issues, otherwise `incomplete`. `issues` retains distinct evidence gaps;
+  live measurements can already carry issues. Finality is independent of job
+  success and process exit: a failed turn can have complete usage, and usage
+  can settle while process cleanup continues. A missing window leaves the
+  block incomplete even when output is known.
+
+Runner finalization without a terminal record retains the live figures and
+adds `missing_terminal`. An Envoy process killed before finalization can leave
+a non-final snapshot indefinitely; metadata alone cannot prove liveness.
+Collection marks unfinished usage incomplete when it proves abandonment,
+preserving any measurement already finalized by a terminal record.
+
+Accounting does expected O(1) work per record with O(distinct message IDs)
+deduplication memory; snapshots have fixed structure and a finite issue
+vocabulary. It does not reparse stream history for each update. The existing
+`tokens` block retains its provider-reported meaning and finalization writer.
+
+Optional observations retain meta schema **9**: existing fields and
+continuation eligibility keep their meaning, and readers treat absent usage
+as unavailable. Bumping the schema would refuse compatible jobs and force
+callers to change their schema pins. `TestUsageSchemaCompatibility` pins this
+boundary; the engine version identifies feature availability. The captured
+evidence behind the accounting lives in `EVIDENCE.md`, 2026-09-14.
 
 ## Storage
 

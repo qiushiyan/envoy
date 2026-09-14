@@ -268,3 +268,16 @@ will look anyway.
   rendering an abandoned job's recovery from its still-running record). The
   lessons that generalize: **a record holds facts and the reader renders the
   words**, and **an address the caller chooses needs no handoff at all.**
+- **2026-09-14 — primary-turn usage.** **A measurement keeps its scope and
+  missing evidence through finalization.** The steward needed primary context
+  from meta alone. A captured Claude Code 2.1.270 turn repeated usage across
+  content blocks; its three unique responses had placeholder output counts,
+  while terminal usage settled at 338 output tokens and `modelUsage` included
+  a helper model. The sanitized capture lives at
+  `internal/provider/testdata/claude-2.1.270-usage.jsonl`;
+  `TestClaudeUsageCapture` pins its accounting, and controlled variants cover
+  subagent attribution, compaction and incomplete terminal evidence. A separate
+  real run verified live-to-settled metadata and a final context of 19,646
+  tokens, equal to its last primary response's input/cache sum.
+  `TestClaudeUsageLiveAndCollected` pins event-driven persistence and display.
+  `DESIGN.md` § Primary-turn usage owns the contract and schema-9 rationale.
