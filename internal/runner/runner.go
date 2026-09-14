@@ -439,6 +439,8 @@ func (r *run) handleEvents(events []provider.Event) {
 			r.writeMeta(func(m *job.Meta) { m.ProviderReportedModel = job.Ptr(model) })
 		case provider.KindConnectionError:
 			r.noteConnectionError()
+		case provider.KindUsage:
+			r.writeMeta(func(m *job.Meta) { m.Usage = ev.Usage })
 		case provider.KindAccepted:
 			r.markPromptAccepted(ev.Evidence)
 		case provider.KindTerminal:

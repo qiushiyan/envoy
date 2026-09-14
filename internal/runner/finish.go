@@ -29,6 +29,7 @@ func (r *run) initMeta() {
 	r.meta = &job.Meta{
 		SchemaVersion:    job.MetaSchemaVersion,
 		ConnectionErrors: connectionTally(r.driver),
+		Usage:            r.driver.Usage(),
 		Status:           job.StatusRunning,
 		Provider:         r.opts.Provider,
 		Model:            ptrIfNonEmpty(r.opts.Turn.Model),
@@ -135,6 +136,8 @@ func (r *run) finish(f finishArgs) {
 		m.EndedAt = job.Ptr(job.ISO(endedAt))
 		m.DurationMs = job.Ptr(endedAt.Sub(r.startedAt).Milliseconds())
 		m.Tokens = f.tokens
+		m.Usage = r.driver.Usage()
+		m.Usage.End()
 		m.CostUSD = f.costUSD
 		if f.status == job.StatusOK {
 			m.Error = nil

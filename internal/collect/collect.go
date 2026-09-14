@@ -226,6 +226,7 @@ func reconcileAbandoned(dir string, meta *job.Meta, state runningState) *job.Met
 	errText := fmt.Sprintf("This turn ended without publishing a result: %s.", state.detail)
 	meta.Status = job.StatusAbandoned
 	meta.ReconciledAt = job.Ptr(job.ISO(time.Now()))
+	meta.Usage.End()
 	meta.Error = job.Ptr(errText)
 	if _, err := os.Stat(ws.ResultPath()); os.IsNotExist(err) {
 		job.WriteFileAtomic(ws.ResultPath(), []byte(fmt.Sprintf("# Turn abandoned\n\n%s\n", errText)))
@@ -437,6 +438,9 @@ func renderJob(dir string, mode Mode, w io.Writer, errW io.Writer, showGit bool)
 			tokens = strings.Join(parts, " · ")
 		}
 		fmt.Fprintf(w, "tokens: %s\n", tokens)
+		if line := prose.ContextUsage(meta.Usage); line != "" {
+			fmt.Fprintln(w, line)
+		}
 		prompt := meta.PromptState
 		if prompt == "" {
 			prompt = job.PromptUnknown

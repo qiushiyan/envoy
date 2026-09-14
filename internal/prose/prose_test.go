@@ -8,6 +8,31 @@ import (
 	"github.com/qiushiyan/envoy/internal/job"
 )
 
+func TestContextUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		u    *job.Usage
+		want string
+	}{
+		{"unsupported", nil, ""},
+		{"unmeasured", job.NewUsage(), "context: no measurement yet"},
+		{"live", &job.Usage{LatestContextTokens: job.Ptr(int64(138000)), PeakContextTokens: job.Ptr(int64(210000)), Responses: 1},
+			"context: 138k, window unknown, peak 210k, 1 response"},
+		{"settled", &job.Usage{Final: true, State: "settled", LatestContextTokens: job.Ptr(int64(210000)), PeakContextTokens: job.Ptr(int64(210000)), ContextWindowTokens: job.Ptr(int64(1000000)), Responses: 58},
+			"context: 210k of 1M (21%), peak 210k, 58 responses"},
+		{"missing terminal", &job.Usage{Final: true, State: "incomplete", LatestContextTokens: job.Ptr(int64(138000)), Issues: []string{"missing_terminal"}},
+			"context: 138k, window unknown, 0 responses; incomplete (no terminal record)"},
+		{"unattributed", &job.Usage{Issues: []string{"model_mismatch"}, UnexpectedModel: job.Ptr("other\nmodel")},
+			`context: no measurement yet; incomplete (unexpected model "other\nmodel")`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ContextUsage(tc.u); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // A cap alone reads the same whether the provider worked until the deadline or
 // went silent seconds after accepting the prompt, and those two turns want
 // opposite follow-ups: one continues work, the other is addressed to a session

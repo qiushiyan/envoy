@@ -132,6 +132,77 @@ func ProviderStream(ce *job.ConnectionErrors) string {
 	return line
 }
 
+// ContextUsage describes the latest sampled request input. It belongs in the
+// diagnostic tier; incompleteness is telemetry, never a recovery prescription.
+func ContextUsage(u *job.Usage) string {
+	if u == nil {
+		return ""
+	}
+	line := "context: no measurement yet"
+	if u.LatestContextTokens != nil {
+		line = "context: " + compactTokens(*u.LatestContextTokens)
+		if u.ContextWindowTokens != nil && *u.ContextWindowTokens > 0 {
+			line += fmt.Sprintf(" of %s (%.0f%%)", compactTokens(*u.ContextWindowTokens),
+				100*float64(*u.LatestContextTokens)/float64(*u.ContextWindowTokens))
+		} else {
+			line += ", window unknown"
+		}
+		if u.PeakContextTokens != nil {
+			line += ", peak " + compactTokens(*u.PeakContextTokens)
+		}
+		line += fmt.Sprintf(", %d response%s", u.Responses, plural(u.Responses))
+	}
+	var issues []string
+	for _, issue := range u.Issues {
+		var detail string
+		switch issue {
+		case "missing_terminal":
+			detail = "no terminal record"
+		case "missing_window":
+			detail = "window unknown"
+		case "missing_context_sample":
+			detail = "no context sample"
+		case "missing_model":
+			detail = "model attribution missing"
+		case "model_mismatch":
+			detail = "unexpected model"
+			if u.UnexpectedModel != nil {
+				detail += fmt.Sprintf(" %q", *u.UnexpectedModel)
+			}
+		case "missing_message_id":
+			detail = "response ID missing"
+		case "missing_input_usage":
+			detail = "response input usage missing or invalid"
+		case "missing_terminal_usage":
+			detail = "terminal usage missing or invalid"
+		case "terminal_usage_incomplete":
+			detail = "terminal usage incomplete"
+		case "terminal_usage_mismatch":
+			detail = "terminal usage disagrees with observed responses"
+		default:
+			detail = "measurement evidence incomplete"
+		}
+		issues = append(issues, detail)
+	}
+	if len(issues) > 0 {
+		line += "; incomplete (" + strings.Join(issues, "; ") + ")"
+	}
+	return line
+}
+
+func compactTokens(n int64) string {
+	unit, suffix := float64(1), ""
+	switch {
+	case n >= 1000000:
+		unit, suffix = 1000000, "M"
+	case n >= 1000:
+		unit, suffix = 1000, "k"
+	default:
+		return fmt.Sprint(n)
+	}
+	return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/unit), ".0") + suffix
+}
+
 func plural(n int64) string {
 	if n == 1 {
 		return ""
