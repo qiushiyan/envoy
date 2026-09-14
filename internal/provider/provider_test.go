@@ -90,7 +90,7 @@ func TestClaudeStreamParsing(t *testing.T) {
 	c := newClaude(Options{}, time.Now())
 
 	events := c.Feed(`{"type":"system","subtype":"init","session_id":"s1","model":"claude-opus-5"}`)
-	if len(events) != 3 || events[1].Kind != KindModelReported || events[1].Model != "claude-opus-5" ||
+	if len(events) != 4 || events[1].Kind != KindModelReported || events[1].Model != "claude-opus-5" ||
 		events[2].Kind != KindNote || events[2].State != "provider-initialized" {
 		t.Fatalf("init events = %+v", events)
 	}

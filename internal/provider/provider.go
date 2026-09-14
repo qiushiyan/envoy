@@ -49,17 +49,21 @@ const (
 	// observation the runner counts and stamps; the engine never acts on it
 	// and never concludes from it that the machine was offline.
 	KindConnectionError
+	// KindUsage carries a normalized snapshot; all attribution and accounting
+	// remain in the driver. Each changed snapshot must reach meta.json live.
+	KindUsage
 )
 
 type Event struct {
 	Kind      EventKind
-	Type      string   // KindActivity: raw provider event type
-	SessionID string   // KindSessionStarted
-	Evidence  string   // KindAccepted
-	Terminal  string   // KindTerminal: label, e.g. "claude success"
-	State     string   // KindNote: progress state name
-	Fields    []job.KV // KindNote
-	Model     string   // KindModelReported
+	Type      string     // KindActivity: raw provider event type
+	SessionID string     // KindSessionStarted
+	Evidence  string     // KindAccepted
+	Terminal  string     // KindTerminal: label, e.g. "claude success"
+	State     string     // KindNote: progress state name
+	Fields    []job.KV   // KindNote
+	Model     string     // KindModelReported
+	Usage     *job.Usage // KindUsage
 }
 
 // Evidence is what a driver can prove about an abnormally ended turn.
@@ -120,6 +124,8 @@ type Driver interface {
 	// never given a tally — a zero it could not have counted would read as
 	// "the link held".
 	ObservesConnectionErrors() bool
+	// Usage returns an independent measurement snapshot, or nil if unsupported.
+	Usage() *job.Usage
 }
 
 // New constructs the named provider's driver.

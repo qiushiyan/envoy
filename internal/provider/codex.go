@@ -239,3 +239,5 @@ func (c *codex) Conclude(exit ExitInfo) Outcome {
 }
 
 func (c *codex) ObservesConnectionErrors() bool { return true }
+
+func (c *codex) Usage() *job.Usage { return nil }

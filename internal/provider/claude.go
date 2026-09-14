@@ -24,6 +24,7 @@ type claude struct {
 	accepted  bool
 	evidence  string
 	messages  []map[string]any
+	usage     claudeUsage
 }
 
 func newClaude(opts Options, startedAt time.Time) *claude {
@@ -33,7 +34,8 @@ func newClaude(opts Options, startedAt time.Time) *claude {
 		// coordinates exist before spawn.
 		sessionID = job.UUID4()
 	}
-	return &claude{opts: opts, startedAt: startedAt, sessionID: sessionID}
+	return &claude{opts: opts, startedAt: startedAt, sessionID: sessionID,
+		usage: claudeUsage{value: job.NewUsage(), seen: make(map[string]struct{})}}
 }
 
 func (c *claude) PreflightSessionID() string { return c.sessionID }
@@ -142,6 +144,9 @@ func (c *claude) consume(parsed any) []Event {
 			label = "result"
 		}
 		events = append(events, Event{Kind: KindTerminal, Terminal: "claude " + label})
+	}
+	if c.usage.observe(event) {
+		events = append(events, Event{Kind: KindUsage, Usage: c.Usage()})
 	}
 	return events
 }

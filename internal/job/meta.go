@@ -100,6 +100,7 @@ type Meta struct {
 	// a real observation); nil means the driver never looked.
 	ConnectionErrors *ConnectionErrors `json:"connectionErrors"`
 	Tokens           *Tokens           `json:"tokens"`
+	Usage            *Usage            `json:"usage,omitempty"`
 	CostUSD          *float64          `json:"costUsd"`
 	Error            *string           `json:"error"`
 	// Remedy is the driver's cause-specific fix for a turn that did not
@@ -113,6 +114,8 @@ type Meta struct {
 // MetaSchemaVersion is the only schema this engine reads or writes. Records
 // from another version are refused rather than reinterpreted: a job store
 // holds one engine's records at a time.
+// Optional additive observations (such as usage) retain this version; absence
+// means unavailable, and existing fields keep their semantics.
 const MetaSchemaVersion = 9
 
 // Marshal renders the canonical on-disk form.
