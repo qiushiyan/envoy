@@ -1,6 +1,7 @@
-// Package fan dispatches one prompt to several provider turns at once and
-// supervises them as a single job: one process to wait on, one directory to
-// collect, one exit code.
+// Package fan dispatches several provider turns at once and supervises them
+// as a single job: one process to wait on, one directory to collect, one exit
+// code. Each turn carries its own prompt — the caller resolved which file
+// every member gets — so the group has no prompt of its own to record.
 //
 // A member is an ordinary turn — its own session, lock, job dir, prompt state
 // and result.md — so nothing about the single-turn lifecycle lives here. This
@@ -37,10 +38,10 @@ type Turn struct {
 }
 
 // Options is one validated fan-out request: the turns, the directory that
-// holds them, and the writers. The prompt, tree, anchor and cap are read
-// from the turns, which the caller validated to share them — the manifest
-// and the dispatch block describe the settings the members actually run
-// with, never a second copy.
+// holds them, and the writers. The tree, anchor and cap are read from the
+// turns, which the caller validated to share them — the manifest and the
+// dispatch block describe the settings the members actually run with, never
+// a second copy. The prompt is per turn and is not shared.
 type Options struct {
 	Turns  []Turn
 	OutDir string // the fan-out directory, already reserved by the caller
@@ -66,10 +67,6 @@ func Run(opts Options) int {
 	gw := job.GroupWorkspace{Dir: opts.OutDir}
 
 	shared := opts.shared()
-	if err := gw.Prepare(shared.PromptFile); err != nil {
-		fmt.Fprintf(opts.Stderr, "envoy: cannot prepare fan-out dir: %s\n", err)
-		return job.ExitInfra
-	}
 	// Member dirs exist before the manifest names them.
 	names := make([]string, len(opts.Turns))
 	for i, t := range opts.Turns {
@@ -87,8 +84,13 @@ func Run(opts Options) int {
 		GitBaseline:   ptrIfNonEmpty(shared.Baseline),
 		Members:       names,
 	}
+	// The manifest is the record that makes the directory a fan-out: discovery
+	// keys on it, and the reserved name is released when it is absent. So a
+	// manifest that cannot be written stops the dispatch before any member
+	// starts, rather than running turns that no record would ever name.
 	if err := group.WriteFile(gw.GroupPath()); err != nil {
-		fmt.Fprintf(opts.Stderr, "group write warning: %s\n", err)
+		fmt.Fprintf(opts.Stderr, "envoy: cannot write group.json: %s\n", err)
+		return job.ExitInfra
 	}
 	printDispatchBlock(opts, gw)
 
@@ -164,7 +166,7 @@ func printDispatchBlock(opts Options, gw job.GroupWorkspace) {
 	w := opts.Stdout
 	shared := opts.shared()
 	fmt.Fprintf(w, "job: %s\n", gw.Dir)
-	fmt.Fprintf(w, "fan-out: %d turns · one prompt · hard cap %s each\n", len(opts.Turns), text.HardCap(shared.TimeoutMin))
+	fmt.Fprintf(w, "fan-out: %d turns · hard cap %s each\n", len(opts.Turns), text.HardCap(shared.TimeoutMin))
 	// The member name already carries its provider and model, so the line adds
 	// only what the name cannot: the resolved settings, where it writes, and
 	// which conversation it continues.

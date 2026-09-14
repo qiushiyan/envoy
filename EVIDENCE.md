@@ -281,3 +281,20 @@ will look anyway.
   tokens, equal to its last primary response's input/cache sum.
   `TestClaudeUsageLiveAndCollected` pins event-driven persistence and display.
   `DESIGN.md` § Primary-turn usage owns the contract and schema-9 rationale.
+- **2026-09-14 — the two-assignment consult.** A caller gave two voices two
+  different jobs (a design critique on one model, a product-landscape survey
+  on the other). The fan-out sent one prompt, so the agent first wrote one
+  brief that assigned the tasks by name, and the survey voice did the critique
+  instead; it then split into two jobs and carried the two-job ledger the
+  fan-out exists to absorb ("the landscape job is still running and lands
+  separately"). The fan-out's value was always one dispatch, one wait, one
+  collect — never equal prompts. A codex consult (`consult-r1` in this
+  project's store) settled the shape: the prompt attaches to the voice
+  (`--with voice=file`, `--prompt-file` the default), the group's prompt copy
+  goes rather than becoming conditional, discovery keys on records, and two
+  latent defects that change exposed — a manifest write failure that warned,
+  ran the members anyway, then released the directory as unstarted; pending
+  skipping a roster member with no record — closed with it. Its one rejected
+  proposal, a JSON seat for the `=`-in-path corner, is recorded in
+  `DESIGN.md` § Fan-out: several turns, one job. **Supervision only, zero lifecycle change — the same
+  admission test the fan-out itself passed.**

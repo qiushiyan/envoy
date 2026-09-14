@@ -101,7 +101,11 @@ sandbox once broke the calling session's own tooling).
   fields plus the directory the record was read from, so the identical retry
   can repeat the dispatch it replaces — the same source conversation, the
   archived prompt, the spend cap — and the resume line can never disagree
-  with what dispatch would accept.
+  with what dispatch would accept. The archive is what was sent: `prompt.md`
+  is written from the one read that feeds the provider's stdin, never from a
+  second read of the caller's file. A record is also what makes a directory
+  a job — `meta.json` for a turn, `group.json` for a fan-out — so discovery
+  keys on records and a reserved name released without one was never a job.
 - **A provider's transient error is an observation; only its verdict fails a
   turn.** codex emits a bare `error` event per reconnect attempt and then
   carries on; a driver that let the last one stand as the outcome recorded
@@ -129,9 +133,10 @@ sandbox once broke the calling session's own tooling).
 
 ## Fan-out: several turns, one job
 
-Several `--with` voices send one prompt to several turns at once. The design rule that
-keeps it from becoming a second engine: **a fan-out is a supervisor over
-unchanged turns, not a new kind of turn.** Members are ordinary turns — own
+Several `--with` voices run several turns at once, each on its own prompt or
+the job's default. The design rule that keeps it from becoming a second
+engine: **a fan-out is a supervisor over unchanged turns, not a new kind of
+turn.** Members are ordinary turns — own
 session, own lock, own job dir, own prompt state, own `result.md`, one level
 down in the group dir — so every lifecycle invariant above holds unmodified
 and `envoy collect <job>/<member>` still works. What the group adds is only what
@@ -171,6 +176,35 @@ Consequences that are load-bearing, not incidental:
   duplicating work already accepted. Where no member returned a result, the
   most dispatch-side cause wins, since that is the one fixed by changing the
   command instead of waiting.
+- **The prompt attaches to the voice.** A voice may carry its own prompt file
+  (`--with codex=landscape.md`); `--prompt-file` is the default for every
+  voice without one and is optional once each names its own. The fan-out's
+  value was never equal prompts but one dispatch, one wait, one collect, and a
+  caller giving each voice a different job otherwise falls back to one brief
+  that assigns the jobs by name — where the voice assigned research did the
+  critique instead — or to separate jobs and the ledger the fan-out exists to
+  absorb (EVIDENCE.md, 2026-09-14). The first `=` splits: no provider, model, effort
+  or job name contains one, a prompt path may, and a job named by a directory
+  path containing `=` is refused by name rather than split into a job and a
+  file nobody meant. Rejected shapes: pairing repeated `--prompt-file` flags
+  with `--with` by position (a swapped pair dispatches silently wrong and the
+  engine cannot refuse it); keying prompts by member address (the engine
+  allocates those, suffixes included); a JSON seat (`--with '{"voice":…}'`),
+  proposed as the one encoding with no `=` ambiguity — a quoting tax on every
+  dispatch for a path corner the engine's slug-sanitized store never produces.
+  Prompt selection lives in the facade: every effective file is checked
+  readable before the name is reserved, and fan and runner receive a complete
+  turn with no fallback rule to learn. What the rule admits next is bounded
+  by the same test — a per-member cap would be supervision, a per-member tree
+  contradicts the one-tree roster, per-member write intent stays refused.
+- **The fan-out directory holds no prompt.** Each member archives the one it
+  was sent, and a group copy kept only while the prompts match would add a
+  second concept (does this group share a prompt?) plus an equality rule. Two
+  consequences: a manifest that cannot be written stops the dispatch before
+  any member starts, because a directory holding turns and no `group.json`
+  reads as unstarted and is released; and `pending` reports a roster member
+  with no `meta.json` as needing attention, the roster being the only
+  evidence that member was meant to run.
 - **Read-only by refusal.** `--allow-write` is rejected on a fan-out: members
   share one working tree and concurrent write turns overwrite each other.
   Parallel write work means a worktree per turn, dispatched as separate turns.
@@ -333,5 +367,6 @@ the same second once shared one (EVIDENCE.md, 2026-07-27).
 - No sandbox flag for codex, ever; no permission machinery beyond claude's
   own `--permission-mode`.
 - No activity-based hang detector; no timeout that resets on output.
-- No prompt templating; prompts arrive as files, whole.
+- No prompt templating; prompts arrive as files, whole — one file per voice
+  when the voices' questions differ.
 - No Windows support; no migration from sidekick-era state.

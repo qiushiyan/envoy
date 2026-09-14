@@ -1,7 +1,7 @@
 // Command envoy runs headless AI-session turns as named jobs and returns
 // them as data.
 //
-//	envoy run <job> --prompt-file <F> --with <voice> [--with <voice>…] [flags]
+//	envoy run <job> [--prompt-file <F>] --with <voice>[=<F>] [--with <voice>…] [flags]
 //	envoy collect [--result-only|--status-only] <job>
 //	envoy pending [--base DIR]
 //	envoy version
@@ -26,7 +26,7 @@ import (
 var usageText = fmt.Sprintf(`envoy — run headless AI-session turns (claude or codex) as named jobs
 
 USAGE
-  envoy run <job> --prompt-file <F> --with <voice> [--with <voice>…] [flags]
+  envoy run <job> [--prompt-file <F>] --with <voice>[=<F>] [--with <voice>…] [flags]
   envoy collect [--result-only|--status-only] <job>
   envoy pending [--base DIR]      jobs still needing attention after a missed completion
   envoy version
@@ -58,11 +58,16 @@ VOICES
     --with @consult-r1/codex --with claude:opus
                                      one member warm beside a cold voice
     --with @consult-r1  (alone)      continue every member of a fan-out
+  --with <voice>=<file>              that voice's own prompt file
+    --with codex=landscape.md --with claude:opus=critique.md
+                                     two voices, two prompts, one job
+    --with @consult-r1=round2.md     one NEW prompt to every member
 
-  One voice is a single turn; several are a fan-out — the same prompt to each,
-  supervised as one job that exits once every member is done, and collected
-  once. A fan-out reference counts as its members. Members never see each
-  other's output. A fan-out is read-only: its members share one working tree.
+  One voice is a single turn; several are a fan-out — each voice sent its own
+  prompt file, or the job's --prompt-file when it names none — supervised as
+  one job that exits once every member is done, and collected once. A fan-out
+  reference counts as its members. Members never see each other's output. A
+  fan-out is read-only: its members share one working tree.
 
   A continued voice takes its provider, session, model, effort, tree, baseline
   and write intent from the job's own records; --cwd and --baseline override.
@@ -70,7 +75,8 @@ VOICES
   stands alone: to seat one of its members beside others, name the member.
 
 FLAGS
-  --prompt-file F   the full prompt (required); copied into the job dir
+  --prompt-file F   the whole prompt for every voice without its own; required
+                    unless each voice carries one. Copied into the job dir
   --with VOICE      once per voice (required); see VOICES
   --timeout-min N   wall-clock safety cap in minutes, 0 = off (default 30);
                     each member of a fan-out gets it separately

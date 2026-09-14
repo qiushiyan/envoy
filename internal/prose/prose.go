@@ -496,6 +496,19 @@ func JobExists(dir string) string {
 }
 
 // RunNeedsVoice refuses a run with no member at all.
+// VoiceNeedsPrompt is the refusal for a voice that has no prompt from either
+// source: its own seat (--with voice=file) or the job's default (--prompt-file).
+func VoiceNeedsPrompt(spec string) string {
+	return fmt.Sprintf("--with %s has no prompt: attach one to the voice (--with %s=<file>) or give every voice a default with --prompt-file <file>", spec, spec)
+}
+
+// JobPathHasEquals is the refusal for a continued job named by a directory
+// path that contains '=': the character marks a voice's prompt file, so the
+// path cannot be told apart from an attachment.
+func JobPathHasEquals(spec string) string {
+	return fmt.Sprintf("--with %s: a job directory path may not contain '=', which separates a voice from its prompt file (--with @<job>=<file>); move the job directory to a path without '=' and continue it from there", spec)
+}
+
 func RunNeedsVoice() string {
 	return "at least one --with is required: a cold voice as provider[:model[:effort]] (codex, claude:opus, codex:gpt-6-astra:high), " +
 		"or @<job> to continue a finished job's conversation"
@@ -545,7 +558,7 @@ func BaselineMix(firstDir, firstBaseline, secondDir, secondBaseline string) stri
 
 // ---------- fan-out ----------
 //
-// A fan-out is several turns on one prompt, supervised as a single job. Its
+// A fan-out is several turns, each on its own prompt, supervised as a single job. Its
 // wording answers one extra question a single turn never raises: what one
 // member's outcome licenses about another. The answer is nothing — members are
 // independent turns, and each carries its own recovery — so every sentence
@@ -620,6 +633,21 @@ func turnCount(n int) string {
 // one fan-out outcome where nothing ran and nothing was changed.
 func FanUndispatched() string {
 	return "never dispatched — envoy rejected or could not start this member, so nothing ran for it"
+}
+
+// FanMemberNoRecord is a fan-out member's section at collect time when its
+// directory holds no meta.json. Unlike the supervisor at dispatch time, collect
+// did not watch the runner return, so it says only what the directory shows
+// and sends the reader to the logs before any retry.
+func FanMemberNoRecord() string {
+	return "no record — this member never wrote meta.json, so whether anything ran for it is unknown"
+}
+
+// FanMemberNoRecordNext is the one action for a member without a record.
+func FanMemberNoRecordNext(dir string) string {
+	ws := job.Workspace{Dir: dir}
+	return fmt.Sprintf("read %s, %s and %s before retrying this member; a member whose logs show nothing ran is re-sent as its own job with its prompt.md",
+		ws.ProgressLogPath(), ws.RawLogPath(), ws.StderrLogPath())
 }
 
 // FanDispatchNext is the nudge printed the moment a fan-out starts, when the

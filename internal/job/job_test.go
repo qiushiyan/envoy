@@ -142,10 +142,8 @@ func TestProjectSlugDistinguishesSameName(t *testing.T) {
 
 func TestWorkspacePrepareAndProgress(t *testing.T) {
 	dir := t.TempDir()
-	prompt := filepath.Join(dir, "p.md")
-	os.WriteFile(prompt, []byte("do the thing"), 0o644)
 	ws := Workspace{Dir: dir}
-	if err := ws.Prepare(prompt); err != nil {
+	if err := ws.Prepare([]byte("do the thing")); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(ws.PromptPath())

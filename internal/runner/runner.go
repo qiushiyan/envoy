@@ -197,7 +197,7 @@ func Run(opts Options) Result {
 		r.sessionLock = handle
 	}
 
-	if err := r.ws.Prepare(opts.PromptFile); err != nil {
+	if err := r.ws.Prepare(promptText); err != nil {
 		r.releaseLock()
 		fmt.Fprintf(opts.Stderr, "envoy: cannot prepare job dir: %s\n", err)
 		return Result{ExitCode: job.ExitInfra, OutDir: outDir}

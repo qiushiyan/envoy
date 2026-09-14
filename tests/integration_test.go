@@ -1025,7 +1025,7 @@ func TestFanDispatchesEveryMemberAsAnOrdinaryTurn(t *testing.T) {
 	}
 	mustContain(t, "stdout", res.stdout,
 		"job: "+outDir,
-		"fan-out: 2 turns · one prompt · hard cap 5m each",
+		"fan-out: 2 turns · hard cap 5m each",
 		"member codex: model (provider default) · effort (provider default) · dir "+filepath.Join(outDir, "codex"),
 		"member claude-opus: model opus · effort (provider default) · dir "+filepath.Join(outDir, "claude-opus"),
 		"next: let this command run to completion — it exits once every member is done",
@@ -1056,10 +1056,10 @@ func TestFanDispatchesEveryMemberAsAnOrdinaryTurn(t *testing.T) {
 			t.Fatalf("%s prompt.md = %q", name, got)
 		}
 	}
-	// The shared prompt is recorded once at the fan-out level too, so the
-	// group is self-describing even if a member dir is lost.
-	if got := readFile(t, filepath.Join(outDir, "prompt.md")); got != "fake prompt body\n" {
-		t.Fatalf("group prompt.md = %q", got)
+	// The prompt is a member's own record: the fan-out directory holds the
+	// roster and nothing a member already archives.
+	if _, err := os.Stat(filepath.Join(outDir, "prompt.md")); !os.IsNotExist(err) {
+		t.Fatal("a fan-out directory must hold no prompt.md of its own")
 	}
 
 	var group map[string]any
@@ -1122,7 +1122,6 @@ func TestFanPartialOutcomeCollectsPerMember(t *testing.T) {
 		"fan-out: "+outDir,
 		"status: partial — 1 of 2 turns returned a result",
 		"members: codex ok · claude timeout",
-		"prompt: "+filepath.Join(outDir, "prompt.md"),
 		"=== member codex ===",
 		"job: "+filepath.Join(outDir, "codex"),
 		"fake provider result",
@@ -1284,7 +1283,7 @@ func TestHelpIsSelfSufficient(t *testing.T) {
 		t.Fatalf("collect --help exit = %d, want 0\nstderr:\n%s", res.code, res.stderr)
 	}
 	mustContain(t, "stdout", res.stdout,
-		"envoy run <job> --prompt-file <F> --with <voice>", // the dispatch form
+		"envoy run <job> [--prompt-file <F>] --with <voice>[=<F>]", // the dispatch form
 		"THE LOOP",                // name → dispatch → collect
 		"envoy collect review-r1", // the read path, by name
 		"nothing to read back",    // why the name is chosen up front
@@ -1293,7 +1292,9 @@ func TestHelpIsSelfSufficient(t *testing.T) {
 		"--with codex::high", // effort without a model
 		"--with @<job>",      // continuation
 		"--with @consult-r1/codex --with claude:opus", // warm beside cold
-		"stands alone", // a fan-out reference
+		"stands alone",                 // a fan-out reference
+		"--with <voice>=<file>",        // a voice's own prompt
+		"--with @consult-r1=round2.md", // a round on one NEW prompt
 		"WHAT A JOB LEAVES BEHIND",
 		"FACTS THE FLAGS CANNOT TELL YOU",
 		"envoy never substitutes", // no model substitution
@@ -1319,7 +1320,10 @@ func TestUsageErrors(t *testing.T) {
 		{[]string{"run", "bad name", "--prompt-file", prompt, "--with", "codex"}, "one segment"},
 		{[]string{"run", job, "--prompt-file", prompt}, "at least one --with is required"},
 		{[]string{"run", job, "--with", "gemini", "--prompt-file", prompt}, "must name provider claude or codex"},
-		{[]string{"run", job, "--with", "codex"}, "--prompt-file <path> is required"},
+		{[]string{"run", job, "--with", "codex"}, "--with codex has no prompt"},
+		{[]string{"run", job, "--with", "codex=", "--prompt-file", prompt}, "give the prompt file after '='"},
+		{[]string{"run", job, "--with", "codex=" + filepath.Join(t.TempDir(), "absent.md")}, "prompt file not found"},
+		{[]string{"run", job, "--with", "codex", "--prompt-file", t.TempDir()}, "is a directory, not a file"},
 		{[]string{"run", job, "--with", "claude::minimal", "--prompt-file", prompt}, "claude has no 'minimal'"},
 		{[]string{"run", job, "--with", "codex", "--prompt-file", prompt, "--timeout-min", "-1"}, "--timeout-min must be a number >= 0"},
 		{[]string{"run", job, "--with", "codex", "--prompt-file", prompt, "--max-budget-usd", "1"}, "caps one claude voice"},
@@ -1412,6 +1416,26 @@ func TestFanResumeFromContinuesEveryMember(t *testing.T) {
 	for _, name := range []string{"codex", "claude-opus"} {
 		if got := readFile(t, filepath.Join(r2, name, "prompt.md")); got != "round-2 prompt body\n" {
 			t.Fatalf("%s prompt.md = %q", name, got)
+		}
+	}
+
+	// The prompt may ride on the reference itself: @<fan-out>=<file> is the
+	// same round with no --prompt-file, and the '=' attaches to the whole set.
+	round3 := filepath.Join(t.TempDir(), "round3.md")
+	if err := os.WriteFile(round3, []byte("round-3 prompt body\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r3 := filepath.Join(t.TempDir(), "round3-group")
+	res = runEnvoy(t, e, "run", r3, "--with", "@"+r2+"="+round3, "--timeout-min", "5")
+	if res.code != 0 {
+		t.Fatalf("round 3 exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	for _, name := range []string{"codex", "claude-opus"} {
+		if got := readFile(t, filepath.Join(r3, name, "prompt.md")); got != "round-3 prompt body\n" {
+			t.Fatalf("round 3 %s prompt.md = %q", name, got)
+		}
+		if got := readMeta(t, filepath.Join(r3, name))["resumedFrom"]; got != filepath.Join(r2, name) {
+			t.Fatalf("round 3 %s resumedFrom = %v", name, got)
 		}
 	}
 }
@@ -1788,6 +1812,11 @@ func TestRedispatchRepeatsTheDispatchItReplaces(t *testing.T) {
 	if res.code != 2 {
 		t.Fatalf("spawn failure exit = %d, want 2\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
+	// The caller's own file may be gone by the time the retry is read; the
+	// command must point at the archive the job made, not the file it was given.
+	if err := os.Remove(prompt); err != nil {
+		t.Fatal(err)
+	}
 	col := runEnvoy(t, noProvider, "collect", r2)
 	mustContain(t, "collect stdout", col.stdout,
 		"never started",
@@ -1797,4 +1826,160 @@ func TestRedispatchRepeatsTheDispatchItReplaces(t *testing.T) {
 		"--timeout-min 9",
 		"--prompt-file '"+filepath.Join(r2, "prompt.md")+"'")
 	mustNotContain(t, "collect stdout", col.stdout, "--with claude")
+}
+
+// A fan-out is one job over N ordinary turns, and nothing about that needs
+// the turns to share a prompt: a voice may carry its own file, and the job's
+// --prompt-file is the default for the rest. Each member archives and sends
+// exactly the file it was given.
+func TestFanMembersReceiveTheirOwnPrompts(t *testing.T) {
+	receipts := t.TempDir()
+	e := newEnv(t).
+		set("ENVOY_FAKE_SCENARIO", "success").
+		set("ENVOY_FAKE_PROMPT_FILE_CODEX", filepath.Join(receipts, "codex.txt")).
+		set("ENVOY_FAKE_PROMPT_FILE_CLAUDE", filepath.Join(receipts, "claude.txt"))
+	outDir := filepath.Join(t.TempDir(), "group")
+	src := t.TempDir()
+	landscape := filepath.Join(src, "landscape.md")
+	critique := filepath.Join(src, "critique.md")
+	os.WriteFile(landscape, []byte("survey the landscape\n"), 0o644)
+	os.WriteFile(critique, []byte("critique the design\n"), 0o644)
+
+	// A mixed roster: codex names its file, claude falls back to the default.
+	res := runEnvoy(t, e, "run", outDir, "--with", "codex="+landscape, "--with", "claude:opus",
+		"--prompt-file", critique, "--timeout-min", "5")
+	if res.code != 0 {
+		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	mustContain(t, "stdout", res.stdout, "fan-out: 2 turns · hard cap 5m each", "status: ok — all 2 turns returned a result")
+	for name, want := range map[string]string{"codex": "survey the landscape\n", "claude-opus": "critique the design\n"} {
+		if got := readFile(t, filepath.Join(outDir, name, "prompt.md")); got != want {
+			t.Fatalf("%s prompt.md = %q, want %q", name, got, want)
+		}
+	}
+	// The archive proves the copy; the receipt proves the bytes reached stdin.
+	if got := readFile(t, filepath.Join(receipts, "codex.txt")); got != "survey the landscape\n" {
+		t.Fatalf("codex received %q", got)
+	}
+	if got := readFile(t, filepath.Join(receipts, "claude.txt")); got != "critique the design\n" {
+		t.Fatalf("claude received %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "prompt.md")); !os.IsNotExist(err) {
+		t.Fatal("a fan-out with differing prompts can hold no group prompt.md")
+	}
+
+	// Every voice carrying its own file needs no default at all.
+	both := filepath.Join(t.TempDir(), "both")
+	res = runEnvoy(t, e, "run", both, "--with", "codex="+landscape, "--with", "claude:opus="+critique, "--timeout-min", "5")
+	if res.code != 0 {
+		t.Fatalf("no-default exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	if got := readFile(t, filepath.Join(both, "claude-opus", "prompt.md")); got != "critique the design\n" {
+		t.Fatalf("claude-opus prompt.md = %q", got)
+	}
+}
+
+// A roster is refused whole before its name is reserved: one voice with no
+// prompt from either source, or one member's file that cannot be read, must
+// not start its siblings.
+func TestRunRefusesAnUnpromptedVoiceBeforeReserving(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	prompt := writePrompt(t, t.TempDir())
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--with", "codex=" + prompt, "--with", "claude:opus"}, "--with claude:opus has no prompt"},
+		{[]string{"--with", "codex=" + prompt, "--with", "claude:opus=" + filepath.Join(t.TempDir(), "absent.md")}, "prompt file not found"},
+		{[]string{"--with", "codex", "--with", "claude:opus=" + prompt, "--prompt-file", filepath.Join(t.TempDir(), "absent.md")}, "prompt file not found"},
+	}
+	for _, c := range cases {
+		dir := filepath.Join(t.TempDir(), "group")
+		res := runEnvoy(t, e, append([]string{"run", dir}, c.args...)...)
+		if res.code != 3 {
+			t.Fatalf("%v: exit = %d, want 3\nstderr:\n%s", c.args, res.code, res.stderr)
+		}
+		mustContain(t, fmt.Sprintf("stderr of %v", c.args), res.stderr, c.want)
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("%v: a refused roster must leave no job dir", c.args)
+		}
+	}
+}
+
+// '=' splits a voice from its prompt file at the first occurrence, so a prompt
+// path may contain one. The only spelling that could carry '=' on the voice
+// side is a job named by a directory path, and that is refused by name rather
+// than split into a job and a file the caller never meant.
+func TestEqualsInPathsIsSplitOnceAndRefusedInJobPaths(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	src := t.TempDir()
+	odd := filepath.Join(src, "a=b.md")
+	os.WriteFile(odd, []byte("odd prompt body\n"), 0o644)
+
+	outDir := filepath.Join(t.TempDir(), "job")
+	res := runEnvoy(t, e, "run", outDir, "--with", "codex="+odd, "--timeout-min", "5")
+	if res.code != 0 {
+		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	if got := readFile(t, filepath.Join(outDir, "prompt.md")); got != "odd prompt body\n" {
+		t.Fatalf("prompt.md = %q", got)
+	}
+
+	// A job that lives at a path with '=' cannot be continued by that path.
+	oddJob := filepath.Join(t.TempDir(), "review=old")
+	if r := runEnvoy(t, e, runArgs(odd, oddJob, "--with", "codex", "--timeout-min", "5")...); r.code != 0 {
+		t.Fatalf("odd job exit = %d\nstderr:\n%s", r.code, r.stderr)
+	}
+	r2 := filepath.Join(t.TempDir(), "round2")
+	res = runEnvoy(t, e, runArgs(odd, r2, "--with", "@"+oddJob)...)
+	if res.code != 3 {
+		t.Fatalf("continuing a '=' path: exit = %d, want 3\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	mustContain(t, "stderr", res.stderr, "a job directory path may not contain '='")
+	if _, err := os.Stat(r2); !os.IsNotExist(err) {
+		t.Fatal("a refused continuation must leave no job dir")
+	}
+}
+
+// The roster is the only evidence a member was meant to run. A member that
+// never wrote its record is invisible to its own files, so the group carries
+// it in pending rather than letting the fan-out fall out of the index once its
+// siblings are collected.
+func TestPendingCarriesARosterMemberWithoutARecord(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	base := t.TempDir()
+	outDir := filepath.Join(base, "group")
+	prompt := writePrompt(t, t.TempDir())
+	if r := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--with", "claude:opus", "--timeout-min", "5")...); r.code != 0 {
+		t.Fatalf("exit = %d\nstderr:\n%s", r.code, r.stderr)
+	}
+	if r := runEnvoy(t, e, "collect", outDir); r.code != 0 {
+		t.Fatalf("collect = %d\n%s", r.code, r.stderr)
+	}
+	pending := runEnvoy(t, e, "pending", "--base", base)
+	mustContain(t, "pending after collect", pending.stdout, "pending jobs: 0")
+
+	if err := os.Remove(filepath.Join(outDir, "claude-opus", "meta.json")); err != nil {
+		t.Fatal(err)
+	}
+	pending = runEnvoy(t, e, "pending", "--base", base)
+	mustContain(t, "pending stdout", pending.stdout,
+		"pending jobs: 1",
+		"[group] "+outDir,
+		"1 of 2 members still need attention",
+		"claude-opus: has no meta.json, so it never recorded a start")
+
+	// Collect says only what the directory shows — no record, outcome unknown,
+	// read the logs — and never that nothing ran, which it did not observe.
+	col := runEnvoy(t, e, "collect", outDir)
+	if col.code != 0 {
+		t.Fatalf("collect = %d\n%s", col.code, col.stderr)
+	}
+	mustContain(t, "collect stdout", col.stdout,
+		"members: codex ok · claude-opus no status",
+		"=== member claude-opus ===",
+		"status: no record — this member never wrote meta.json",
+		"next: read "+filepath.Join(outDir, "claude-opus", "progress.log"))
+	mustNotContain(t, "collect stdout", col.stdout, "never dispatched", "nothing ran for it")
+	mustNotContain(t, "collect stderr", col.stderr, "collect error")
 }

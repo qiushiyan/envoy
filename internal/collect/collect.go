@@ -28,7 +28,9 @@ import (
 )
 
 // JobDirs lists job directories under base, sorted by name. A dir counts as a
-// job once prompt.md exists.
+// job once it holds a record — meta.json for a turn, group.json for a fan-out —
+// since a record is what a reader can act on; a directory reserved and
+// released without one was never a job.
 //
 // It is the only discovery function, and it returns the read error rather than
 // swallowing it: a store that could not be read is not an empty store. Which
@@ -45,12 +47,17 @@ func JobDirs(base string) ([]string, error) {
 	var dirs []string
 	for _, e := range entries {
 		dir := filepath.Join(base, e.Name())
-		if _, err := os.Stat(filepath.Join(dir, "prompt.md")); err == nil {
+		if job.IsGroupDir(dir) || hasFile(job.Workspace{Dir: dir}.MetaPath()) {
 			dirs = append(dirs, dir)
 		}
 	}
 	sort.Strings(dirs)
 	return dirs, nil
+}
+
+func hasFile(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // FirstRun reports whether a discovery error is just a store that has not been
@@ -572,11 +579,21 @@ func collectGroup(dir string, mode Mode, w, errW io.Writer) int {
 	for _, name := range group.Members {
 		memberDir := gw.Member(name).Dir
 		fmt.Fprintf(&sections, "\n=== member %s ===\n", name)
+		// A member with no record is the roster's observation, not the
+		// member's: it gets its own section here, worded to what the directory
+		// shows, rather than the single-turn error a turn with no record earns.
+		if !hasFile(job.Workspace{Dir: memberDir}.MetaPath()) {
+			fmt.Fprintf(&sections, "status: %s\nnext: %s\n", prose.FanMemberNoRecord(), prose.FanMemberNoRecordNext(memberDir))
+			statuses = append(statuses, "")
+			labels = append(labels, name+" no status")
+			resumable = false
+			continue
+		}
 		r := renderJob(memberDir, mode, &sections, errW, false)
 		status := ""
 		if r.code != 0 {
-			// The member dir carries no readable meta: the turn never got far
-			// enough to publish one. renderJob has already said so on stderr.
+			// meta.json exists but could not be read; renderJob has already
+			// said so on stderr.
 			fmt.Fprintf(&sections, "status: %s\n", prose.FanUndispatched())
 		} else {
 			status = r.meta.Status
@@ -621,13 +638,6 @@ func collectGroup(dir string, mode Mode, w, errW io.Writer) int {
 		fmt.Fprintf(&body, "fan-out: %s\n", dir)
 		fmt.Fprintf(&body, "status: %s\n", prose.FanStatusLine(statuses))
 		fmt.Fprintf(&body, "members: %s\n", strings.Join(labels, " · "))
-		// The prompt this fan-out was given is the caller's own file, and a
-		// set that returned every result raises no question it answers. It
-		// joins the members' diagnostic tier: printed when a member needs a
-		// decision, and whenever the whole preamble was asked for.
-		if prose.FanStatus(statuses) != prose.FanOK || mode == ModeStatusOnly {
-			fmt.Fprintf(&body, "prompt: %s\n", gw.PromptPath())
-		}
 		// The set-level follow-up is offered only when it is provably
 		// possible: every member finished and holds a session to continue.
 		if resumable {
@@ -745,7 +755,15 @@ func pendingGroup(dir string) (pendingItem, bool) {
 	}
 	var reasons []string
 	for _, name := range group.Members {
-		if item, ok := pendingJob(gw.Member(name).Dir); ok {
+		memberDir := gw.Member(name).Dir
+		// A member the roster names but that never wrote a record is the one
+		// case the member's own files cannot report; the roster is the only
+		// evidence it was meant to run, so the group carries it.
+		if !hasFile(job.Workspace{Dir: memberDir}.MetaPath()) {
+			reasons = append(reasons, fmt.Sprintf("%s: has no meta.json, so it never recorded a start", name))
+			continue
+		}
+		if item, ok := pendingJob(memberDir); ok {
 			reasons = append(reasons, fmt.Sprintf("%s: %s", name, item.detail))
 		}
 	}

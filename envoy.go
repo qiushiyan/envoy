@@ -26,7 +26,7 @@ import (
 )
 
 // Version of the engine, reported by `envoy version`.
-const Version = "0.8.0"
+const Version = "0.9.0"
 
 // Exit codes: 0 ok · 1 provider failure · 2 infra · 3 usage · 4 timeout ·
 // 5 interrupted · 6 partial (several voices only).
@@ -40,12 +40,15 @@ const (
 	ExitPartial     = job.ExitPartial
 )
 
-// RunRequest describes one job: a caller-chosen name (or directory), one
-// prompt, and one voice per turn. With holds each voice as the caller spells
-// it — provider[:model[:effort]] for a cold session, or @<job> to continue a
-// finished job's conversation (a fan-out reference continues every member and
-// must be the only voice). One voice runs as a single turn in the job
-// directory itself; several run as a fan-out with a member directory each.
+// RunRequest describes one job: a caller-chosen name (or directory), a
+// prompt per voice, and one voice per turn. With holds each voice as the
+// caller spells it — provider[:model[:effort]] for a cold session, or @<job>
+// to continue a finished job's conversation (a fan-out reference continues
+// every member and must be the only voice) — optionally followed by =<file>,
+// the prompt that voice alone receives. PromptFile is the default for every
+// voice without one; it may be empty when each voice carries its own. One
+// voice runs as a single turn in the job directory itself; several run as a
+// fan-out with a member directory each.
 //
 // Zero values mean the current directory for Cwd and the engine's 30-minute
 // safety cap for TimeoutMin. Running uncapped requires saying so with
@@ -116,11 +119,12 @@ func Run(req RunRequest) int {
 	if len(req.With) == 0 {
 		return usageError(stderr, "%s", prose.RunNeedsVoice())
 	}
-	if req.PromptFile == "" {
-		return usageError(stderr, "--prompt-file <path> is required")
-	}
-	if _, err := os.Stat(req.PromptFile); err != nil {
-		return usageError(stderr, "prompt file not found: %s", req.PromptFile)
+	// A default the caller named must read even if every voice overrides it:
+	// a mistyped path is a mistake whatever the roster does with it.
+	if req.PromptFile != "" {
+		if err := promptReadable(req.PromptFile); err != nil {
+			return usageError(stderr, "prompt file %s", err)
+		}
 	}
 	timeoutMin, err := resolveTimeout(req.TimeoutMin, req.NoTimeout)
 	if err != nil {
@@ -130,6 +134,14 @@ func Run(req RunRequest) int {
 	turns, errText := resolveTurns(req, invocationCwd, timeoutMin)
 	if errText != "" {
 		return usageError(stderr, "%s", errText)
+	}
+	// Every turn's prompt is checked before the name is reserved, so a
+	// member's unreadable file refuses the whole dispatch rather than
+	// starting its siblings.
+	for _, t := range turns {
+		if err := promptReadable(t.Options.PromptFile); err != nil {
+			return usageError(stderr, "prompt file %s", err)
+		}
 	}
 	if req.MaxBudgetUSD != nil {
 		if len(turns) != 1 || turns[0].Options.Provider != "claude" {
@@ -170,6 +182,25 @@ func Run(req RunRequest) int {
 	return code
 }
 
+// promptReadable reports why a prompt file cannot be sent: missing, a
+// directory, or unreadable. Existence alone is not enough — the runner reads
+// the file whole, and a directory would only fail after the name was taken.
+func promptReadable(path string) error {
+	info, err := os.Stat(path)
+	switch {
+	case err != nil:
+		return fmt.Errorf("not found: %s", path)
+	case info.IsDir():
+		return fmt.Errorf("is a directory, not a file: %s", path)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("cannot be read: %s", err)
+	}
+	f.Close()
+	return nil
+}
+
 // releaseIfUnstarted gives a reserved name back when nothing ran under it: a
 // refusal after reservation (a held session, an unreadable prompt) leaves no
 // record, and an occupied name with nothing to collect would be invisible.
@@ -185,6 +216,7 @@ func releaseIfUnstarted(dir, recordPath string) {
 // what the caller spelled, resolved into the turn it runs.
 type voice struct {
 	base       string // the name to derive the member address from
+	promptFile string // the prompt this voice alone was given; "" = the job's default
 	provider   string
 	model      string
 	effort     string
@@ -203,12 +235,23 @@ type voice struct {
 // when the roster is dispatchable.
 func resolveTurns(req RunRequest, invocationCwd string, timeoutMin float64) ([]fan.Turn, string) {
 	var voices []voice
-	for _, spec := range req.With {
+	for _, seat := range req.With {
+		spec, promptFile, errText := splitSeat(seat)
+		if errText != "" {
+			return nil, errText
+		}
+		if promptFile == "" {
+			promptFile = req.PromptFile
+		}
+		if promptFile == "" {
+			return nil, prose.VoiceNeedsPrompt(spec)
+		}
 		if !strings.HasPrefix(spec, "@") {
 			v, err := parseVoice(spec)
 			if err != nil {
 				return nil, err.Error()
 			}
+			v.promptFile = promptFile
 			voices = append(voices, v)
 			continue
 		}
@@ -220,7 +263,7 @@ func resolveTurns(req RunRequest, invocationCwd string, timeoutMin float64) ([]f
 			if len(req.With) > 1 {
 				return nil, prose.GroupRefMustStandAlone(ref, fanCandidates(ref))
 			}
-			members, errText := fanMembers(ref)
+			members, errText := fanMembers(ref, promptFile)
 			if errText != "" {
 				return nil, errText
 			}
@@ -234,7 +277,9 @@ func resolveTurns(req RunRequest, invocationCwd string, timeoutMin float64) ([]f
 		if blocker != "" {
 			return nil, prose.ContinueBlocked(ref, blocker)
 		}
-		voices = append(voices, continuedVoice(ref, source, ""))
+		v := continuedVoice(ref, source, "")
+		v.promptFile = promptFile
+		voices = append(voices, v)
 	}
 
 	// The roster checks: one conversation once, and one tree and one anchor
@@ -294,7 +339,7 @@ func resolveTurns(req RunRequest, invocationCwd string, timeoutMin float64) ([]f
 			Name: fan.Name(v.base, taken),
 			Options: runner.Options{
 				Provider:    v.provider,
-				PromptFile:  req.PromptFile,
+				PromptFile:  v.promptFile,
 				Cwd:         cwd,
 				Baseline:    baseline,
 				ResumedFrom: v.source,
@@ -332,11 +377,37 @@ func continuedVoice(dir string, source *collect.Source, name string) voice {
 	}
 }
 
+// splitSeat separates what the caller spelled into the voice and, when one
+// was attached with '=', that voice's own prompt file. The first '=' splits:
+// no provider, model, effort or job name contains one, and the prompt path
+// to its right may. A job named by a directory path is the one form that
+// could carry '=' legitimately, and there it is refused rather than guessed
+// at — but only when such a directory actually exists, since otherwise the
+// spelling can only have meant an attachment.
+func splitSeat(seat string) (spec, promptFile, errText string) {
+	i := strings.IndexByte(seat, '=')
+	if i < 0 {
+		return seat, "", ""
+	}
+	if strings.HasPrefix(seat, "@") {
+		if whole := strings.TrimPrefix(seat, "@"); job.IsPath(whole) {
+			if info, err := os.Stat(whole); err == nil && info.IsDir() {
+				return "", "", prose.JobPathHasEquals(seat)
+			}
+		}
+	}
+	spec, promptFile = seat[:i], seat[i+1:]
+	if promptFile == "" {
+		return "", "", fmt.Sprintf("--with %s: give the prompt file after '=' (--with %s<file>), or drop the '=' to use --prompt-file", seat, seat)
+	}
+	return spec, promptFile, ""
+}
+
 // fanMembers expands a fan-out reference into its members as continued
-// voices, each keeping the name it had. The set is whole or refused: any
-// member that cannot continue refuses the round rather than being silently
-// left out of it.
-func fanMembers(dir string) ([]voice, string) {
+// voices, each keeping the name it had and each sent promptFile — the round's
+// one NEW prompt. The set is whole or refused: any member that cannot continue
+// refuses the round rather than being silently left out of it.
+func fanMembers(dir, promptFile string) ([]voice, string) {
 	gw := job.GroupWorkspace{Dir: dir}
 	group, err := job.ReadGroupFile(gw.GroupPath())
 	if err != nil {
@@ -358,7 +429,9 @@ func fanMembers(dir string) ([]voice, string) {
 			reasons = append(reasons, prose.FanResumeBlockerLine(name, blocker, ""))
 			continue
 		}
-		voices = append(voices, continuedVoice(memberDir, source, name))
+		v := continuedVoice(memberDir, source, name)
+		v.promptFile = promptFile
+		voices = append(voices, v)
 	}
 	if len(reasons) > 0 {
 		return nil, prose.FanContinueBlocked(dir, reasons)

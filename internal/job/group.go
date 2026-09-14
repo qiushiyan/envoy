@@ -55,6 +55,8 @@ const GroupSchemaVersion = 2
 // Group is the manifest of one fan-out: the members it dispatched, in roster
 // order, and the settings they shared. A member's name is also its directory
 // under the fan-out, so the roster is the only coordinate the manifest holds.
+// The prompt is not shared: each member archives the one it was sent in its
+// own prompt.md, so the fan-out directory holds no prompt of its own.
 //
 // It deliberately records no member status, session, settings, or result.
 // Every member is an ordinary turn whose meta.json is the single source of
@@ -110,18 +112,11 @@ type GroupWorkspace struct {
 	Dir string
 }
 
-func (g GroupWorkspace) GroupPath() string  { return filepath.Join(g.Dir, "group.json") }
-func (g GroupWorkspace) PromptPath() string { return filepath.Join(g.Dir, "prompt.md") }
+func (g GroupWorkspace) GroupPath() string { return filepath.Join(g.Dir, "group.json") }
 
 // Member is the job workspace of one named member.
 func (g GroupWorkspace) Member(name string) Workspace {
 	return Workspace{Dir: filepath.Join(g.Dir, name)}
-}
-
-// Prepare copies the shared prompt into the fan-out directory, so the group
-// records exactly what every member was sent even if a member dir is lost.
-func (g GroupWorkspace) Prepare(promptFile string) error {
-	return copyFile(promptFile, g.PromptPath())
 }
 
 // IsGroupDir reports whether a job directory is a fan-out rather than a single

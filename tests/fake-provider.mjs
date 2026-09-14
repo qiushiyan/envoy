@@ -29,8 +29,9 @@ if (scenario === 'exit-before-stdin') {
 // turn starts. This catches regressions where turn.mjs forgets to close stdin.
 let prompt = '';
 for await (const chunk of process.stdin) prompt += chunk;
-if (process.env.ENVOY_FAKE_PROMPT_FILE) {
-  fs.writeFileSync(process.env.ENVOY_FAKE_PROMPT_FILE, prompt);
+const promptFile = perProvider('ENVOY_FAKE_PROMPT_FILE', '');
+if (promptFile) {
+  fs.writeFileSync(promptFile, prompt);
 }
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const emit = (event) => process.stdout.write(`${JSON.stringify(event)}\n`);

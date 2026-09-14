@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -169,10 +168,13 @@ func (w Workspace) StderrLogPath() string   { return filepath.Join(w.Dir, "stder
 func (w Workspace) ProgressLogPath() string { return filepath.Join(w.Dir, "progress.log") }
 func (w Workspace) LastMessagePath() string { return filepath.Join(w.Dir, "last-message.txt") }
 
-// Prepare copies the dispatched prompt in and truncates the log files, so a
-// crashed job still leaves a complete, self-describing directory.
-func (w Workspace) Prepare(promptFile string) error {
-	if err := copyFile(promptFile, w.PromptPath()); err != nil {
+// Prepare archives the prompt exactly as it will be sent and truncates the
+// log files, so a crashed job still leaves a complete, self-describing
+// directory. It takes the bytes, not the file: the runner reads the caller's
+// file once and both sends and archives that one read, so prompt.md cannot
+// differ from what the provider received by a write that landed in between.
+func (w Workspace) Prepare(prompt []byte) error {
+	if err := os.WriteFile(w.PromptPath(), prompt, 0o644); err != nil {
 		return err
 	}
 	for _, p := range []string{w.RawLogPath(), w.StderrLogPath(), w.ProgressLogPath()} {
@@ -181,21 +183,4 @@ func (w Workspace) Prepare(promptFile string) error {
 		}
 	}
 	return nil
-}
-
-func copyFile(from, to string) error {
-	src, err := os.Open(from)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-	dst, err := os.Create(to)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(dst, src); err != nil {
-		dst.Close()
-		return err
-	}
-	return dst.Close()
 }

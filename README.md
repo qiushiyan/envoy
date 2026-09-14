@@ -16,6 +16,7 @@ make install                  # builds to ~/.local/bin/envoy
 ```sh
 envoy run review-r1 --prompt-file brief.md --with codex --timeout-min 30
 envoy run consult-r1 --prompt-file brief.md --with codex --with claude:opus   # one prompt, N voices
+envoy run consult-r1 --with codex=survey.md --with claude:opus=critique.md    # a prompt per voice, still one job
 envoy run review-r2 --prompt-file next.md --with @review-r1                  # continue a finished job's conversation
 envoy run review-r1 --prompt-file brief.md --with @consult-r1/codex --with codex
                               # a continued conversation beside a cold voice
@@ -55,15 +56,17 @@ Claude jobs expose live primary-turn context samples in `meta.json.usage`;
 `collect --status-only` shows the context diagnostic, with unknown or incomplete
 evidence explicit. The contract lives in `DESIGN.md` § Primary-turn usage.
 
-Several `--with` voices run as a fan-out: one prompt to each, supervised as a
-single job — one background command, one completion, one collect. Each member
-is an ordinary turn with its own session and job dir in a subdirectory named
-after it (`codex`, `claude-opus`, a repeat numbered), so recovery stays per
-member. The fan-out dir adds `group.json` (the roster and shared settings) and
-the shared `prompt.md`; `envoy collect <job>` prints every member's status and
-result in one block, split by member name. Fan-outs are read-only:
-`--allow-write` is refused because members share one working tree.
-`--with @<fan-out>` alone continues every member as a new round.
+Several `--with` voices run as a fan-out: a prompt to each — the file attached
+to the voice (`--with codex=survey.md`) or the job's `--prompt-file` for any
+voice without one — supervised as a single job: one background command, one
+completion, one collect. Each member is an ordinary turn with its own session,
+prompt and job dir in a subdirectory named after it (`codex`, `claude-opus`, a
+repeat numbered), so recovery stays per member. The fan-out dir adds only
+`group.json` (the roster and shared settings); `envoy collect <job>` prints
+every member's status and result in one block, split by member name. Fan-outs
+are read-only: `--allow-write` is refused because members share one working
+tree. `--with @<fan-out>` alone continues every member as a new round, and
+`--with @<fan-out>=next.md` is the same round with the prompt attached.
 
 A finished job's session is a reusable asset. The records are the safer anchor
 than a remembered session id: a resumed claude conversation continues under a
@@ -122,6 +125,7 @@ The root package is an embeddable facade over the same engine:
 // running without a cap takes an explicit NoTimeout: true.
 envoy.Run(envoy.RunRequest{Job: "review-r1", With: []string{"codex"}, PromptFile: "brief.md"})
 envoy.Run(envoy.RunRequest{Job: "consult-r1", With: []string{"codex", "claude:opus"}, PromptFile: "brief.md"})
+envoy.Run(envoy.RunRequest{Job: "consult-r1", With: []string{"codex=survey.md", "claude:opus=critique.md"}})
 envoy.Collect(envoy.CollectRequest{Job: "review-r1"})
 envoy.Pending(base, os.Stdout, os.Stderr)
 ```
