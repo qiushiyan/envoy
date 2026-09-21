@@ -123,8 +123,8 @@ type Meta struct {
 // means unavailable, and existing fields keep their semantics.
 const MetaSchemaVersion = 9
 
-// UsesLauncher reports a recorded prefix other than the bare provider.
-// An older record without a prefix carries no such observation.
+// UsesLauncher reports whether a non-bare command was recorded.
+// Absent and bare prefixes both leave nothing to report about a launcher.
 func (m *Meta) UsesLauncher() bool {
 	return len(m.CommandPrefix) > 1 || (len(m.CommandPrefix) == 1 && m.CommandPrefix[0] != m.Provider)
 }

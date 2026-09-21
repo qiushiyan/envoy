@@ -994,7 +994,7 @@ func TestCodexNonzeroExitAfterResponse(t *testing.T) {
 	if meta["status"] != "failed" || meta["resultKind"] != "partial" || meta["promptState"] != "accepted" {
 		t.Fatalf("meta = status %v kind %v prompt %v", meta["status"], meta["resultKind"], meta["promptState"])
 	}
-	mustContain(t, "error", meta["error"].(string), "exited with code 7 after producing a response")
+	mustContain(t, "error", meta["error"].(string), "Codex exited with code 7 after producing a response")
 	mustContain(t, "result.md", readFile(t, filepath.Join(outDir, "result.md")), "fake provider result")
 }
 
