@@ -77,6 +77,9 @@ func (r *run) printStartupBlock() {
 	fmt.Fprintf(w, "job: %s\n", r.ws.Dir)
 	fmt.Fprintf(w, "provider: %s · model %s · effort %s · hard cap %s\n",
 		r.opts.Provider, display(r.opts.Turn.Model), display(r.opts.Turn.Effort), text.HardCap(r.opts.TimeoutMin))
+	if line := prose.Launcher(r.meta); line != "" {
+		fmt.Fprintln(w, line)
+	}
 	if r.meta.GitBaseline != nil {
 		fmt.Fprintf(w, "baseline: %s\n", *r.meta.GitBaseline)
 	}

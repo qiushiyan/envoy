@@ -57,7 +57,8 @@ func Voice(provider, model, effort string) string {
 // it replaces: the same conversation when the turn was a continuation (a
 // cold voice would start a different one), the recorded tree, anchor, write
 // intent, cap and spend cap, and the prompt exactly as the job archived it.
-// Only the name changes.
+// The new dispatch reads its own environment, including the launcher prefix;
+// CommandPrefix is an observation, not a setting this command replays.
 func RedispatchCommand(dir string, m *job.Meta) string {
 	voice := Voice(m.Provider, deref(m.Model), deref(m.Effort))
 	if m.ResumedFrom != nil {
@@ -255,19 +256,30 @@ func eventCount(n int64) string {
 // Recovery prescribes the next move from the prompt state alone — the only
 // thing the engine can actually prove about a turn that did not return a
 // result. resumeCmd continues the session, redispatchCmd re-sends the prompt
-// as a new job; either is "" when the records cannot render it. remedy is an
-// optional cause-specific clause the caller must handle first (an exhausted
-// budget cap, say); "" when the cause needs no fixing.
+// as a new job; either is "" when the records cannot render it. The record
+// supplies the driver's cause-specific remedy and any configured command
+// the caller must check before following that prescription.
 //
 // The three states carry different licenses, and confusing them is the
 // expensive mistake: re-sending a prompt the provider already accepted
 // duplicates work that may already have changed the tree.
-func Recovery(promptState, resumeCmd, redispatchCmd, remedy string) string {
+func Recovery(m *job.Meta, resumeCmd, redispatchCmd string) string {
 	fix := ""
-	if remedy != "" {
+	if remedy := deref(m.Remedy); remedy != "" {
 		fix = " " + strings.TrimSpace(remedy)
 	}
-	switch promptState {
+	retryFailure := "the provider CLI itself is the problem to report."
+	if m.UsesLauncher() {
+		key := launcherEnv(m.Provider)
+		if m.PromptState == job.PromptNotStarted {
+			fix += fmt.Sprintf(" Fix %s or make its executable available first.", key)
+		} else if m.PromptState != job.PromptAccepted {
+			fix += fmt.Sprintf(" Check %s and stderr.log: the configured command may have stopped in the launcher or provider.", key)
+		}
+		fix += fmt.Sprintf(" Each follow-up reads the current value of %s.", key)
+		retryFailure = "inspect the configured command and stderr.log."
+	}
+	switch m.PromptState {
 	case job.PromptAccepted:
 		if resumeCmd == "" {
 			return "The provider accepted this prompt, so work may already exist in the working tree." + fix +
@@ -280,10 +292,10 @@ func Recovery(promptState, resumeCmd, redispatchCmd, remedy string) string {
 	case job.PromptNotStarted:
 		body := "The provider never started, so this prompt did not run and nothing was changed." + fix
 		if redispatchCmd == "" {
-			return body + " Dispatch it once more under a new job name; if it fails the same way, the provider CLI itself is the problem to report."
+			return body + " Dispatch it once more under a new job name; if it fails the same way, " + retryFailure
 		}
 		return body + " Dispatch it once more under a new job name (this name is now taken):\n  " + redispatchCmd +
-			"\nIf it fails the same way, the provider CLI itself is the problem to report."
+			"\nIf it fails the same way, " + retryFailure
 
 	default: // unknown
 		body := "Whether the provider began work is unproven — silence is not proof that nothing ran." + fix +
@@ -388,10 +400,38 @@ func CollectThisJob(outDir string) string {
 	return "Collect and verify this job: " + CollectCommand(outDir) + "."
 }
 
-// SpawnFailed reports a provider that never launched — the one failure where
+// SpawnFailed reports a command that never launched — the one failure where
 // re-sending the same prompt is provably safe.
-func SpawnFailed(provider string, err error) string {
-	return fmt.Sprintf("envoy could not start %s: %s", provider, err)
+func SpawnFailed(command string, err error) string {
+	return fmt.Sprintf("envoy could not start %s: %s", command, err)
+}
+
+func launcherEnv(provider string) string { return "ENVOY_" + strings.ToUpper(provider) + "_CMD" }
+
+// Launcher renders the recorded invocation, never the collector's environment.
+func Launcher(m *job.Meta) string {
+	if !m.UsesLauncher() {
+		return ""
+	}
+	return fmt.Sprintf("launcher: %s=%s", launcherEnv(m.Provider), text.ShellQuote(strings.Join(m.CommandPrefix, " ")))
+}
+
+// ProcessExited distinguishes an observed command exit from a provider verdict.
+// A launcher can exit before the provider runs or remain as its parent.
+func ProcessExited(provider, command string, code *int, observation, detail string) string {
+	name, source := provider, "provider"
+	if command != "" {
+		name, source = fmt.Sprintf("Command %q", command), "command"
+	}
+	codeText := "null"
+	if code != nil {
+		codeText = fmt.Sprintf("%d", *code)
+	}
+	line := fmt.Sprintf("%s exited with code %s %s.", name, codeText, observation)
+	if detail != "" {
+		line += fmt.Sprintf(" Last %s detail: %s", source, detail)
+	}
+	return line
 }
 
 // UnreadableStore refuses to report an unreadable job root as an empty one.

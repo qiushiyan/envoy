@@ -203,7 +203,7 @@ func recoveryAction(dir string, meta *job.Meta) string {
 	if meta.SessionLockConflict != nil {
 		return prose.LockedSession(*meta.SessionLockConflict, false)
 	}
-	return prose.Recovery(meta.PromptState, resumeCommand(dir, meta), prose.RedispatchCommand(dir, meta), deref(meta.Remedy))
+	return prose.Recovery(meta, resumeCommand(dir, meta), prose.RedispatchCommand(dir, meta))
 }
 
 // recoveryForStale prescribes the next move for a job whose runner is gone.
@@ -427,6 +427,9 @@ func renderJob(dir string, mode Mode, w io.Writer, errW io.Writer, showGit bool)
 	}
 	if diagnostic {
 		fmt.Fprintf(w, "provider: %s · model %s · effort %s\n", meta.Provider, modelDisplay, display(meta.Effort))
+		if line := prose.Launcher(meta); line != "" {
+			fmt.Fprintln(w, line)
+		}
 	}
 	if meta.DurationMs != nil {
 		costSuffix := ""

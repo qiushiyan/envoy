@@ -89,6 +89,7 @@ func TestLauncherFreshAndResume(t *testing.T) {
 					t.Fatalf("exit %d: %s\n%s", res.code, res.stdout, res.stderr)
 				}
 				m := readMeta(t, out)
+				mustContain(t, "dispatch launcher", res.stdout, "launcher: ENVOY_"+strings.ToUpper(provider)+"_CMD=", launcher+" "+provider+" --")
 				prefix := []string{launcher, provider, "--"}
 				if got := stringsFromMeta(t, m, "commandPrefix"); !reflect.DeepEqual(got, prefix) {
 					t.Fatalf("prefix %q", got)
@@ -117,6 +118,10 @@ func TestLauncherFreshAndResume(t *testing.T) {
 					t.Fatal("result not delivered")
 				}
 				mustContain(t, "stderr.log", readFile(t, filepath.Join(out, "stderr.log")), "launcher neutralized")
+				col := runEnvoy(t, e, "collect", out)
+				mustNotContain(t, "delivered result", col.stdout, "launcher:")
+				diag := runEnvoy(t, e, "collect", "--status-only", out)
+				mustContain(t, "launcher diagnostic", diag.stdout, "launcher: ENVOY_"+strings.ToUpper(provider)+"_CMD=", launcher+" "+provider+" --")
 				if source != "" {
 					if m["resumedFrom"] != source {
 						t.Fatal("lost continuation lineage")
@@ -174,13 +179,21 @@ func TestLauncherFailureNeverFallsBack(t *testing.T) {
 				if _, err := os.Stat(capture); !os.IsNotExist(err) {
 					t.Fatal("provider started despite launcher failure")
 				}
+				key := "ENVOY_" + strings.ToUpper(provider) + "_CMD"
+				e.set(key, "different-launcher-at-collection")
+				col := runEnvoy(t, e, "collect", out)
+				mustContain(t, "recovery", col.stdout, key, "Each follow-up reads the current value of "+key+".")
+				mustNotContain(t, "recovery", col.stdout, "the provider CLI itself is the problem")
+				mustContain(t, "launcher diagnostic", col.stdout, "launcher: "+key+"=", name)
 				if missing {
+					mustContain(t, "recovery", col.stdout, "Fix "+key+" or make its executable available first.")
 					mustContain(t, "error", m["error"].(string), name)
 					if m["promptState"] != "not_started" || m["providerPid"] != nil {
 						t.Fatal("spawn failure lost evidence")
 					}
 				} else {
 					mustContain(t, "error", m["error"].(string), "corrupt account selection")
+					mustContain(t, "error", m["error"].(string), fmt.Sprintf("Command %q exited with code 23", name))
 					if readFile(t, filepath.Join(out, "stderr.log")) != "launcher: corrupt account selection\n" {
 						t.Fatal("stderr changed")
 					}

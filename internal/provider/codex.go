@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/qiushiyan/envoy/internal/job"
+	"github.com/qiushiyan/envoy/internal/prose"
 )
 
 // codex drives `codex exec --json` and streams its JSONL events. The
@@ -212,7 +213,7 @@ func (c *codex) Conclude(exit ExitInfo) Outcome {
 		}
 		return Outcome{
 			Status:      job.StatusFailed,
-			ErrorText:   fmt.Sprintf("Codex exited with code %s after producing a response.", codeStr(exit.Code)),
+			ErrorText:   prose.ProcessExited("Codex", exit.Command, exit.Code, "after producing a response", ""),
 			Partial:     recovered,
 			Tokens:      c.tokens,
 			PromptState: job.PromptAccepted,
@@ -225,9 +226,8 @@ func (c *codex) Conclude(exit ExitInfo) Outcome {
 	}
 	out := Outcome{
 		Status: job.StatusInfra,
-		ErrorText: fmt.Sprintf(
-			"Codex exited with code %s but returned no usable result. Last provider detail: %s",
-			codeStr(exit.Code), detail),
+		ErrorText: prose.ProcessExited("Codex", exit.Command, exit.Code,
+			"but returned no usable result", detail),
 		Tokens: c.tokens,
 	}
 	if c.threadStarted {

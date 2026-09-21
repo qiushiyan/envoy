@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/qiushiyan/envoy/internal/job"
+	"github.com/qiushiyan/envoy/internal/prose"
 )
 
 // claude drives `claude -p --output-format stream-json --verbose`.
@@ -221,9 +222,8 @@ func (c *claude) Conclude(exit ExitInfo) Outcome {
 		observed, _ := c.Recovery()
 		out := Outcome{
 			Status: job.StatusInfra,
-			ErrorText: fmt.Sprintf(
-				"Claude exited with code %s but returned no parseable result envelope. Last provider detail: %s",
-				codeStr(exit.Code), stderrDetail(exit.StderrTail)),
+			ErrorText: prose.ProcessExited("Claude", exit.Command, exit.Code,
+				"but returned no parseable result envelope", stderrDetail(exit.StderrTail)),
 			Partial:             observed.Partial,
 			PromptState:         job.PromptUnknown,
 			PromptStateEvidence: labelPtr(observed.Label),
@@ -524,13 +524,6 @@ func numOr(m map[string]any, key string, fallback int64) int64 {
 		return int64(f)
 	}
 	return fallback
-}
-
-func codeStr(code *int) string {
-	if code == nil {
-		return "null"
-	}
-	return fmt.Sprintf("%d", *code)
 }
 
 func labelPtr(label string) *string {

@@ -123,6 +123,12 @@ type Meta struct {
 // means unavailable, and existing fields keep their semantics.
 const MetaSchemaVersion = 9
 
+// UsesLauncher reports a recorded prefix other than the bare provider.
+// An older record without a prefix carries no such observation.
+func (m *Meta) UsesLauncher() bool {
+	return len(m.CommandPrefix) > 1 || (len(m.CommandPrefix) == 1 && m.CommandPrefix[0] != m.Provider)
+}
+
 // Marshal renders the canonical on-disk form.
 func (m *Meta) Marshal() ([]byte, error) {
 	data, err := json.MarshalIndent(m, "", "  ")

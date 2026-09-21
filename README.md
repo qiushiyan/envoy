@@ -108,7 +108,9 @@ wrapper executable on PATH for more complex setup.
 Every dispatch, including a continuation, retry or fan-out member, reads its
 provider's current environment setting; the recorded prefix does not pin an
 account. Missing or refusing launchers yield `infra` (exit 2), with no fallback.
-Their stderr lands in `stderr.log`; stderr alone does not fail a turn.
+Their stderr lands in `stderr.log`; stderr alone does not fail a turn. Dispatch
+and the collect diagnostic tier show the configured prefix as `launcher:`;
+failure guidance names its environment variable before any follow-up.
 
 `meta.json.commandPrefix` records the resolved executable and prefix arguments,
 including `["codex"]` / `["claude"]` for defaults. The executed argv is

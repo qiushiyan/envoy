@@ -177,7 +177,7 @@ func (r *run) onChildDone(exit exitResult) {
 		r.finish(finishArgs{
 			status: job.StatusInfra,
 			errorText: fmt.Sprintf("%s was killed by signal %s, which envoy did not send.",
-				r.opts.Provider, *exit.signal),
+				r.meta.CommandPrefix[0], *exit.signal),
 			partial:             ev.Partial,
 			tokens:              ev.Tokens,
 			costUSD:             ev.CostUSD,
@@ -189,7 +189,12 @@ func (r *run) onChildDone(exit exitResult) {
 		return
 	}
 
+	command := ""
+	if r.meta.UsesLauncher() {
+		command = r.meta.CommandPrefix[0]
+	}
 	outcome := r.driver.Conclude(provider.ExitInfo{
+		Command:      command,
 		Code:         exit.code,
 		Signal:       exit.signal,
 		Terminated:   r.term != nil,

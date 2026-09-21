@@ -201,6 +201,10 @@ func TestCodexSuccess(t *testing.T) {
 	}
 
 	meta := readMeta(t, outDir)
+	if got := stringsFromMeta(t, meta, "commandPrefix"); fmt.Sprint(got) != "[codex]" {
+		t.Fatalf("default command prefix = %q", got)
+	}
+	mustNotContain(t, "default dispatch", res.stdout, "launcher:")
 	if meta["status"] != "ok" || meta["promptState"] != "accepted" {
 		t.Fatalf("meta = status %v prompt %v", meta["status"], meta["promptState"])
 	}
@@ -244,6 +248,10 @@ func TestClaudeSuccessWithUnterminatedFinalLine(t *testing.T) {
 		t.Fatalf("result.md = %q", got)
 	}
 	meta := readMeta(t, outDir)
+	if got := stringsFromMeta(t, meta, "commandPrefix"); fmt.Sprint(got) != "[claude]" {
+		t.Fatalf("default command prefix = %q", got)
+	}
+	mustNotContain(t, "default dispatch", res.stdout, "launcher:")
 	if meta["sessionId"] != "fake-session-id" {
 		t.Fatalf("the result envelope's session id must win, got %v", meta["sessionId"])
 	}

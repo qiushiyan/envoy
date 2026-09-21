@@ -247,6 +247,8 @@ func (r *run) execute(promptText string) Result {
 	}
 	r.child = child
 	r.writeMeta(func(m *job.Meta) {
+		// With a non-exec launcher this PID names the wrapper; the PGID
+		// still supervises the entire launcher/provider tree.
 		m.ProviderPid = job.Ptr(child.pid)
 		m.ProviderPgid = job.Ptr(child.pid) // detached child leads its own group
 	})

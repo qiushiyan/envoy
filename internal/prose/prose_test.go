@@ -95,7 +95,7 @@ func TestTimedOutCarriesTheStreamItObserved(t *testing.T) {
 
 // A re-dispatch repeats the dispatch it replaces. A continuation names its
 // source again — a cold voice would start a different conversation — and
-// every recorded setting rides along, the spend cap included; a model that
+// every recorded CLI setting rides along, the spend cap included; a model that
 // was omitted stays omitted.
 func TestRedispatchRepeatsTheDispatch(t *testing.T) {
 	warm := &job.Meta{Provider: "claude", Model: job.Ptr("opus"), ResumedFrom: job.Ptr("/jobs/consult-r1"),
@@ -144,7 +144,7 @@ func TestRecoveryCoversEveryPromptState(t *testing.T) {
 		{job.PromptUnknown, true, false, []string{"unproven", "silence is not proof"}},
 	}
 	for _, c := range cases {
-		got := Recovery(c.state, resume, redispatch, "")
+		got := Recovery(&job.Meta{PromptState: c.state}, resume, redispatch)
 		if strings.TrimSpace(got) == "" {
 			t.Fatalf("%s: no prescription", c.state)
 		}
@@ -162,11 +162,11 @@ func TestRecoveryCoversEveryPromptState(t *testing.T) {
 	}
 
 	// A cause-specific fix rides along with the prescription.
-	if got := Recovery(job.PromptAccepted, resume, redispatch, "Raise the budget cap first."); !strings.Contains(got, "Raise the budget cap first.") {
+	if got := Recovery(&job.Meta{PromptState: job.PromptAccepted, Remedy: job.Ptr("Raise the budget cap first.")}, resume, redispatch); !strings.Contains(got, "Raise the budget cap first.") {
 		t.Fatalf("remedy dropped: %s", got)
 	}
 	// Without a session, the prescriptions stay honest about what is possible.
-	if got := Recovery(job.PromptUnknown, "", "", ""); strings.Contains(got, "envoy run") {
+	if got := Recovery(&job.Meta{PromptState: job.PromptUnknown}, "", ""); strings.Contains(got, "envoy run") {
 		t.Fatalf("no session must mean no resume command: %s", got)
 	}
 }

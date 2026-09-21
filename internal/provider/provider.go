@@ -75,13 +75,14 @@ type Evidence struct {
 	CostUSD  *float64
 }
 
-// ExitInfo describes how the provider process ended.
+// ExitInfo describes how the launched process ended.
 type ExitInfo struct {
+	Command      string // executable when it differs from the bare provider invocation
 	Code         *int
 	Signal       *string
 	Terminated   bool   // a stop (timeout/interrupt) was requested this turn
 	TerminalType string // observed provider terminal label, "" if none
-	StderrTail   string // last ~2000 chars of provider stderr
+	StderrTail   string // last ~2000 chars of command stderr
 }
 
 // Outcome is a driver's normal-path conclusion after process end. A driver
@@ -91,7 +92,7 @@ type ExitInfo struct {
 type Outcome struct {
 	Status              string // job.StatusOK / StatusFailed / StatusInfra
 	Text                string // final text (ok only)
-	ErrorText           string // what this provider reported or exited with
+	ErrorText           string // provider verdict or observed command exit
 	Remedy              string // cause-specific fix, e.g. "Raise the budget cap first."; "" when none
 	Partial             *string
 	Tokens              *job.Tokens

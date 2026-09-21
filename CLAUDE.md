@@ -44,7 +44,7 @@ Three rules govern that prose, all enforced in `internal/prose`:
 
 - **Say what happened, what it rules out, and the one action to take next** — every non-ok status carries its gloss.
 - **Prescribe only what the engine observed.** Recovery follows from prompt state, the only thing the engine can prove: `accepted` → resume, never redispatch; `not_started` → one identical retry; `unknown` → absence of output is not proof of no work.
-- **Hand over runnable commands, not fragments.** A continuation names the job (`--with @<dir>`) whose records carry the session and settings, with the prompt file left as a placeholder because a resumed turn needs a NEW prompt. The identical retry repeats the dispatch it replaces — the same source conversation, the archived `prompt.md`, every recorded setting including the spend cap — under a new name.
+- **Hand over runnable commands, not fragments.** A continuation names the job (`--with @<dir>`) whose records carry the session and settings, with the prompt file left as a placeholder because a resumed turn needs a NEW prompt. The retry repeats the source conversation, archived `prompt.md` and CLI settings, including the spend cap, under a new name. Its environment, including the launcher, is resolved at dispatch.
 
 Behavioral invariants the code encodes deliberately (each has a test):
 
