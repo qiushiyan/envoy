@@ -61,10 +61,14 @@ type Options struct {
 	// for a fresh conversation. Recorded so a faithful re-dispatch can name
 	// the same source; never acted on here.
 	ResumedFrom string
-	TimeoutMin  float64 // hard wall-clock cap in minutes; 0 = no cap
-	Turn        provider.Options
-	Stdout      io.Writer
-	Stderr      io.Writer
+	// Caller is the dispatching session's identity, "" when its harness
+	// exported none. Recorded so a name can mean its caller's own job; never
+	// acted on here.
+	Caller     string
+	TimeoutMin float64 // hard wall-clock cap in minutes; 0 = no cap
+	Turn       provider.Options
+	Stdout     io.Writer
+	Stderr     io.Writer
 }
 
 type termination struct {

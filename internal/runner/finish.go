@@ -39,6 +39,7 @@ func (r *run) initMeta() {
 		GitBaseline:      ptrIfNonEmpty(baseline),
 		MaxBudgetUSD:     r.opts.Turn.MaxBudgetUSD,
 		ResumedFrom:      ptrIfNonEmpty(r.opts.ResumedFrom),
+		Caller:           ptrIfNonEmpty(r.opts.Caller),
 		StartedAt:        job.ISO(r.startedAt),
 		TimeoutMin:       r.opts.TimeoutMin,
 		DeadlineAt:       deadlineAt,

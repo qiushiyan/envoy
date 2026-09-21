@@ -307,7 +307,7 @@ func TestContinueVocabulary(t *testing.T) {
 		{NameHold{Kind: HoldUnreadable}, []string{"cannot be read", "Inspect that directory"}, []string{"envoy collect", "removing"}},
 	} {
 		got := NameHeld("review-r1", "/jobs/review-r1+2", c.hold)
-		for _, w := range append(c.want, "nothing was dispatched", "/jobs/review-r1+2", "would read that job, not yours", "review-r1-b") {
+		for _, w := range append(c.want, "nothing was dispatched", "/jobs/review-r1+2", "now reads that job — nothing new ran", "review-r1-b") {
 			if !strings.Contains(got, w) {
 				t.Fatalf("NameHeld(%+v) = %q, missing %q", c.hold, got, w)
 			}

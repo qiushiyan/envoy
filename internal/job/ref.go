@@ -16,11 +16,13 @@ import (
 // lowercased nor slugged, and it is reserved by creating the directory —
 // creation is the collision check, with no stat-then-create window.
 //
-// A name addresses its latest generation; a directory is an identity. Callers
-// in one long-lived checkout reach for the same names (review-r1, consult-r1),
-// so a name whose job has been delivered passes to the next dispatch, which
-// runs in <name>+2, then <name>+3. No directory ever moves: every path a
-// record or a printed command holds keeps meaning the job it meant.
+// A name is an address scoped to its caller; a directory is an identity.
+// Callers in one checkout reach for the same names (review-r1, consult-r1), so
+// every dispatch under a name gets a generation of its own — <name>, <name>+2,
+// <name>+3 — and the name means the caller's own newest generation, or the
+// newest of anyone's when the caller has none (work picked up from an earlier
+// session) or no identity. No directory ever moves: every path a record or a
+// printed command holds keeps meaning the job it meant.
 
 // namePattern is what one segment of a job name may look like: letters,
 // digits, '.', '_' and '-', starting with a letter or digit.
@@ -50,8 +52,9 @@ func ResolveName(arg, invocationCwd string) (string, error) {
 }
 
 // ResolveRef turns a reference to an existing job into its directory: a
-// name as ResolveName reads it, a fan-out member as name/member, or a path.
-func ResolveRef(arg, invocationCwd string) (string, error) {
+// name as ResolveName reads it, resolved for this caller; a fan-out member as
+// name/member; or a path.
+func ResolveRef(arg, invocationCwd, caller string) (string, error) {
 	if arg == "" {
 		return "", errors.New("a job is required: its name in this project's store, or its directory path")
 	}
@@ -64,11 +67,11 @@ func ResolveRef(arg, invocationCwd string) (string, error) {
 		}
 	}
 	name, member, _ := strings.Cut(arg, "/")
-	dir, _, err := Latest(DefaultBase(invocationCwd), name)
+	addr, err := Resolve(DefaultBase(invocationCwd), name, caller)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, filepath.FromSlash(member)), nil
+	return filepath.Join(addr.Dir, filepath.FromSlash(member)), nil
 }
 
 // StoreUnreadableError reports a project store whose generations could not be
@@ -99,26 +102,62 @@ func GenerationDir(base, name string, generation int) string {
 	return filepath.Join(base, name+generationSep+strconv.Itoa(generation))
 }
 
-// Latest returns the directory a name addresses — its highest generation —
-// and that generation's number. Generation 0 means nothing holds the name
-// yet, and dir is where its first job would go. Only a store that does not
-// exist yet reads as empty: one that exists and cannot be listed is an error,
-// because resolving to the bare name there could serve an older generation
-// as the latest.
-func Latest(base, name string) (dir string, generation int, err error) {
+// Address is what a name means to one caller, and where the store stands.
+type Address struct {
+	// Dir is the job the name addresses: the caller's own newest generation,
+	// else the newest of anyone's, else — Newest 0 — where a first job would go.
+	Dir string
+	// Newest is the highest generation that exists, 0 for none, and NewestDir
+	// its directory: what the name means to a caller with no generation of
+	// its own. The next dispatch is generation Newest+1 whoever sends it.
+	Newest    int
+	NewestDir string
+}
+
+// Resolve reads what name addresses for caller ("" = no identity). Only a
+// store that does not exist yet reads as empty: one that exists and cannot be
+// listed is an error, because resolving to the bare name there could serve an
+// older generation as the latest.
+func Resolve(base, name, caller string) (Address, error) {
 	entries, err := os.ReadDir(base)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", 0, &StoreUnreadableError{Base: base, Err: err}
+		return Address{}, &StoreUnreadableError{Base: base, Err: err}
 	}
+	newest, own := 0, 0
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		if g := generationOf(e.Name(), name); g > generation {
-			generation = g
+		g := generationOf(e.Name(), name)
+		if g > newest {
+			newest = g
+		}
+		if g > own && caller != "" && CallerOf(filepath.Join(base, e.Name())) == caller {
+			own = g
 		}
 	}
-	return GenerationDir(base, name, generation), generation, nil
+	addr := Address{Newest: newest, NewestDir: GenerationDir(base, name, newest)}
+	addr.Dir = addr.NewestDir
+	if own > 0 {
+		addr.Dir = GenerationDir(base, name, own)
+	}
+	return addr, nil
+}
+
+// CallerOf reads the identity a job was dispatched under, "" when its records
+// carry none or cannot say — a reservation before its first record, a record
+// from before callers were recorded, a job run with no harness identity.
+func CallerOf(dir string) string {
+	if IsGroupDir(dir) {
+		if g, err := ReadGroupFile(GroupWorkspace{Dir: dir}.GroupPath()); err == nil && g.Caller != nil {
+			return *g.Caller
+		}
+		return ""
+	}
+	if m, err := ReadMetaFile(Workspace{Dir: dir}.MetaPath()); err == nil && m.Caller != nil {
+		return *m.Caller
+	}
+	return ""
 }
 
 // generationOf reads which generation of name an entry is, 0 for none. Only

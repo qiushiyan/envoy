@@ -911,10 +911,11 @@ func TestNamedJobsLiveInTheCentralStore(t *testing.T) {
 	mustContain(t, "stderr", bare.stderr, "collect takes the job to print")
 }
 
-// A name addresses its latest generation. Callers in one long-lived checkout
-// reach for the same names, so a delivered job's name passes to the next
-// dispatch — which runs beside it, never over it — and collect and @<job>
-// follow the name there. The observed failure this pins: a refused re-run of
+// For a caller with no identity — this rig, a Codex session, a terminal — a
+// name means the newest generation of anyone's. Callers in one long-lived
+// checkout reach for the same names, so once a job is delivered the next
+// dispatch under its name runs beside it, never over it, and collect and
+// @<job> follow the name there. (Callers with an identity: caller_test.go.) The observed failure this pins: a refused re-run of
 // review-r1 went unseen and collect review-r1 served a nine-day-old review.
 func TestANameAddressesItsLatestGeneration(t *testing.T) {
 	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
@@ -946,7 +947,7 @@ func TestANameAddressesItsLatestGeneration(t *testing.T) {
 		t.Fatalf("dispatch under a held name = %d, want 3\n%s", held.code, held.stderr)
 	}
 	mustContain(t, "stderr", held.stderr, "nothing was dispatched", "has not been collected",
-		"would read that job, not yours", "review-r1-b", "yours or its caller is gone", "envoy collect '"+firstDir+"'")
+		"now reads that job — nothing new ran", "review-r1-b", "yours or its caller is gone", "envoy collect '"+firstDir+"'")
 	if _, err := os.Stat(secondDir); !os.IsNotExist(err) {
 		t.Fatalf("a refused dispatch must reserve nothing, found %s", secondDir)
 	}
@@ -1430,14 +1431,15 @@ func TestHelpIsSelfSufficient(t *testing.T) {
 	}
 	mustContain(t, "stdout", res.stdout,
 		"envoy run <job> [--prompt-file <F>] --with <voice>[=<F>]", // the dispatch form
-		"THE LOOP",                                 // name → dispatch → collect
-		"envoy collect review-r1",                  // the read path, by name
-		"nothing to read back",                     // why the name is chosen up front
-		"means the latest job dispatched under it", // what a reused name means
-		"<name>+2",                                 // so a +N directory is not read as a fault
-		"for a held name, pick another",            // the one collision a caller hears about
-		"would read an\n  earlier job",             // a refusal that ran nothing is not collected
-		"a fan-out's 3 included",                   // but a fan-out's exit 3 may have run members
+		"THE LOOP",                // name → dispatch → collect
+		"envoy collect review-r1", // the read path, by name
+		"nothing to read back",    // why the name is chosen up front
+		"means the latest job your session dispatched under it", // what a reused name means
+		"ENVOY_CALLER, else Claude",                             // where the session identity comes from
+		"<name>+2",                                              // so a +N directory is not read as a fault
+		"for a held name, pick another",                         // the one collision a caller hears about
+		"would read an\n  earlier job",                          // a refusal that ran nothing is not collected
+		"a fan-out's 3 included",                                // but a fan-out's exit 3 may have run members
 		"VOICES",
 		"--with codex::high",                          // effort without a model
 		"--with @<job>",                               // continuation

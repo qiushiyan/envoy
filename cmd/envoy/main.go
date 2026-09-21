@@ -45,13 +45,19 @@ THE LOOP
 
   A <job> is a name (one path segment; letters, digits, . _ -) kept in this
   project's store under ~/.local/state/envoy, or a directory path. A name
-  means the latest job dispatched under it, so a name earlier work already
-  used is yours to use: once that job has been collected, the new one runs
-  beside it in <name>+2 (then +3), the name means the new job from then on,
-  and the old one stays readable by its directory path. Only a name whose
-  job is still running or was never collected is held, and a dispatch under
-  it is refused. A round 2 still gets its own name (review-r2), so that
-  round 1 stays readable by name.
+  means the latest job your session dispatched under it, so sessions that
+  share a checkout use the same names without ever reading each other's
+  jobs. Every dispatch runs in a directory of its own — <name>, then
+  <name>+2, +3 — and earlier ones stay readable by that path. A session that
+  never used a name reads the newest job under it: that is how work from an
+  earlier session is picked up. A dispatch is refused only while your own
+  earlier job under the name is still running or uncollected. A round 2 still
+  gets its own name (review-r2), so that round 1 stays readable by name.
+
+  Your session is the one your harness exports: ENVOY_CALLER, else Claude
+  Code's CLAUDE_CODE_SESSION_ID. A caller with neither has no session: to it
+  a name means the newest job of anyone's, so its jobs and everyone else's
+  hold a name against each other while running or uncollected.
 
 VOICES
   --with provider[:model[:effort]]   a cold session

@@ -53,10 +53,10 @@ func TestResolveRefNamesLandInTheCentralStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A reference reads the same name, and reaches a fan-out's member.
-	if ref, _ := ResolveRef("review-r1", repo); ref != dir {
+	if ref, _ := ResolveRef("review-r1", repo, ""); ref != dir {
 		t.Fatalf("ResolveRef = %q, want %q", ref, dir)
 	}
-	if ref, _ := ResolveRef("review-r1/codex", repo); ref != filepath.Join(dir, "codex") {
+	if ref, _ := ResolveRef("review-r1/codex", repo, ""); ref != filepath.Join(dir, "codex") {
 		t.Fatalf("member ref = %q", ref)
 	}
 	if _, err := ResolveName("review-r1/codex", repo); err == nil {
@@ -75,11 +75,11 @@ func TestResolveRefNamesLandInTheCentralStore(t *testing.T) {
 		t.Fatalf("subdir resolves %q, want %q", sub, dir)
 	}
 	// A path is a path.
-	if p, _ := ResolveRef("./jobs/x", repo); !filepath.IsAbs(p) || filepath.Base(p) != "x" {
+	if p, _ := ResolveRef("./jobs/x", repo, ""); !filepath.IsAbs(p) || filepath.Base(p) != "x" {
 		t.Fatalf("path ref = %q", p)
 	}
 	for _, bad := range []string{"", "-lead", "a b", "a/b/../c!"} {
-		if _, err := ResolveRef(bad, repo); err == nil {
+		if _, err := ResolveRef(bad, repo, ""); err == nil {
 			t.Fatalf("ResolveRef(%q) must refuse", bad)
 		}
 	}
@@ -122,10 +122,10 @@ func TestReserveIsAtomicAndRefusesAnExistingName(t *testing.T) {
 // A name addresses its highest generation, and only the spelling
 // GenerationDir writes counts as one: a caller-named neighbour, a file, or a
 // look-alike suffix never captures the name.
-func TestLatestResolvesTheHighestGeneration(t *testing.T) {
+func TestResolveFindsTheHighestGeneration(t *testing.T) {
 	base := t.TempDir()
-	if dir, g, _ := Latest(base, "review-r1"); g != 0 || dir != filepath.Join(base, "review-r1") {
-		t.Fatalf("free name = %q gen %d, want the bare name at generation 0", dir, g)
+	if a, _ := Resolve(base, "review-r1", ""); a.Newest != 0 || a.Dir != filepath.Join(base, "review-r1") {
+		t.Fatalf("free name = %+v, want the bare name at generation 0", a)
 	}
 	for _, d := range []string{"review-r1", "review-r1+2", "review-r1+10", "review-r1b", "review-r1+02", "review-r1+1", "review-r1+x", "review-r10+40"} {
 		if err := os.Mkdir(filepath.Join(base, d), 0o755); err != nil {
@@ -135,8 +135,8 @@ func TestLatestResolvesTheHighestGeneration(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(base, "review-r1+99"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if dir, g, _ := Latest(base, "review-r1"); g != 10 || dir != filepath.Join(base, "review-r1+10") {
-		t.Fatalf("Latest = %q gen %d, want review-r1+10 gen 10", dir, g)
+	if a, _ := Resolve(base, "review-r1", ""); a.Newest != 10 || a.Dir != filepath.Join(base, "review-r1+10") {
+		t.Fatalf("Resolve = %+v, want review-r1+10 gen 10", a)
 	}
 	if got := GenerationDir(base, "review-r1", 11); got != filepath.Join(base, "review-r1+11") {
 		t.Fatalf("GenerationDir = %q", got)
@@ -146,8 +146,8 @@ func TestLatestResolvesTheHighestGeneration(t *testing.T) {
 	if err := os.Remove(filepath.Join(base, "review-r1")); err != nil {
 		t.Fatal(err)
 	}
-	if dir, g, _ := Latest(base, "review-r1"); g != 10 || dir != filepath.Join(base, "review-r1+10") {
-		t.Fatalf("Latest without generation 1 = %q gen %d, want review-r1+10 gen 10", dir, g)
+	if a, _ := Resolve(base, "review-r1", ""); a.Newest != 10 || a.Dir != filepath.Join(base, "review-r1+10") {
+		t.Fatalf("Resolve without generation 1 = %+v, want review-r1+10 gen 10", a)
 	}
 	// A generation is reachable by path only: no caller can name one.
 	if _, err := ResolveName("review-r1+2", base); err == nil {
@@ -155,7 +155,51 @@ func TestLatestResolvesTheHighestGeneration(t *testing.T) {
 	}
 }
 
-// References follow the name to its latest generation, members included.
+// A name means the caller's own newest generation; a caller with none, or
+// with no identity, reads the newest of anyone's. A fan-out is attributed by
+// its manifest, a turn by its record, and a directory that cannot say whose
+// it is belongs to no caller.
+func TestResolveScopesANameToItsCaller(t *testing.T) {
+	base := t.TempDir()
+	turn := func(gen int, caller string) {
+		dir := GenerationDir(base, "consult-r1", gen)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		m := &Meta{SchemaVersion: MetaSchemaVersion, Status: StatusOK, Provider: "codex"}
+		if caller != "" {
+			m.Caller = Ptr(caller)
+		}
+		if err := m.WriteFile(Workspace{Dir: dir}.MetaPath()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	turn(1, "a")
+	turn(2, "b")
+	turn(3, "a")
+	turn(4, "")
+	fan := GenerationDir(base, "consult-r1", 5)
+	if err := os.MkdirAll(fan, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	g := &Group{SchemaVersion: GroupSchemaVersion, Members: []string{"codex"}, Caller: Ptr("b")}
+	if err := g.WriteFile(GroupWorkspace{Dir: fan}.GroupPath()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(GenerationDir(base, "consult-r1", 6), 0o755); err != nil { // reserved, no record yet
+		t.Fatal(err)
+	}
+
+	for caller, want := range map[string]int{"a": 3, "b": 5, "c": 6, "": 6} {
+		addr, err := Resolve(base, "consult-r1", caller)
+		if err != nil || addr.Dir != GenerationDir(base, "consult-r1", want) || addr.Newest != 6 {
+			t.Errorf("Resolve for caller %q = %+v (%v), want generation %d of 6", caller, addr, err, want)
+		}
+	}
+}
+
+// With no caller to scope by, references follow the name to its newest
+// generation, members included.
 func TestResolveRefFollowsTheLatestGeneration(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -168,14 +212,14 @@ func TestResolveRefFollowsTheLatestGeneration(t *testing.T) {
 		}
 	}
 	want := GenerationDir(base, "consult-r1", 2)
-	if ref, _ := ResolveRef("consult-r1", repo); ref != want {
+	if ref, _ := ResolveRef("consult-r1", repo, ""); ref != want {
 		t.Fatalf("ResolveRef(name) = %q, want %q", ref, want)
 	}
-	if ref, _ := ResolveRef("consult-r1/codex", repo); ref != filepath.Join(want, "codex") {
+	if ref, _ := ResolveRef("consult-r1/codex", repo, ""); ref != filepath.Join(want, "codex") {
 		t.Fatalf("ResolveRef(name/member) = %q, want the member under %q", ref, want)
 	}
 	// The first generation stays an identity, reachable by its path.
-	if ref, _ := ResolveRef(first, repo); ref != first {
+	if ref, _ := ResolveRef(first, repo, ""); ref != first {
 		t.Fatalf("ResolveRef(path) = %q, want %q", ref, first)
 	}
 }

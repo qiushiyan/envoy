@@ -83,6 +83,7 @@ func Run(opts Options) int {
 		TimeoutMin:    shared.TimeoutMin,
 		GitBaseline:   ptrIfNonEmpty(shared.Baseline),
 		Members:       names,
+		Caller:        ptrIfNonEmpty(shared.Caller),
 	}
 	// The manifest is the record that makes the directory a fan-out: discovery
 	// keys on it, and the reserved name is released when it is absent. So a

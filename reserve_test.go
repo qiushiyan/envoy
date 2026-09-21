@@ -35,7 +35,7 @@ func TestReserveRacingForADeliveredName(t *testing.T) {
 		wg.Go(func() {
 			<-start
 			o := &outcomes[i]
-			o.dir, o.refusal, o.err = reserve("review-r1", first)
+			o.dir, o.refusal, o.err = reserve("review-r1", first, "")
 		})
 	}
 	close(start)

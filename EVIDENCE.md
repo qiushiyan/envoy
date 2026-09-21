@@ -345,6 +345,13 @@ will look anyway.
   not that the caller is done with the name. Measured exposure over the same
   window: 11 pairs of distinct sessions used one name in one project, 2
   within 24 h, and in none was the first session still calling envoy after
-  the second dispatched. The hazard is real and so far unobserved; the
-  harness exports a per-session id (`CLAUDE_CODE_SESSION_ID`), so scoping a
-  name to its caller first is available if overlap ever shows up.
+  the second dispatched. The hazard was real and so far unobserved; the user
+  chose to remove it rather than watch for it, and a name is now scoped to
+  its caller (`DESIGN.md`). Identity comes from the harness: Claude Code
+  exports `CLAUDE_CODE_SESSION_ID`; codex-cli 0.155.1 exports no per-session
+  variable to its shell (checked in the binary's strings), so a Codex caller
+  keeps the unscoped meaning and its holds, unless something sets
+  `ENVOY_CALLER` for it. Records written before this carry no `caller` and
+  read as identity-less. Compare next pass: name refusals among Claude Code
+  callers should be only self-holds; a Codex caller refused by another
+  session's job is the signal that Codex needs an identity of its own.

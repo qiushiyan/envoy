@@ -67,7 +67,11 @@ type Meta struct {
 	// ResumedFrom is the job dir whose conversation this turn continues;
 	// absent for a fresh conversation. It is the source a faithful
 	// re-dispatch names again.
-	ResumedFrom         *string  `json:"resumedFrom,omitempty"`
+	ResumedFrom *string `json:"resumedFrom,omitempty"`
+	// Caller is the dispatching session's identity as its harness exported
+	// it; absent when none was exported, and in older records. It scopes what
+	// a job name means to that caller and is never inherited by a continuation.
+	Caller              *string  `json:"caller,omitempty"`
 	SessionLockConflict *string  `json:"sessionLockConflict"`
 	StartedAt           string   `json:"startedAt"`
 	EndedAt             *string  `json:"endedAt"`

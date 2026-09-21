@@ -69,6 +69,11 @@ type Group struct {
 	TimeoutMin    float64  `json:"timeoutMin"`
 	GitBaseline   *string  `json:"gitBaseline"`
 	Members       []string `json:"members"`
+	// Caller is the dispatching session's identity, shared by every member
+	// like the tree and the cap; absent when the harness exported none. The
+	// manifest carries it because a fan-out must be attributable before any
+	// member has written a record.
+	Caller *string `json:"caller,omitempty"`
 }
 
 // Marshal renders the canonical on-disk form.

@@ -131,7 +131,8 @@ func Run(req RunRequest) int {
 		return usageError(stderr, "%s", err)
 	}
 
-	turns, errText := resolveTurns(req, invocationCwd, timeoutMin)
+	caller := callerID()
+	turns, errText := resolveTurns(req, invocationCwd, caller, timeoutMin)
 	if errText != "" {
 		return usageError(stderr, "%s", errText)
 	}
@@ -159,7 +160,7 @@ func Run(req RunRequest) int {
 	// The name is reserved last, after every refusal that needs no
 	// reservation, and released again on any refusal that happens before the
 	// job wrote its first record.
-	dir, refusal, err := reserve(req.Job, dir)
+	dir, refusal, err := reserve(req.Job, dir, caller)
 	if refusal != "" {
 		return usageError(stderr, "%s", refusal)
 	}
@@ -183,14 +184,33 @@ func Run(req RunRequest) int {
 	return code
 }
 
+// callerID is the dispatching session's identity as its harness exports it,
+// "" when it exports none. ENVOY_CALLER is the explicit form any harness can
+// set; Claude Code exports its session id on its own. It is an observation of
+// the environment, never derived: a caller without one keeps the unscoped
+// meaning of a name, which is always safe and sometimes refused.
+func callerID() string {
+	for _, key := range []string{"ENVOY_CALLER", "CLAUDE_CODE_SESSION_ID"} {
+		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // reserve claims the directory this dispatch runs in. A path is an identity
-// and is taken or refused as given. A name addresses its latest generation:
-// free, it is claimed as is; held by a job not yet delivered, the dispatch is
-// refused, since a caller may still be waiting to collect by it; delivered, it
-// passes on, and this dispatch runs as the name's next generation, which is
-// what the name resolves to from then on. Losing the Mkdir to a concurrent
-// dispatch re-reads the name, where the winner's unrecorded directory holds it.
-func reserve(arg, dir string) (reserved, refusal string, err error) {
+// and is taken or refused as given. A name gets a generation of its own,
+// always the next one, and from then on means that job to this caller.
+//
+// What can still refuse it is a job this dispatch would take the name away
+// from while a caller may be waiting to collect by it: the job the name means
+// to this caller now, and the newest one, which is what the name means to
+// every caller without a generation of its own. Such a job holds the name
+// only against a caller it shares that meaning with — the same caller, or
+// either side having no identity. Two callers that both have one never
+// contend: each name keeps meaning each caller's own job. Losing the Mkdir to
+// a concurrent dispatch re-reads the name.
+func reserve(arg, dir, caller string) (reserved, refusal string, err error) {
 	if job.IsPath(arg) {
 		if err := job.Reserve(dir); errors.Is(err, job.ErrJobExists) {
 			return "", prose.JobExists(dir), nil
@@ -200,18 +220,23 @@ func reserve(arg, dir string) (reserved, refusal string, err error) {
 		return dir, "", nil
 	}
 	base, name := filepath.Dir(dir), filepath.Base(dir)
-	for range 4 {
-		latest, generation, lerr := job.Latest(base, name)
-		if lerr != nil {
-			return "", "", lerr
+	for range 8 {
+		addr, rerr := job.Resolve(base, name, caller)
+		if rerr != nil {
+			return "", "", rerr
 		}
-		next := latest
-		if generation > 0 {
-			if hold, held := collect.NameHold(latest); held {
-				return "", prose.NameHeld(name, latest, hold), nil
+		if addr.Newest > 0 {
+			for _, holder := range []string{addr.Dir, addr.NewestDir} {
+				hold, held := collect.NameHold(holder)
+				if !held {
+					continue
+				}
+				if owner := job.CallerOf(holder); caller == "" || owner == "" || owner == caller {
+					return "", prose.NameHeld(name, holder, hold), nil
+				}
 			}
-			next = job.GenerationDir(base, name, generation+1)
 		}
+		next := job.GenerationDir(base, name, addr.Newest+1)
 		if err = job.Reserve(next); err == nil {
 			return next, "", nil
 		} else if !errors.Is(err, job.ErrJobExists) {
@@ -272,7 +297,7 @@ type voice struct {
 // member named directly would be, so there is one eligibility rule and one
 // set of roster checks whatever the caller spelled. errText is "" exactly
 // when the roster is dispatchable.
-func resolveTurns(req RunRequest, invocationCwd string, timeoutMin float64) ([]fan.Turn, string) {
+func resolveTurns(req RunRequest, invocationCwd, caller string, timeoutMin float64) ([]fan.Turn, string) {
 	var voices []voice
 	for _, seat := range req.With {
 		spec, promptFile, errText := splitSeat(seat)
@@ -294,7 +319,7 @@ func resolveTurns(req RunRequest, invocationCwd string, timeoutMin float64) ([]f
 			voices = append(voices, v)
 			continue
 		}
-		ref, err := job.ResolveRef(strings.TrimPrefix(spec, "@"), invocationCwd)
+		ref, err := job.ResolveRef(strings.TrimPrefix(spec, "@"), invocationCwd, caller)
 		if err != nil {
 			return nil, fmt.Sprintf("--with %s: %s", spec, err)
 		}
@@ -382,6 +407,7 @@ func resolveTurns(req RunRequest, invocationCwd string, timeoutMin float64) ([]f
 				Cwd:         cwd,
 				Baseline:    baseline,
 				ResumedFrom: v.source,
+				Caller:      caller,
 				TimeoutMin:  timeoutMin,
 				Turn: provider.Options{
 					Model:        v.model,
@@ -569,7 +595,7 @@ func Collect(req CollectRequest) int {
 	if req.Job == "" {
 		return usageError(stderr, "collect takes the job to print: the name it was run as, or its directory")
 	}
-	dir, err := job.ResolveRef(req.Job, invocationCwd)
+	dir, err := job.ResolveRef(req.Job, invocationCwd, callerID())
 	var unreadable *job.StoreUnreadableError
 	if errors.As(err, &unreadable) {
 		fmt.Fprintf(stderr, "collect error: %s\n", prose.UnreadableStore(unreadable.Base, unreadable.Err))

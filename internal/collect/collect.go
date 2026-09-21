@@ -132,15 +132,16 @@ func Inspect(dir string) (*Source, prose.ResumeBlockerKind, error) {
 	}, "", nil
 }
 
-// NameHold is the single definition of "this job still holds its name". A
-// name passes to a new dispatch only once the job holding it was delivered —
-// every turn in it terminal and collected, which is what collectedAt means —
-// because until then some caller may still be waiting to collect by that
-// name, and a dispatch that took it would hand that caller another's result.
-// Age is not consulted: a job nobody collected holds its name until someone
-// does, and pending lists it. A directory with no record holds too: it is a
-// dispatch between its reservation and its first record, or one that died
-// there, and the engine cannot tell which.
+// NameHold is the single definition of "this job still holds its name": it
+// is undelivered — some turn in it not yet terminal and collected, which is
+// what collectedAt means — so a caller may still be waiting to collect it by
+// that name. Whom the hold binds is the dispatcher's question (a job holds
+// its name only against a caller that shares its meaning of the name); this
+// says only whether there is anything left to deliver. Age is not consulted:
+// a job nobody collected holds until someone does, and pending lists it. A
+// directory with no record holds too: it is a dispatch between its
+// reservation and its first record, or one that died there, and the engine
+// cannot tell which.
 //
 // A fan-out holds through any member that does. One case differs from a
 // single turn: a member the roster names that never wrote a record — a

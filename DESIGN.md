@@ -91,7 +91,7 @@ sandbox once broke the calling session's own tooling).
   not — EVIDENCE.md, 2026-09-12). A directory is reserved by creating it, so
   creation is the collision check. A refusal that ran nothing gives the name
   back.
-- **A name addresses its latest generation; a directory is an identity.**
+- **A name is an address scoped to its caller; a directory is an identity.**
   Callers do not invent names: the skills that drive the engine hand every
   session `review-r1` and `consult-r1`, so in a checkout that outlives one
   task, reuse is the normal case. The first rule was refuse-never-suffix, on
@@ -99,25 +99,48 @@ sandbox once broke the calling session's own tooling).
   else's job — and refusal did exactly that: a refusal whose exit code a
   pipe had swallowed went unseen, and `collect` by the name served the old
   job as `ok` (EVIDENCE.md, 2026-09-21). The name was already ambiguous
-  across time; refusing only chose the stale reading. So a name whose job
-  was **delivered** — every turn terminal and collected, the meaning
-  `collectedAt` already had — passes to the next dispatch, which runs in
-  `<name>+2`, and `collect` and `@<job>` resolve a name to its highest
-  generation. `+` is outside the name pattern, so no caller can name a
-  generation; its path reaches it. Rejected: rotating the old directory
-  aside so the new job takes the bare path (every `resumedFrom` record and
-  printed `resume:` command naming the old path would silently mean a
-  different job); always passing the name on (a caller still waiting on a
-  running or uncollected job would collect the newcomer's result, so that
-  one case stays a refusal — the only collision a caller hears about); an
-  age threshold for "stale" (judgment; delivery is an observation). Two
-  edges follow from holding only what a collect could still deliver. A
-  fan-out member refused before its first record — a session held at
-  dispatch — has nothing to deliver, so once a sibling has a record it holds
-  nothing; counting it would pin the name for good, since no collect stamps
-  a member that has no record. And a store that exists but cannot be listed
-  is an error, never generation zero: the bare name there could be an older
-  job served as the latest.
+  across time; refusing only chose the stale reading. So every dispatch
+  under a name gets a generation of its own — `<name>`, `<name>+2`, `+3`;
+  `+` is outside the name pattern, so no caller can name one and its path
+  reaches it — and `collect` and `@<job>` resolve a name to **the caller's
+  own newest generation**, else the newest of anyone's. The second clause is
+  what lets a later session pick up an earlier one's work by name, and what
+  a caller with no identity always gets. The caller is the session identity
+  its harness exports (`ENVOY_CALLER`, else Claude Code's
+  `CLAUDE_CODE_SESSION_ID`), recorded as `caller` in `meta.json` and
+  `group.json`: an observation of the environment, never derived, and absent
+  where none was exported.
+  The scoping is what makes reuse safe rather than merely likely-safe. The
+  intermediate design resolved a name to the newest generation for everyone
+  and let a *delivered* job's name pass on; review showed delivery proves
+  receipt, not that the caller is done with the name — A collects
+  `consult-r1`, B reuses it, and A's `--with @consult-r1/codex` continues
+  B's conversation, with no lock to object because B's session is valid and
+  free. Correctness hung on nobody reusing a name between a collect and the
+  caller's last reference to it. Scoped, there is no such window: B's
+  dispatch never changes what the name means to A.
+  A refusal remains for the callers that share a meaning. A dispatch takes
+  the name away from the job it means to this caller now, and from the
+  newest job, which is what it means to every caller without a generation of
+  its own; either one, while **undelivered** — running, or terminal and
+  uncollected, the meaning `collectedAt` already had (`collect.NameHold`) —
+  holds the name against a caller it shares that meaning with: the same
+  caller, or either side having no identity. Two callers that each have one
+  never contend. Rejected: rotating the old directory aside so the new job
+  takes the bare path (every `resumedFrom` record and printed `resume:`
+  command naming the old path would silently mean a different job); an age
+  threshold for "stale" (judgment; delivery is an observation); having the
+  caller pass a scope flag (the model would have to know about collisions,
+  which is the thing being removed). Two edges follow from holding only what
+  a collect could still deliver. A fan-out member refused before its first
+  record — a session held at dispatch — has nothing to deliver, so once a
+  sibling has a record it holds nothing; counting it would pin the name for
+  good, since no collect stamps a member that has no record. And a store
+  that exists but cannot be listed is an error, never generation zero: the
+  bare name there could be an older job served as the latest. One window is
+  accepted: a reservation has no record for its first moments, so it cannot
+  say whose it is, and a second caller dispatching the same name in that
+  instant is refused rather than guessed about.
 - **Records hold facts; collect renders.** `meta.json` carries what the turn
   was dispatched with and what the engine observed, never a rendered command
   or prescription: a persisted command drifts with every wording or verb

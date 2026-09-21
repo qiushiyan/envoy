@@ -530,7 +530,7 @@ func ContinueBlocked(dir string, kind ResumeBlockerKind) string {
 // ---------- naming and rostering a run ----------
 
 // JobExists refuses a directory path that already exists. A path is an
-// identity — one directory, one job — so unlike a name it never passes on.
+// identity — one directory, one job — so unlike a name it has no generations.
 func JobExists(dir string) string {
 	return fmt.Sprintf("job directory %s already exists — a directory holds one job. Pick another path; "+
 		"to read the existing job: %s", dir, CollectCommand(dir))
@@ -556,10 +556,11 @@ type NameHold struct {
 	Empty  bool
 }
 
-// NameHeld refuses a dispatch under a name whose job was not delivered yet.
-// A delivered job's name passes on silently, so this is the one collision a
-// caller ever hears about, and it leads with the fact a caller must not
-// miss: collecting this name now reads the other job. dir is the job — for a
+// NameHeld refuses a dispatch under a name held by an undelivered job that
+// shares the dispatcher's meaning of it. Every other reuse of a name is
+// silent, so this is the one collision a caller ever hears about, and it leads with the fact a caller must not
+// miss: nothing ran, so collecting this name reads the job already there —
+// the caller's own earlier one, or another caller's. dir is the job — for a
 // fan-out the whole one, since one collect covers every member.
 func NameHeld(name, dir string, hold NameHold) string {
 	subject := "which"
@@ -585,7 +586,7 @@ func NameHeld(name, dir string, hold NameHold) string {
 		release = "Inspect that directory before anything reuses its name."
 	}
 	return fmt.Sprintf("nothing was dispatched: the name %s is held by another job, %s, %s %s. "+
-		"Collecting %s now would read that job, not yours. Dispatch again under a different name (%s-b, say). %s",
+		"Collecting %s now reads that job — nothing new ran. Dispatch again under a different name (%s-b, say). %s",
 		name, dir, subject, state, name, name, release)
 }
 
