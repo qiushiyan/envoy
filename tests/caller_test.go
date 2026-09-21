@@ -1,6 +1,8 @@
 package integration
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -172,5 +174,93 @@ func TestCallerIdentityIsReadFromTheHarness(t *testing.T) {
 		if r.code != 0 || jobLineOf(r.stdout) != filepath.Join(want, "codex") {
 			t.Fatalf("pair/codex = %q, want the member under %s\n%s", jobLineOf(r.stdout), want, r.stderr)
 		}
+	}
+}
+
+// The newest job is what a name means to every caller without a generation
+// of its own, so it holds the name even against a caller whose own latest job
+// under it is delivered: that dispatch would take the name from someone who
+// may still collect by it.
+func TestTheNewestJobHoldsTheNameForCallersWhoShareIt(t *testing.T) {
+	base := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	a, nobody := base.as("session-a", ""), base.as("", "")
+	project := t.TempDir()
+	prompt := writePrompt(t, t.TempDir())
+	run := func(e *env) runResult {
+		return runEnvoyIn(t, e, project, "run", "solo", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5")
+	}
+	if r := run(a); r.code != 0 {
+		t.Fatalf("A's dispatch = %d\n%s", r.code, r.stderr)
+	}
+	runEnvoyIn(t, a, project, "collect", "solo")
+	newest := run(nobody)
+	if newest.code != 0 {
+		t.Fatalf("identity-less dispatch over A's delivered job = %d\n%s", newest.code, newest.stderr)
+	}
+	refused := run(a)
+	if refused.code != 3 {
+		t.Fatalf("A over a newer identity-less uncollected job = %d, want 3\n%s", refused.code, refused.stderr)
+	}
+	mustContain(t, "stderr", refused.stderr, jobLineOf(newest.stdout), "has not been collected")
+}
+
+// A record that is there and cannot be read never lets an older job of the
+// caller's answer to the name: collect and dispatch stop and name the record.
+func TestAnUnreadableRecordNeverYieldsAnOlderGeneration(t *testing.T) {
+	a := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").as("session-a", "")
+	project := t.TempDir()
+	prompt := writePrompt(t, t.TempDir())
+	var dirs []string
+	for range 2 {
+		r := runEnvoyIn(t, a, project, "run", "consult-r1", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5")
+		if r.code != 0 {
+			t.Fatalf("dispatch = %d\n%s", r.code, r.stderr)
+		}
+		dirs = append(dirs, jobLineOf(r.stdout))
+		runEnvoyIn(t, a, project, "collect", "consult-r1")
+	}
+	if err := os.WriteFile(filepath.Join(dirs[1], "meta.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	col := runEnvoyIn(t, a, project, "collect", "--status-only", "consult-r1")
+	if col.code != 2 {
+		t.Fatalf("collect past an unreadable newer record = %d, want 2\nstdout:\n%s\nstderr:\n%s", col.code, col.stdout, col.stderr)
+	}
+	mustContain(t, "stderr", col.stderr, "was not resolved", dirs[1], "an older one must not answer for it")
+	mustNotContain(t, "stdout", col.stdout, "status: ok")
+	if r := runEnvoyIn(t, a, project, "run", "consult-r1", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5"); r.code != 2 {
+		t.Fatalf("dispatch past an unreadable record = %d, want 2\n%s", r.code, r.stderr)
+	}
+	// The older job is still reachable, by the identity that cannot drift.
+	if r := runEnvoyIn(t, a, project, "collect", "--status-only", dirs[0]); r.code != 0 || jobLineOf(r.stdout) != dirs[0] {
+		t.Fatalf("collect by path = %d\n%s", r.code, r.stderr)
+	}
+}
+
+// A dispatched turn is a session of its own. A job it dispatches through
+// envoy does not answer to the dispatcher's names.
+func TestADispatchedTurnDoesNotInheritItsDispatchersNames(t *testing.T) {
+	a := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").as("session-a", "")
+	a.extra["CLAUDE_CODE_SESSION_ID"] = "cc-session-a"
+	project := t.TempDir()
+	prompt := writePrompt(t, t.TempDir())
+	own := runEnvoyIn(t, a, project, "run", "nested-source", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5")
+	if own.code != 0 {
+		t.Fatalf("A's dispatch = %d\n%s", own.code, own.stderr)
+	}
+	runEnvoyIn(t, a, project, "collect", "nested-source")
+
+	outer := a.as("session-a", "")
+	outer.extra["ENVOY_FAKE_NESTED_CMD"] = fmt.Sprintf("cd %q && %q run nested-source --prompt-file %q --with codex --timeout-min 5", project, binPath, prompt)
+	if r := runEnvoyIn(t, outer, project, "run", "outer", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5"); r.code != 0 {
+		t.Fatalf("outer dispatch = %d\n%s", r.code, r.stderr)
+	}
+	nested := jobLineOf(own.stdout) + "+2"
+	if caller, has := readMeta(t, nested)["caller"]; has {
+		t.Fatalf("the nested job recorded the dispatcher's identity %v", caller)
+	}
+	if r := runEnvoyIn(t, a, project, "collect", "--status-only", "nested-source"); jobLineOf(r.stdout) != jobLineOf(own.stdout) {
+		t.Fatalf("A's nested-source = %q, want its own %q", jobLineOf(r.stdout), jobLineOf(own.stdout))
 	}
 }

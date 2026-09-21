@@ -3,6 +3,7 @@ package collect
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -24,7 +25,17 @@ func writeTurn(t *testing.T, dir, status string, collected bool) {
 	}
 }
 
-func writeGroup(t *testing.T, dir string, members ...string) {
+// deadPid is a process id that was live a moment ago and is provably gone.
+func deadPid(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("true")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	return cmd.Process.Pid
+}
+
+func writeGroup(t *testing.T, dir string, runnerPid int, members ...string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -36,7 +47,7 @@ func writeGroup(t *testing.T, dir string, members ...string) {
 		}
 		list += fmt.Sprintf("%q", m)
 	}
-	group := fmt.Sprintf(`{"schemaVersion":2,"startedAt":"2026-09-21T00:00:00.000Z","cwd":"/tmp","timeoutMin":5,"gitBaseline":null,"members":[%s]}`, list)
+	group := fmt.Sprintf(`{"schemaVersion":2,"startedAt":"2026-09-21T00:00:00.000Z","cwd":"/tmp","timeoutMin":5,"gitBaseline":null,"members":[%s],"runnerPid":%d}`, list, runnerPid)
 	if err := os.WriteFile(filepath.Join(dir, "group.json"), []byte(group), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -46,6 +57,7 @@ func writeGroup(t *testing.T, dir string, members ...string) {
 // the first member being done, and never by a record that is missing or
 // unreadable where one could still appear.
 func TestNameHoldClassifiesWhatStillHoldsAName(t *testing.T) {
+	gone := deadPid(t)
 	cases := []struct {
 		name  string
 		build func(dir string)
@@ -66,27 +78,40 @@ func TestNameHoldClassifiesWhatStillHoldsAName(t *testing.T) {
 			os.WriteFile(filepath.Join(d, "meta.json"), []byte("{not json"), 0o644)
 		}, prose.NameHold{Kind: prose.HoldUnreadable}, true},
 		{"fan-out, every member delivered", func(d string) {
-			writeGroup(t, d, "codex", "claude")
+			writeGroup(t, d, os.Getpid(), "codex", "claude")
 			writeTurn(t, filepath.Join(d, "codex"), "ok", true)
 			writeTurn(t, filepath.Join(d, "claude"), "failed", true)
 		}, prose.NameHold{}, false},
 		{"fan-out held by its last member", func(d string) {
-			writeGroup(t, d, "codex", "claude")
+			writeGroup(t, d, gone, "codex", "claude")
 			writeTurn(t, filepath.Join(d, "codex"), "ok", true)
 			writeTurn(t, filepath.Join(d, "claude"), "ok", false)
 		}, prose.NameHold{Kind: prose.HoldUncollected, Member: "claude"}, true},
 		{"fan-out with a running member", func(d string) {
-			writeGroup(t, d, "codex", "claude")
+			writeGroup(t, d, gone, "codex", "claude")
 			writeTurn(t, filepath.Join(d, "codex"), "ok", true)
 			writeTurn(t, filepath.Join(d, "claude"), "running", false)
 		}, prose.NameHold{Kind: prose.HoldRunning, Member: "claude"}, true},
-		{"fan-out whose refused member never wrote a record", func(d string) {
-			writeGroup(t, d, "codex", "claude")
+		// A member with no record: absence does not say it was refused. While
+		// the supervising process may be alive the member may yet start.
+		{"fan-out alive, one member has no record yet", func(d string) {
+			writeGroup(t, d, os.Getpid(), "codex", "claude")
+			writeTurn(t, filepath.Join(d, "claude"), "ok", true)
+		}, prose.NameHold{Kind: prose.HoldUnrecorded, Member: "codex"}, true},
+		{"fan-out gone, its refused member never wrote a record", func(d string) {
+			writeGroup(t, d, gone, "codex", "claude")
 			writeTurn(t, filepath.Join(d, "claude"), "ok", true)
 		}, prose.NameHold{}, false},
-		{"fan-out in its first moments: no member has a record", func(d string) {
-			writeGroup(t, d, "codex", "claude")
-		}, prose.NameHold{Kind: prose.HoldUnrecorded}, true},
+		{"fan-out gone, every member refused", func(d string) {
+			writeGroup(t, d, gone, "codex", "claude")
+		}, prose.NameHold{}, false},
+		{"fan-out in its first moments", func(d string) {
+			writeGroup(t, d, os.Getpid(), "codex", "claude")
+		}, prose.NameHold{Kind: prose.HoldUnrecorded, Member: "codex"}, true},
+		{"older manifest that names no supervisor", func(d string) {
+			writeGroup(t, d, 0, "codex", "claude")
+			writeTurn(t, filepath.Join(d, "claude"), "ok", true)
+		}, prose.NameHold{Kind: prose.HoldUnrecorded, Member: "codex"}, true},
 		{"fan-out with an unreadable roster", func(d string) {
 			os.MkdirAll(d, 0o755)
 			os.WriteFile(filepath.Join(d, "group.json"), []byte("{"), 0o644)

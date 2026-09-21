@@ -74,6 +74,10 @@ type Group struct {
 	// manifest carries it because a fan-out must be attributable before any
 	// member has written a record.
 	Caller *string `json:"caller,omitempty"`
+	// RunnerPid is the process supervising the fan-out; every member runs in
+	// it. A member the roster names with no record may still start while it
+	// lives and never will once it is gone. Absent in older manifests.
+	RunnerPid int `json:"runnerPid,omitempty"`
 }
 
 // Marshal renders the canonical on-disk form.

@@ -131,7 +131,7 @@ func Run(req RunRequest) int {
 		return usageError(stderr, "%s", err)
 	}
 
-	caller := callerID()
+	caller := job.CallerFromEnv()
 	turns, errText := resolveTurns(req, invocationCwd, caller, timeoutMin)
 	if errText != "" {
 		return usageError(stderr, "%s", errText)
@@ -164,6 +164,10 @@ func Run(req RunRequest) int {
 	if refusal != "" {
 		return usageError(stderr, "%s", refusal)
 	}
+	if msg, ok := unresolvable(err); ok {
+		fmt.Fprintf(stderr, "envoy: %s\n", msg)
+		return ExitInfra
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "envoy: cannot create job dir: %s\n", err)
 		return ExitInfra
@@ -184,18 +188,19 @@ func Run(req RunRequest) int {
 	return code
 }
 
-// callerID is the dispatching session's identity as its harness exports it,
-// "" when it exports none. ENVOY_CALLER is the explicit form any harness can
-// set; Claude Code exports its session id on its own. It is an observation of
-// the environment, never derived: a caller without one keeps the unscoped
-// meaning of a name, which is always safe and sometimes refused.
-func callerID() string {
-	for _, key := range []string{"ENVOY_CALLER", "CLAUDE_CODE_SESSION_ID"} {
-		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-			return v
-		}
+// unresolvable words the two ways a name can fail to resolve that are the
+// store's fault rather than the caller's: both stop with exit 2 instead of
+// letting an older job answer to the name.
+func unresolvable(err error) (string, bool) {
+	var unreadable *job.StoreUnreadableError
+	var unattributed *job.UnattributedError
+	switch {
+	case errors.As(err, &unreadable):
+		return prose.UnreadableStore(unreadable.Base, unreadable.Err), true
+	case errors.As(err, &unattributed):
+		return prose.UnattributedGeneration(unattributed.Name, unattributed.Dir, unattributed.Err), true
 	}
-	return ""
+	return "", false
 }
 
 // reserve claims the directory this dispatch runs in. A path is an identity
@@ -231,7 +236,9 @@ func reserve(arg, dir, caller string) (reserved, refusal string, err error) {
 				if !held {
 					continue
 				}
-				if owner := job.CallerOf(holder); caller == "" || owner == "" || owner == caller {
+				// A holder whose record cannot say whose it is binds like one
+				// with no identity: NameHold has already called it unreadable.
+				if owner, _ := job.CallerOf(holder); caller == "" || owner == "" || owner == caller {
 					return "", prose.NameHeld(name, holder, hold), nil
 				}
 			}
@@ -595,10 +602,9 @@ func Collect(req CollectRequest) int {
 	if req.Job == "" {
 		return usageError(stderr, "collect takes the job to print: the name it was run as, or its directory")
 	}
-	dir, err := job.ResolveRef(req.Job, invocationCwd, callerID())
-	var unreadable *job.StoreUnreadableError
-	if errors.As(err, &unreadable) {
-		fmt.Fprintf(stderr, "collect error: %s\n", prose.UnreadableStore(unreadable.Base, unreadable.Err))
+	dir, err := job.ResolveRef(req.Job, invocationCwd, job.CallerFromEnv())
+	if msg, ok := unresolvable(err); ok {
+		fmt.Fprintf(stderr, "collect error: %s\n", msg)
 		return ExitInfra
 	}
 	if err != nil {

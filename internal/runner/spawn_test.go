@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -25,6 +26,10 @@ func TestDefaultCommandPreservesArgvAndEnv(t *testing.T) {
 					t.Fatal(err)
 				}
 				t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+				// The dispatcher's session identity is the one thing the child
+				// does not inherit: it is a session of its own.
+				t.Setenv("ENVOY_CALLER", "dispatcher")
+				t.Setenv("CLAUDE_CODE_SESSION_ID", "dispatcher-session")
 				argv := []string{"arg with spaces", "'literal'", "$(literal)"}
 				extraEnv := []string{"ENVOY_TEST_EXTRA=value"}
 				prefix := commandPrefix(provider)
@@ -37,7 +42,12 @@ func TestDefaultCommandPreservesArgvAndEnv(t *testing.T) {
 				defer child.stderr.Close()
 				child.wait()
 				old := exec.Command(provider, argv...)
-				old.Env = append(os.Environ(), extraEnv...)
+				old.Env = append(slices.DeleteFunc(os.Environ(), func(kv string) bool {
+					return strings.HasPrefix(kv, "ENVOY_CALLER=") || strings.HasPrefix(kv, "CLAUDE_CODE_SESSION_ID=")
+				}), extraEnv...)
+				if slices.ContainsFunc(child.cmd.Env, func(kv string) bool { return strings.Contains(kv, "dispatcher") }) {
+					t.Fatal("the provider child inherited the dispatcher's session identity")
+				}
 				if !slices.Equal(prefix, []string{provider}) || child.cmd.Path != old.Path ||
 					!slices.Equal(child.cmd.Args, old.Args) || !slices.Equal(child.cmd.Env, old.Env) {
 					t.Fatal("unconfigured command changed executable, argv or environment")

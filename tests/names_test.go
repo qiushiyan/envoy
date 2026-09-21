@@ -3,9 +3,12 @@ package integration
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func jobLineOf(stdout string) string {
@@ -137,4 +140,80 @@ func TestAnUnlistableStoreNeverServesAnOlderGeneration(t *testing.T) {
 		t.Fatalf("a continuation must not resolve a name in an unlistable store\n%s", cont.stdout)
 	}
 	mustContain(t, "stderr", cont.stderr, "could not be read")
+}
+
+// A fan-out member with no record has not thereby been refused: members start
+// independently, and one may still be preparing its turn after a sibling has
+// finished and been collected. While the fan-out's process is alive the name
+// is held; a dispatch that took it would run a second job under a name whose
+// first is still starting.
+func TestALiveFanOutHoldsItsNameForAMemberStillStarting(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").set("ENVOY_CALLER", "session-a")
+	project := t.TempDir()
+	prompt := writePrompt(t, t.TempDir())
+	fifo := filepath.Join(t.TempDir(), "late-prompt.md")
+	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+		t.Skipf("no fifo here: %v", err)
+	}
+	// Held open for writing, so opening the prompt never blocks but reading
+	// it does, until this end writes and closes.
+	late, err := os.OpenFile(fifo, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			late.WriteString("the late prompt\n")
+			late.Close()
+		}
+	}
+
+	cmd := exec.Command(binPath, "run", "pair", "--with", "codex="+fifo, "--with", "claude="+prompt, "--timeout-min", "5")
+	cmd.Env, cmd.Dir = e.build(), project
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { release(); cmd.Wait() }()
+
+	var group string
+	var r runResult
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if time.Now().After(deadline) {
+			t.Fatalf("the unblocked member never finished; last status read:\n%s%s", r.stdout, r.stderr)
+		}
+		r = runEnvoyIn(t, e, project, "collect", "--status-only", "pair")
+		group = ""
+		for line := range strings.SplitSeq(r.stdout, "\n") {
+			if after, ok := strings.CutPrefix(line, "fan-out: "); ok {
+				group = after
+			}
+		}
+		if group != "" {
+			if data, err := os.ReadFile(filepath.Join(group, "claude", "meta.json")); err == nil && strings.Contains(string(data), `"status": "ok"`) {
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if _, err := os.Stat(filepath.Join(group, "codex", "meta.json")); err == nil {
+		t.Fatal("the blocked member wrote a record; the rig no longer holds it before its first one")
+	}
+	runEnvoyIn(t, e, project, "collect", "pair") // delivers and stamps the finished sibling
+
+	held := runEnvoyIn(t, e, project, "run", "pair", "--prompt-file", prompt, "--with", "codex", "--with", "claude", "--timeout-min", "5")
+	if held.code != 3 {
+		t.Fatalf("dispatch under a live fan-out's name = %d, want 3\nstdout:\n%s\nstderr:\n%s", held.code, held.stdout, held.stderr)
+	}
+	mustContain(t, "stderr", held.stderr, "whose member codex has written no record", "may still be alive")
+
+	release()
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("the fan-out must finish once its late member can read its prompt: %v", err)
+	}
+	if readMeta(t, filepath.Join(group, "codex"))["status"] != "ok" {
+		t.Fatal("the late member must have run")
+	}
 }

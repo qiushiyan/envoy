@@ -143,12 +143,14 @@ func Inspect(dir string) (*Source, prose.ResumeBlockerKind, error) {
 // reservation and its first record, or one that died there, and the engine
 // cannot tell which.
 //
-// A fan-out holds through any member that does. One case differs from a
-// single turn: a member the roster names that never wrote a record — a
-// session held at dispatch refuses that member alone — has nothing a collect
-// could ever deliver. Members start together, so once a sibling has a record
-// the fan-out is past its first moments, and the recordless member holds
-// nothing; while no member has one, the fan-out itself reads as unrecorded.
+// A fan-out holds through any member that does. A member the roster names
+// that has no record — a session held at dispatch refuses that member alone,
+// before it writes anything — has nothing a collect could ever deliver, but
+// its absence alone does not say it was refused: members start independently,
+// and one may still be preparing its turn. What says it never will start is
+// the supervising process being gone, so a recordless member holds for as
+// long as that process may be alive, and an older manifest that does not name
+// it holds for good.
 func NameHold(dir string) (prose.NameHold, bool) {
 	if !job.IsGroupDir(dir) {
 		return turnHold(dir)
@@ -158,20 +160,19 @@ func NameHold(dir string) (prose.NameHold, bool) {
 	if err != nil {
 		return prose.NameHold{Kind: prose.HoldUnreadable}, true
 	}
-	recorded := 0
+	mayStillStart := proc.PidLiveness(group.RunnerPid) != proc.Gone
 	for _, name := range group.Members {
 		memberDir := gw.Member(name).Dir
 		if !hasFile(job.Workspace{Dir: memberDir}.MetaPath()) {
+			if mayStillStart {
+				return prose.NameHold{Kind: prose.HoldUnrecorded, Member: name}, true
+			}
 			continue
 		}
-		recorded++
 		if hold, held := turnHold(memberDir); held {
 			hold.Member = name
 			return hold, true
 		}
-	}
-	if recorded == 0 {
-		return prose.NameHold{Kind: prose.HoldUnrecorded}, true
 	}
 	return prose.NameHold{}, false
 }

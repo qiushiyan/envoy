@@ -1437,9 +1437,10 @@ func TestHelpIsSelfSufficient(t *testing.T) {
 		"means the latest job your session dispatched under it", // what a reused name means
 		"ENVOY_CALLER, else Claude",                             // where the session identity comes from
 		"<name>+2",                                              // so a +N directory is not read as a fault
-		"for a held name, pick another",                         // the one collision a caller hears about
-		"would read an\n  earlier job",                          // a refusal that ran nothing is not collected
-		"a fan-out's 3 included",                                // but a fan-out's exit 3 may have run members
+		"without ever printing a \"job:\" line ran nothing",     // the observable mark of a refusal that ran nothing
+		"\"lock error:\" naming the job",                        // a held session is one of them, and says where to look
+		"for a held name, pick\n  another",                      // the one collision a caller hears about
+		"a\n  fan-out's 3 included",                             // but a fan-out's exit 3 may have run members
 		"VOICES",
 		"--with codex::high",                          // effort without a model
 		"--with @<job>",                               // continuation

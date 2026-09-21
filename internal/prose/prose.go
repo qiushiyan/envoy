@@ -445,6 +445,15 @@ func UnreadableStore(base string, err error) string {
 		"check the path and its permissions.", base, err)
 }
 
+// UnattributedGeneration stops a name from resolving past a job whose record
+// cannot say whose it is. Skipping it would let an older job of the caller's
+// answer to the name as though it were the latest, which is the wrong-job
+// read names exist to prevent.
+func UnattributedGeneration(name, dir string, err error) string {
+	return fmt.Sprintf("the name %s was not resolved: the record in %s could not be read (%s), so whether that is this session's latest job under the name is unknown, and an older one must not answer for it. "+
+		"Name the job you want by its directory; to see what that one holds: %s", name, dir, err, CollectCommand(dir))
+}
+
 // ---------- continuing a finished job ----------
 //
 // A voice spelled @<job> continues that job's conversation as a member of
@@ -576,10 +585,16 @@ func NameHeld(name, dir string, hold NameHold) string {
 		state = "finished but has not been collected"
 		release = "If that job is yours or its caller is gone, collecting it frees the name: " + CollectCommand(dir)
 	case HoldUnrecorded:
-		state = "was reserved and holds no record — a dispatch in its first moments, or one that died there"
-		release = "If it is still there in a minute no dispatch is starting; read what that directory holds before anything reuses its name."
-		if hold.Empty {
-			release = "If it is still there in a minute no dispatch is starting, and removing that empty directory frees the name."
+		switch {
+		case hold.Member != "":
+			state = "has written no record while the process running that fan-out may still be alive, so it may yet start"
+			release = "The name frees once that fan-out has finished and its own caller has collected it."
+		case hold.Empty:
+			state = "was reserved and holds no record — a dispatch in its first moments, or one that died there, and nothing here says which"
+			release = "Once you have established that no envoy run owns that directory and it is still empty, removing it frees the name."
+		default:
+			state = "was reserved and holds no record — a dispatch in its first moments, or one that died there, and nothing here says which"
+			release = "Read what that directory holds, and establish that no envoy run owns it, before anything reuses its name."
 		}
 	default:
 		state = "holds a record that cannot be read"

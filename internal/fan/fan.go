@@ -84,6 +84,7 @@ func Run(opts Options) int {
 		GitBaseline:   ptrIfNonEmpty(shared.Baseline),
 		Members:       names,
 		Caller:        ptrIfNonEmpty(shared.Caller),
+		RunnerPid:     os.Getpid(),
 	}
 	// The manifest is the record that makes the directory a fan-out: discovery
 	// keys on it, and the reserved name is released when it is absent. So a

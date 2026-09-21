@@ -3,8 +3,11 @@ package runner
 import (
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"syscall"
+
+	"github.com/qiushiyan/envoy/internal/job"
 
 	"github.com/qiushiyan/envoy/internal/proc"
 )
@@ -31,10 +34,24 @@ type childProcess struct {
 	stderr *os.File
 }
 
+func withoutCallerIdentity(environ []string) []string {
+	kept := environ[:0:0]
+	for _, kv := range environ {
+		key, _, _ := strings.Cut(kv, "=")
+		if !slices.Contains(job.CallerEnvKeys, key) {
+			kept = append(kept, kv)
+		}
+	}
+	return kept
+}
+
 func spawn(name string, argv []string, cwd string, extraEnv []string) (*childProcess, error) {
 	cmd := exec.Command(name, argv...)
 	cmd.Dir = cwd
-	cmd.Env = append(os.Environ(), extraEnv...)
+	// The child is a session of its own. Left in its environment, the
+	// dispatcher's identity would make every job the child dispatches through
+	// envoy answer to the dispatcher's names.
+	cmd.Env = append(withoutCallerIdentity(os.Environ()), extraEnv...)
 	// The child leads its own process group so timeout and cancellation can
 	// stop provider grandchildren too, rather than only the CLI parent.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

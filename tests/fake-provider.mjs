@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn } from 'node:child_process';
+import { execSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
@@ -17,6 +17,16 @@ const finalText = process.env.ENVOY_FAKE_FINAL_TEXT ?? 'fake provider result';
 const invocationFile = perProvider('ENVOY_FAKE_INVOCATION_FILE', '');
 if (invocationFile) {
   fs.writeFileSync(invocationFile, JSON.stringify({ argv: providerArgs, env: process.env, pid: process.pid }));
+}
+
+// A turn that itself drives envoy: the command runs once, in the provider's
+// own environment, before the turn answers. The hook is cleared for the
+// nested call so its provider does not recurse.
+if (process.env.ENVOY_FAKE_NESTED_CMD) {
+  execSync(process.env.ENVOY_FAKE_NESTED_CMD, {
+    stdio: 'ignore',
+    env: { ...process.env, ENVOY_FAKE_NESTED_CMD: '' },
+  });
 }
 
 if (!['codex', 'claude'].includes(provider)) {

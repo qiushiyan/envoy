@@ -131,16 +131,29 @@ sandbox once broke the calling session's own tooling).
   command naming the old path would silently mean a different job); an age
   threshold for "stale" (judgment; delivery is an observation); having the
   caller pass a scope flag (the model would have to know about collisions,
-  which is the thing being removed). Two edges follow from holding only what
-  a collect could still deliver. A fan-out member refused before its first
-  record — a session held at dispatch — has nothing to deliver, so once a
-  sibling has a record it holds nothing; counting it would pin the name for
-  good, since no collect stamps a member that has no record. And a store
-  that exists but cannot be listed is an error, never generation zero: the
-  bare name there could be an older job served as the latest. One window is
-  accepted: a reservation has no record for its first moments, so it cannot
-  say whose it is, and a second caller dispatching the same name in that
-  instant is refused rather than guessed about.
+  which is the thing being removed). Four edges, each decided by what can be
+  observed. A fan-out member with no record — a session held at dispatch
+  refuses that member alone, before it writes anything — has nothing a
+  collect could deliver, but absence is not refusal: members start
+  independently, and one was shown still preparing its turn after its
+  sibling had finished and been collected. What says it never will start is
+  the supervising process being gone, so `group.json` records `runnerPid`
+  and a recordless member holds exactly while that process may be alive —
+  which also frees a round in which every member was refused. A store that
+  exists but cannot be listed is an error, never generation zero, and so is
+  a generation newer than the caller's selected one whose record is there
+  and cannot be read: either would let an older job answer to the name. The
+  provider child does not inherit the caller identity: it is a session of
+  its own, and a job it dispatches through envoy must not answer to its
+  dispatcher's names. And one window is accepted: a reservation has no
+  record for its first moments, so it cannot say whose it is, and a second
+  caller dispatching the same name in that instant is refused rather than
+  guessed about.
+  Known limit, left open on purpose: the fallback to the newest of anyone's
+  is a reading, not an observation. A caller whose identity changes mid-task
+  owns no generation under its new one, so its names fall back; if another
+  session reused the name meanwhile, the fallback is that session's job. A
+  path never has this problem, and every `resume:` line hands one over.
 - **Records hold facts; collect renders.** `meta.json` carries what the turn
   was dispatched with and what the engine observed, never a rendered command
   or prescription: a persisted command drifts with every wording or verb

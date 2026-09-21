@@ -114,16 +114,20 @@ type Address struct {
 	NewestDir string
 }
 
-// Resolve reads what name addresses for caller ("" = no identity). Only a
-// store that does not exist yet reads as empty: one that exists and cannot be
-// listed is an error, because resolving to the bare name there could serve an
-// older generation as the latest.
+// Resolve reads what name addresses for caller ("" = no identity). Two things
+// it cannot read are errors rather than absences, because either could make
+// an older job answer to the name: a store that exists and cannot be listed,
+// and — for a caller with an identity — a generation newer than the one
+// selected whose record cannot say whose it is. Only a store that does not
+// exist yet reads as empty, and only a generation with no record yet reads
+// as nobody's.
 func Resolve(base, name, caller string) (Address, error) {
 	entries, err := os.ReadDir(base)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return Address{}, &StoreUnreadableError{Base: base, Err: err}
 	}
 	newest, own := 0, 0
+	unattributed := map[int]error{}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -132,8 +136,19 @@ func Resolve(base, name, caller string) (Address, error) {
 		if g > newest {
 			newest = g
 		}
-		if g > own && caller != "" && CallerOf(filepath.Join(base, e.Name())) == caller {
+		if g == 0 || caller == "" {
+			continue
+		}
+		owner, err := CallerOf(filepath.Join(base, e.Name()))
+		if err != nil {
+			unattributed[g] = err
+		} else if owner == caller && g > own {
 			own = g
+		}
+	}
+	for g, err := range unattributed {
+		if g > own {
+			return Address{}, &UnattributedError{Name: name, Dir: GenerationDir(base, name, g), Err: err}
 		}
 	}
 	addr := Address{Newest: newest, NewestDir: GenerationDir(base, name, newest)}
@@ -144,18 +159,64 @@ func Resolve(base, name, caller string) (Address, error) {
 	return addr, nil
 }
 
-// CallerOf reads the identity a job was dispatched under, "" when its records
-// carry none or cannot say — a reservation before its first record, a record
-// from before callers were recorded, a job run with no harness identity.
-func CallerOf(dir string) string {
+// UnattributedError reports a generation whose record exists and cannot be
+// read, so whether it is the caller's newest job under the name is unknown.
+type UnattributedError struct {
+	Name string
+	Dir  string
+	Err  error
+}
+
+func (e *UnattributedError) Error() string {
+	return fmt.Sprintf("the record in %s could not be read: %s", e.Dir, e.Err)
+}
+
+func (e *UnattributedError) Unwrap() error { return e.Err }
+
+// CallerOf reads the identity a job was dispatched under. "" with no error
+// means the records carry none: a reservation before its first record, a
+// record from before callers were recorded, a job run with no harness
+// identity. A record that is there and cannot be read is an error, never "".
+func CallerOf(dir string) (string, error) {
+	path := Workspace{Dir: dir}.MetaPath()
 	if IsGroupDir(dir) {
-		if g, err := ReadGroupFile(GroupWorkspace{Dir: dir}.GroupPath()); err == nil && g.Caller != nil {
-			return *g.Caller
+		g, err := ReadGroupFile(GroupWorkspace{Dir: dir}.GroupPath())
+		if err != nil {
+			return "", err
 		}
+		return deref(g.Caller), nil
+	}
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	m, err := ReadMetaFile(path)
+	if err != nil {
+		return "", err
+	}
+	return deref(m.Caller), nil
+}
+
+func deref(s *string) string {
+	if s == nil {
 		return ""
 	}
-	if m, err := ReadMetaFile(Workspace{Dir: dir}.MetaPath()); err == nil && m.Caller != nil {
-		return *m.Caller
+	return *s
+}
+
+// CallerEnvKeys are the variables a harness exports its session identity in,
+// in precedence order: ENVOY_CALLER is the explicit form any harness can set,
+// and Claude Code exports its session id on its own.
+var CallerEnvKeys = []string{"ENVOY_CALLER", "CLAUDE_CODE_SESSION_ID"}
+
+// CallerFromEnv is the dispatching session's identity as its harness exports
+// it, "" when it exports none. It is an observation of the environment, never
+// derived: a caller without one gets the unscoped meaning of a name, under
+// which holds still protect it and a reused name can still be refused.
+func CallerFromEnv() string {
+	for _, key := range CallerEnvKeys {
+		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+			return v
+		}
 	}
 	return ""
 }

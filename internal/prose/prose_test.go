@@ -302,8 +302,9 @@ func TestContinueVocabulary(t *testing.T) {
 		{NameHold{Kind: HoldRunning}, []string{"which is still running", "its own caller has collected it"}, []string{"envoy collect", "removing"}},
 		{NameHold{Kind: HoldRunning, Member: "codex"}, []string{"whose member codex is still running"}, []string{"envoy collect"}},
 		{NameHold{Kind: HoldUncollected}, []string{"has not been collected", "yours or its caller is gone", "envoy collect '/jobs/review-r1+2'"}, []string{"removing"}},
-		{NameHold{Kind: HoldUnrecorded, Empty: true}, []string{"holds no record", "removing that empty directory"}, []string{"envoy collect"}},
-		{NameHold{Kind: HoldUnrecorded}, []string{"holds no record", "read what that directory holds"}, []string{"envoy collect", "removing", "empty"}},
+		{NameHold{Kind: HoldUnrecorded, Empty: true}, []string{"holds no record", "nothing here says which", "established that no envoy run owns", "still empty, removing it"}, []string{"envoy collect", "minute"}},
+		{NameHold{Kind: HoldUnrecorded}, []string{"holds no record", "Read what that directory holds"}, []string{"envoy collect", "removing", "empty", "minute"}},
+		{NameHold{Kind: HoldUnrecorded, Member: "codex"}, []string{"whose member codex has written no record", "may still be alive", "its own caller has collected it"}, []string{"envoy collect", "removing", "minute"}},
 		{NameHold{Kind: HoldUnreadable}, []string{"cannot be read", "Inspect that directory"}, []string{"envoy collect", "removing"}},
 	} {
 		got := NameHeld("review-r1", "/jobs/review-r1+2", c.hold)

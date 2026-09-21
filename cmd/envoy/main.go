@@ -158,15 +158,16 @@ EXIT CODES OF A RUN, AND WHAT EACH ONE LICENSES
   it and read each member's own status. Collect exits 0 whenever it printed
   the job, whatever the job's status.
 
-  A dispatch refused with "usage error:" before any "job:" line ran nothing
-  and left no job of yours: fix the command — for a held name, pick another
-  name — and dispatch again, because collecting that name would read an
-  earlier job. For every other non-zero exit, a fan-out's 3 included, collect
-  the job and follow its `+"`next:`"+` line instead of re-dispatching:
-  whether the provider accepted the prompt decides between a safe retry and
-  duplicating work that already changed the tree, and the job knows which
-  happened. After a crash or restart, `+"`envoy pending`"+` finds the jobs whose
-  completion you may have missed.
+  A dispatch that exits 3 without ever printing a "job:" line ran nothing
+  and left no job of yours, so there is nothing of yours to collect under
+  that name: its message ("usage error:", or "lock error:" naming the job
+  that owns the session) says what to change — for a held name, pick
+  another — and then dispatch again. For every other non-zero exit, a
+  fan-out's 3 included, collect the job and follow its `+"`next:`"+` line instead
+  of re-dispatching: whether the provider accepted the prompt decides between
+  a safe retry and duplicating work that already changed the tree, and the
+  job knows which happened. After a crash or restart, `+"`envoy pending`"+` finds
+  the jobs whose completion you may have missed.
 
   Efforts — claude: %s · codex: %s
 `,
