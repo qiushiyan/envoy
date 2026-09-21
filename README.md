@@ -28,7 +28,9 @@ envoy version
 
 The caller names the job, so nothing printed by a dispatch has to be read
 back: run it in the background, let the process exit, then collect by the same
-name. A name is used once — a taken name is refused, never suffixed. A voice
+name. A name reads the latest job run under it: once a job is collected its
+name passes to the next dispatch, which runs beside it, and only a name whose
+job is still running or uncollected is refused. A voice
 is `provider[:model[:effort]]` for a cold session; omitting the model or
 effort hands the choice to the provider's own configuration, and the engine
 never substitutes one of its own. `@<job>` continues

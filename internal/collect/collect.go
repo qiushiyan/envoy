@@ -132,6 +132,49 @@ func Inspect(dir string) (*Source, prose.ResumeBlockerKind, error) {
 	}, "", nil
 }
 
+// NameHold is the single definition of "this job still holds its name". A
+// name passes to a new dispatch only once the job holding it was delivered —
+// every turn in it terminal and collected, which is what collectedAt means —
+// because until then some caller may still be waiting to collect by that
+// name, and a dispatch that took it would hand that caller another's result.
+// Age is not consulted: a job nobody collected holds its name until someone
+// does, and pending lists it. A directory with no record holds too: it is a
+// dispatch between its reservation and its first record, or one that died
+// there, and the engine cannot tell which.
+func NameHold(dir string) (prose.NameHoldKind, bool) {
+	if job.IsGroupDir(dir) {
+		gw := job.GroupWorkspace{Dir: dir}
+		group, err := job.ReadGroupFile(gw.GroupPath())
+		if err != nil {
+			return prose.HoldUnreadable, true
+		}
+		for _, name := range group.Members {
+			if kind, held := turnHold(gw.Member(name).Dir); held {
+				return kind, true
+			}
+		}
+		return "", false
+	}
+	return turnHold(dir)
+}
+
+func turnHold(dir string) (prose.NameHoldKind, bool) {
+	metaPath := job.Workspace{Dir: dir}.MetaPath()
+	if !hasFile(metaPath) {
+		return prose.HoldUnrecorded, true
+	}
+	meta, err := job.ReadMetaFile(metaPath)
+	switch {
+	case err != nil:
+		return prose.HoldUnreadable, true
+	case meta.Status == job.StatusRunning:
+		return prose.HoldRunning, true
+	case meta.CollectedAt == nil:
+		return prose.HoldUncollected, true
+	}
+	return "", false
+}
+
 // ---------- classification and recovery ----------
 
 // runningState classifies a status:"running" meta by process liveness.

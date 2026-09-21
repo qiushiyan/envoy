@@ -88,10 +88,29 @@ sandbox once broke the calling session's own tooling).
   before the first record, and racy against a second dispatch in the same
   project) and a coordinate file the dispatch wrote (retired: the path itself
   had to survive across the caller's shell calls, and the logs showed it did
-  not — EVIDENCE.md, 2026-09-12). A name is reserved by creating its directory,
-  so creation is the collision check, and a taken name is refused rather than
-  suffixed: a silent suffix would leave the caller collecting somebody else's
-  job. A refusal that ran nothing gives the name back.
+  not — EVIDENCE.md, 2026-09-12). A directory is reserved by creating it, so
+  creation is the collision check. A refusal that ran nothing gives the name
+  back.
+- **A name addresses its latest generation; a directory is an identity.**
+  Callers do not invent names: the skills that drive the engine hand every
+  session `review-r1` and `consult-r1`, so in a checkout that outlives one
+  task, reuse is the normal case. The first rule was refuse-never-suffix, on
+  the argument that a silent suffix leaves the caller collecting somebody
+  else's job — and refusal did exactly that: a refusal whose exit code a
+  pipe had swallowed went unseen, and `collect` by the name served the old
+  job as `ok` (EVIDENCE.md, 2026-09-21). The name was already ambiguous
+  across time; refusing only chose the stale reading. So a name whose job
+  was **delivered** — every turn terminal and collected, the meaning
+  `collectedAt` already had — passes to the next dispatch, which runs in
+  `<name>+2`, and `collect` and `@<job>` resolve a name to its highest
+  generation. `+` is outside the name pattern, so no caller can name a
+  generation; its path reaches it. Rejected: rotating the old directory
+  aside so the new job takes the bare path (every `resumedFrom` record and
+  printed `resume:` command naming the old path would silently mean a
+  different job); always passing the name on (a caller still waiting on a
+  running or uncollected job would collect the newcomer's result, so that
+  one case stays a refusal — the only collision a caller hears about); an
+  age threshold for "stale" (judgment; delivery is an observation).
 - **Records hold facts; collect renders.** `meta.json` carries what the turn
   was dispatched with and what the engine observed, never a rendered command
   or prescription: a persisted command drifts with every wording or verb
@@ -364,7 +383,8 @@ from a subdirectory belongs to the project. The store is an implementation
 detail by contract: the caller names the job, `run`, `collect` and `pending`
 re-derive the project's store from the directory they run in, and no caller
 constructs the path — a name is one path segment, and anything starting with
-`/`, `.` or `~` is a directory taken as given. Creating the job dir is the
+`/`, `.` or `~` is a directory taken as given. A name's later generations
+sit beside the first as `<name>+N`. Creating the job dir is the
 reservation — `Mkdir`, not stat-then-create — because two turns dispatched in
 the same second once shared one (EVIDENCE.md, 2026-07-27).
 

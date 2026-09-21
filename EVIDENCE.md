@@ -318,3 +318,24 @@ will look anyway.
   the second account from 3% to 4% and the primary from 98% to 99%.
   Routing and continuation are verified; the board does not isolate these
   turns' billing, so the requested primary-unchanged check is inconclusive.
+- **2026-09-21 — a refused name served somebody else's review.** Mined from
+  the session index (Bash calls matching `envoy run `, tool results matching
+  the refusal text; 2026-09-12 → 09-21, this session excluded): 155
+  dispatches in 42 sessions, 62 of them literally `consult-r1` or
+  `review-r1` — the skills hand every session the same names. 13 sessions
+  hit "already exists"; 3 then collected the old job under the refused name
+  (70 h, 108 h and 213 h stale). In the worst one the dispatch was
+  `envoy run review-r1 … 2>&1 | tail -15`: the pipe turned exit 3 into a
+  "completed (exit code 0)" task, `envoy collect review-r1` printed a
+  nine-day-old `status: ok` review of other code, and only the content gave
+  it away (10 piped dispatches in 6 sessions carry the same exposure). Every
+  refusal that *was* read was read within a minute; no recorded session
+  waited out a cap on a job that never ran. **Refusing a reused name did not
+  prevent the wrong-job collect it was chosen to prevent; it caused it.** A
+  name now addresses its latest generation (`DESIGN.md`); 113 of 117 flat
+  records in the store were collected, so the held-name refusal that remains
+  should be rare. Compare next pass: sessions hitting a name refusal (was 13 of 42), any
+  collect whose `collected:` stamp predates the collecting session, and any
+  caller that reads a `+N` directory as a fault. Revise if held-name
+  refusals recur among sessions that were not concurrent, or if a caller
+  continues the wrong conversation through `@<name>` after a reuse.

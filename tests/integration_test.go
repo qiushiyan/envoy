@@ -887,13 +887,6 @@ func TestNamedJobsLiveInTheCentralStore(t *testing.T) {
 		t.Fatalf("collect --status-only <name> = %d\n%s%s", r.code, r.stdout, r.stderr)
 	}
 
-	// A name is used once.
-	again := runEnvoyIn(t, e, project, "run", "consult", "--prompt-file", prompt, "--with", "codex")
-	if again.code != 3 {
-		t.Fatalf("re-running a taken name: exit = %d, want 3\nstderr:\n%s", again.code, again.stderr)
-	}
-	mustContain(t, "stderr", again.stderr, "already exists", "envoy collect '"+outDir+"'")
-
 	// And pending resolves the same project store from cwd alone.
 	pending := runEnvoyIn(t, e, project, "pending")
 	mustContain(t, "pending stdout", pending.stdout, "pending jobs: 0")
@@ -916,6 +909,151 @@ func TestNamedJobsLiveInTheCentralStore(t *testing.T) {
 		t.Fatalf("bare collect: exit = %d, want 3\nstderr:\n%s", bare.code, bare.stderr)
 	}
 	mustContain(t, "stderr", bare.stderr, "collect takes the job to print")
+}
+
+// A name addresses its latest generation. Callers in one long-lived checkout
+// reach for the same names, so a delivered job's name passes to the next
+// dispatch — which runs beside it, never over it — and collect and @<job>
+// follow the name there. The observed failure this pins: a refused re-run of
+// review-r1 went unseen and collect review-r1 served a nine-day-old review.
+func TestANameAddressesItsLatestGeneration(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	project := t.TempDir()
+	prompt := writePrompt(t, t.TempDir())
+	run := func(name string, extra ...string) runResult {
+		return runEnvoyIn(t, e, project, append([]string{"run", name, "--prompt-file", prompt, "--timeout-min", "5"}, extra...)...)
+	}
+	jobLine := func(stdout string) string {
+		for line := range strings.SplitSeq(stdout, "\n") {
+			if after, ok := strings.CutPrefix(line, "job: "); ok {
+				return after
+			}
+		}
+		return ""
+	}
+
+	first := run("review-r1", "--with", "codex")
+	if first.code != 0 {
+		t.Fatalf("first dispatch = %d\n%s", first.code, first.stderr)
+	}
+	firstDir := jobLine(first.stdout)
+	secondDir := firstDir + "+2"
+
+	// Finished but uncollected: some caller may still be about to collect by
+	// this name, so the name is held, nothing runs, and nothing is reserved.
+	held := run("review-r1", "--with", "codex")
+	if held.code != 3 {
+		t.Fatalf("dispatch under a held name = %d, want 3\n%s", held.code, held.stderr)
+	}
+	mustContain(t, "stderr", held.stderr, "nothing was dispatched", "has not been collected",
+		"would read that job, not yours", "review-r1-b", "yours or its caller is gone", "envoy collect '"+firstDir+"'")
+	if _, err := os.Stat(secondDir); !os.IsNotExist(err) {
+		t.Fatalf("a refused dispatch must reserve nothing, found %s", secondDir)
+	}
+
+	// Delivered, the name passes on: the same command now runs, beside the
+	// first job, and the first job's directory is untouched.
+	if r := runEnvoyIn(t, e, project, "collect", "review-r1"); r.code != 0 || jobLine(r.stdout) != firstDir {
+		t.Fatalf("collect of the first generation = %d, job %q\n%s", r.code, jobLine(r.stdout), r.stderr)
+	}
+	second := run("review-r1", "--with", "codex")
+	if second.code != 0 || jobLine(second.stdout) != secondDir {
+		t.Fatalf("second dispatch = %d in %q, want 0 in %q\n%s", second.code, jobLine(second.stdout), secondDir, second.stderr)
+	}
+	if readMeta(t, firstDir)["collectedAt"] == nil {
+		t.Fatal("the first generation's record must survive the second dispatch")
+	}
+
+	// The name now reads the new job — owed, never stamped by the old one's
+	// collection — and the old job stays reachable by its path.
+	byName := runEnvoyIn(t, e, project, "collect", "review-r1")
+	if byName.code != 0 || jobLine(byName.stdout) != secondDir {
+		t.Fatalf("collect by name = %d, job %q, want %q", byName.code, jobLine(byName.stdout), secondDir)
+	}
+	mustNotContain(t, "first collect of the new generation", byName.stdout, "collected:")
+	if r := runEnvoyIn(t, e, project, "collect", firstDir); r.code != 0 || jobLine(r.stdout) != firstDir {
+		t.Fatalf("collect by path = %d, job %q, want %q", r.code, jobLine(r.stdout), firstDir)
+	}
+
+	// A continuation by name continues the latest generation's conversation.
+	if r := run("review-r2", "--with", "@review-r1"); r.code != 0 {
+		t.Fatalf("continuation by name = %d\n%s", r.code, r.stderr)
+	}
+	if got := readMeta(t, filepath.Join(filepath.Dir(firstDir), "review-r2"))["resumedFrom"]; got != secondDir {
+		t.Fatalf("resumedFrom = %v, want the latest generation %s", got, secondDir)
+	}
+
+	// A fan-out holds its name until every member is delivered, then passes
+	// it on whole; members resolve under the latest generation.
+	if r := run("pair", "--with", "codex", "--with", "claude"); r.code != 0 {
+		t.Fatalf("fan-out = %d\n%s", r.code, r.stderr)
+	}
+	if r := run("pair", "--with", "codex", "--with", "claude"); r.code != 3 {
+		t.Fatalf("fan-out under a held name = %d, want 3\n%s", r.code, r.stderr)
+	}
+	if r := runEnvoyIn(t, e, project, "collect", "pair"); r.code != 0 {
+		t.Fatalf("collect pair = %d\n%s", r.code, r.stderr)
+	}
+	if r := run("pair", "--with", "codex", "--with", "claude"); r.code != 0 {
+		t.Fatalf("fan-out under a delivered name = %d\n%s", r.code, r.stderr)
+	}
+	pairTwo := filepath.Join(filepath.Dir(firstDir), "pair+2")
+	if r := runEnvoyIn(t, e, project, "collect", "pair/codex"); r.code != 0 || jobLine(r.stdout) != filepath.Join(pairTwo, "codex") {
+		t.Fatalf("collect pair/codex = %d, job %q, want it under %s", r.code, jobLine(r.stdout), pairTwo)
+	}
+
+	// A path is an identity and never passes on.
+	outDir := filepath.Join(t.TempDir(), "job")
+	if r := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "5")...); r.code != 0 {
+		t.Fatalf("path job = %d\n%s", r.code, r.stderr)
+	}
+	runEnvoy(t, e, "collect", outDir)
+	again := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "5")...)
+	if again.code != 3 {
+		t.Fatalf("re-running a taken path = %d, want 3\n%s", again.code, again.stderr)
+	}
+	mustContain(t, "stderr", again.stderr, "already exists", "envoy collect '"+outDir+"'")
+}
+
+// A running job holds its name: its caller will collect by it when the
+// process exits, and a dispatch that took the name would hand that caller
+// another job's result.
+func TestARunningJobHoldsItsName(t *testing.T) {
+	e := newEnv(t).
+		set("ENVOY_FAKE_SCENARIO", "delayed-success").
+		set("ENVOY_FAKE_START_DELAY_MS", "0").
+		set("ENVOY_FAKE_DELAY_MS", "60000")
+	project := t.TempDir()
+	prompt := writePrompt(t, t.TempDir())
+
+	cmd := exec.Command(binPath, "run", "consult-r1", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5")
+	cmd.Env = e.build()
+	cmd.Dir = project
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		cmd.Process.Signal(os.Interrupt)
+		cmd.Wait()
+	}()
+
+	// Contend only once the first job is visibly running under the name.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if time.Now().After(deadline) {
+			t.Fatal("the first job never reported running")
+		}
+		if r := runEnvoyIn(t, e, project, "collect", "--status-only", "consult-r1"); strings.Contains(r.stdout, "status: running") {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	held := runEnvoyIn(t, e, project, "run", "consult-r1", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5")
+	if held.code != 3 {
+		t.Fatalf("dispatch under a running job's name = %d, want 3\nstdout:\n%s\nstderr:\n%s", held.code, held.stdout, held.stderr)
+	}
+	mustContain(t, "stderr", held.stderr, "is still running")
+	mustContain(t, "stderr", held.stderr, "nothing was dispatched", "its own caller has collected it")
 }
 
 // The r.term == nil residual-cleanup chain: the provider exits cleanly while
@@ -1292,10 +1430,13 @@ func TestHelpIsSelfSufficient(t *testing.T) {
 	}
 	mustContain(t, "stdout", res.stdout,
 		"envoy run <job> [--prompt-file <F>] --with <voice>[=<F>]", // the dispatch form
-		"THE LOOP",                // name → dispatch → collect
-		"envoy collect review-r1", // the read path, by name
-		"nothing to read back",    // why the name is chosen up front
-		"used once",               // the reservation rule
+		"THE LOOP",                                 // name → dispatch → collect
+		"envoy collect review-r1",                  // the read path, by name
+		"nothing to read back",                     // why the name is chosen up front
+		"means the latest job dispatched under it", // what a reused name means
+		"<name>+2",                                 // so a +N directory is not read as a fault
+		"a held name is",                           // the one collision a caller hears about
+		"never collected — that name reads the",    // exit 3 is exempt from collect-first
 		"VOICES",
 		"--with codex::high", // effort without a model
 		"--with @<job>",      // continuation

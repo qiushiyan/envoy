@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -14,6 +15,12 @@ import (
 // The name is an address: it must round-trip exactly, so it is neither
 // lowercased nor slugged, and it is reserved by creating the directory —
 // creation is the collision check, with no stat-then-create window.
+//
+// A name addresses its latest generation; a directory is an identity. Callers
+// in one long-lived checkout reach for the same names (review-r1, consult-r1),
+// so a name whose job has been delivered passes to the next dispatch, which
+// runs in <name>+2, then <name>+3. No directory ever moves: every path a
+// record or a printed command holds keeps meaning the job it meant.
 
 // namePattern is what one segment of a job name may look like: letters,
 // digits, '.', '_' and '-', starting with a letter or digit.
@@ -56,15 +63,65 @@ func ResolveRef(arg, invocationCwd string) (string, error) {
 			return "", fmt.Errorf("job %q: a name is one segment of letters, digits, '.', '_' or '-' (a fan-out member is name/member); use a path (starting with / or ./) for anything else", arg)
 		}
 	}
-	return filepath.Join(DefaultBase(invocationCwd), filepath.FromSlash(arg)), nil
+	name, member, _ := strings.Cut(arg, "/")
+	dir, _ := Latest(DefaultBase(invocationCwd), name)
+	return filepath.Join(dir, filepath.FromSlash(member)), nil
+}
+
+// generationSep joins a name to its generation. It is outside namePattern, so
+// a caller can never name a generation directly — only its path does — and it
+// means nothing to a shell, quoted or not.
+const generationSep = "+"
+
+// GenerationDir is the directory of one generation of a name: the bare name
+// for the first, <name>+N after it.
+func GenerationDir(base, name string, generation int) string {
+	if generation <= 1 {
+		return filepath.Join(base, name)
+	}
+	return filepath.Join(base, name+generationSep+strconv.Itoa(generation))
+}
+
+// Latest returns the directory a name addresses — its highest generation —
+// and that generation's number. Generation 0 means nothing holds the name
+// yet, and dir is where its first job would go.
+func Latest(base, name string) (dir string, generation int) {
+	entries, _ := os.ReadDir(base)
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if g := generationOf(e.Name(), name); g > generation {
+			generation = g
+		}
+	}
+	return GenerationDir(base, name, generation), generation
+}
+
+// generationOf reads which generation of name an entry is, 0 for none. Only
+// the exact spelling GenerationDir writes counts: <name>+1 and <name>+02 are
+// somebody else's directories.
+func generationOf(entry, name string) int {
+	if entry == name {
+		return 1
+	}
+	digits, ok := strings.CutPrefix(entry, name+generationSep)
+	if !ok || digits == "" || digits[0] == '0' || strings.Trim(digits, "0123456789") != "" {
+		return 0
+	}
+	g, err := strconv.Atoi(digits)
+	if err != nil || g < 2 {
+		return 0
+	}
+	return g
 }
 
 // ErrJobExists reports a reservation that found the directory already there.
 var ErrJobExists = errors.New("job already exists")
 
-// Reserve creates dir atomically. An existing directory is a refusal, never
-// a rename: the caller chose this name as the address it will collect from,
-// and a silent suffix would leave it collecting somebody else's job.
+// Reserve creates dir atomically, and an existing directory is an error: the
+// primitive never picks another. Which directory a name's next job gets is
+// decided by the caller of Reserve, from Latest and what holds that one.
 func Reserve(dir string) error {
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 		return err

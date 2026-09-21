@@ -140,7 +140,7 @@ func TestRecoveryCoversEveryPromptState(t *testing.T) {
 		wantPhrases    []string
 	}{
 		{job.PromptAccepted, true, false, []string{"accepted this prompt", "would repeat work"}},
-		{job.PromptNotStarted, false, true, []string{"never started", "new job name", "this name is now taken"}},
+		{job.PromptNotStarted, false, true, []string{"never started", "new job name", "keeps this record collectable by name"}},
 		{job.PromptUnknown, true, false, []string{"unproven", "silence is not proof"}},
 	}
 	for _, c := range cases {
@@ -286,10 +286,29 @@ func TestContinueVocabulary(t *testing.T) {
 		}
 	}
 
-	// A taken name is refused with the way to read what holds it, and a
+	// A taken path is refused with the way to read what holds it, and a
 	// write conversation is kept whole by continuing alone.
 	if got := JobExists("/jobs/r1"); !strings.Contains(got, "already exists") || !strings.Contains(got, "envoy collect '/jobs/r1'") {
 		t.Fatalf("JobExists = %q", got)
+	}
+	// A held name says nothing ran, that collecting the name reads the other
+	// job, and what frees it — with the collect command only where collecting
+	// is what frees it, and only for a job that is the caller's to collect.
+	for kind, want := range map[NameHoldKind][]string{
+		HoldRunning:     {"still running", "its own caller has collected it"},
+		HoldUncollected: {"has not been collected", "yours or its caller is gone", "envoy collect '/jobs/review-r1+2'"},
+		HoldUnrecorded:  {"holds no record", "removing that empty directory"},
+		HoldUnreadable:  {"cannot be read", "Inspect that directory"},
+	} {
+		got := NameHeld("review-r1", "/jobs/review-r1+2", kind)
+		for _, w := range append(want, "nothing was dispatched", "/jobs/review-r1+2", "would read that job, not yours", "review-r1-b") {
+			if !strings.Contains(got, w) {
+				t.Fatalf("NameHeld(%s) = %q, missing %q", kind, got, w)
+			}
+		}
+		if kind != HoldUncollected && strings.Contains(got, "envoy collect") {
+			t.Fatalf("NameHeld(%s) hands over a collect that frees nothing: %q", kind, got)
+		}
 	}
 	if got := WriteSourceInRoster("/jobs/w", 60); !strings.Contains(got, "--allow-write") || !strings.Contains(got, ContinueCommand("/jobs/w", 60)) {
 		t.Fatalf("WriteSourceInRoster = %q", got)

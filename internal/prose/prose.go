@@ -53,8 +53,9 @@ func Voice(provider, model, effort string) string {
 
 // RedispatchCommand sends this job's prompt again as a new job — the
 // follow-up for a prompt the provider provably never received, where
-// re-running is safe and the old name is now taken. It repeats the dispatch
-// it replaces: the same conversation when the turn was a continuation (a
+// re-running is safe, under a new name so this record stays collectable by
+// name. It repeats the dispatch it replaces: the same conversation when the
+// turn was a continuation (a
 // cold voice would start a different one), the recorded tree, anchor, write
 // intent, cap and spend cap, and the prompt exactly as the job archived it.
 // The new dispatch reads its own environment, including the launcher prefix;
@@ -294,7 +295,7 @@ func Recovery(m *job.Meta, resumeCmd, redispatchCmd string) string {
 		if redispatchCmd == "" {
 			return body + " Dispatch it once more under a new job name; if it fails the same way, " + retryFailure
 		}
-		return body + " Dispatch it once more under a new job name (this name is now taken):\n  " + redispatchCmd +
+		return body + " Dispatch it once more under a new job name (a new name keeps this record collectable by name):\n  " + redispatchCmd +
 			"\nIf it fails the same way, " + retryFailure
 
 	default: // unknown
@@ -528,11 +529,47 @@ func ContinueBlocked(dir string, kind ResumeBlockerKind) string {
 
 // ---------- naming and rostering a run ----------
 
-// JobExists refuses a name that is already taken. The name is the address the
-// caller will collect from, so it is never silently suffixed.
+// JobExists refuses a directory path that already exists. A path is an
+// identity — one directory, one job — so unlike a name it never passes on.
 func JobExists(dir string) string {
-	return fmt.Sprintf("job %s already exists — a job name is used once. Pick a new name (review-r2 after review-r1, say); "+
+	return fmt.Sprintf("job directory %s already exists — a directory holds one job. Pick another path; "+
 		"to read the existing job: %s", dir, CollectCommand(dir))
+}
+
+// NameHoldKind classifies why a job still holds its name. The vocabulary is
+// owned here; internal/collect decides which kind applies.
+type NameHoldKind string
+
+const (
+	HoldRunning     NameHoldKind = "running"
+	HoldUncollected NameHoldKind = "uncollected"
+	HoldUnrecorded  NameHoldKind = "unrecorded"
+	HoldUnreadable  NameHoldKind = "unreadable"
+)
+
+// NameHeld refuses a dispatch under a name whose job was not delivered yet.
+// A delivered job's name passes on silently, so this is the one collision a
+// caller ever hears about, and it leads with the fact a caller must not
+// miss: collecting this name now reads the other job.
+func NameHeld(name, dir string, kind NameHoldKind) string {
+	var state, release string
+	switch kind {
+	case HoldRunning:
+		state = "is still running"
+		release = "The name frees once that job has finished and its own caller has collected it."
+	case HoldUncollected:
+		state = "finished but has not been collected"
+		release = "If that job is yours or its caller is gone, collecting it frees the name: " + CollectCommand(dir)
+	case HoldUnrecorded:
+		state = "was reserved and holds no record — a dispatch in its first moments, or one that died there"
+		release = "If no dispatch is starting there, removing that empty directory frees the name."
+	default:
+		state = "holds a record that cannot be read"
+		release = "Inspect that directory before anything reuses its name."
+	}
+	return fmt.Sprintf("nothing was dispatched: the name %s is held by another job, %s, which %s. "+
+		"Collecting %s now would read that job, not yours. Dispatch again under a different name (%s-b, say). %s",
+		name, dir, state, name, name, release)
 }
 
 // RunNeedsVoice refuses a run with no member at all.

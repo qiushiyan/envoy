@@ -159,10 +159,11 @@ func Run(req RunRequest) int {
 	// The name is reserved last, after every refusal that needs no
 	// reservation, and released again on any refusal that happens before the
 	// job wrote its first record.
-	if err := job.Reserve(dir); err != nil {
-		if errors.Is(err, job.ErrJobExists) {
-			return usageError(stderr, "%s", prose.JobExists(dir))
-		}
+	dir, refusal, err := reserve(req.Job, dir)
+	if refusal != "" {
+		return usageError(stderr, "%s", refusal)
+	}
+	if err != nil {
 		fmt.Fprintf(stderr, "envoy: cannot create job dir: %s\n", err)
 		return ExitInfra
 	}
@@ -180,6 +181,41 @@ func Run(req RunRequest) int {
 	code := fan.Run(fan.Options{Turns: turns, OutDir: dir, Stdout: stdout, Stderr: stderr})
 	releaseIfUnstarted(dir, job.GroupWorkspace{Dir: dir}.GroupPath())
 	return code
+}
+
+// reserve claims the directory this dispatch runs in. A path is an identity
+// and is taken or refused as given. A name addresses its latest generation:
+// free, it is claimed as is; held by a job not yet delivered, the dispatch is
+// refused, since a caller may still be waiting to collect by it; delivered, it
+// passes on, and this dispatch runs as the name's next generation, which is
+// what the name resolves to from then on. Losing the Mkdir to a concurrent
+// dispatch re-reads the name, where the winner's unrecorded directory holds it.
+func reserve(arg, dir string) (reserved, refusal string, err error) {
+	if job.IsPath(arg) {
+		if err := job.Reserve(dir); errors.Is(err, job.ErrJobExists) {
+			return "", prose.JobExists(dir), nil
+		} else if err != nil {
+			return "", "", err
+		}
+		return dir, "", nil
+	}
+	base, name := filepath.Dir(dir), filepath.Base(dir)
+	for range 4 {
+		latest, generation := job.Latest(base, name)
+		next := latest
+		if generation > 0 {
+			if kind, held := collect.NameHold(latest); held {
+				return "", prose.NameHeld(name, latest, kind), nil
+			}
+			next = job.GenerationDir(base, name, generation+1)
+		}
+		if err = job.Reserve(next); err == nil {
+			return next, "", nil
+		} else if !errors.Is(err, job.ErrJobExists) {
+			return "", "", err
+		}
+	}
+	return "", "", err
 }
 
 // promptReadable reports why a prompt file cannot be sent: missing, a

@@ -88,8 +88,8 @@ func TestResolveRefNamesLandInTheCentralStore(t *testing.T) {
 	}
 }
 
-// A name is used once. Reserving it twice — from two dispatches racing for
-// the same name, or one re-run — must succeed exactly once, and creation
+// A directory is reserved once. Reserving it twice — from two dispatches racing
+// for the same name, or one re-run — must succeed exactly once, and creation
 // itself is the check: a stat-then-create window loses this race.
 func TestReserveIsAtomicAndRefusesAnExistingName(t *testing.T) {
 	base := t.TempDir()
@@ -116,6 +116,59 @@ func TestReserveIsAtomicAndRefusesAnExistingName(t *testing.T) {
 	}
 	if err := Reserve(dir); !errors.Is(err, ErrJobExists) {
 		t.Fatalf("second reservation = %v, want ErrJobExists", err)
+	}
+}
+
+// A name addresses its highest generation, and only the spelling
+// GenerationDir writes counts as one: a caller-named neighbour, a file, or a
+// look-alike suffix never captures the name.
+func TestLatestResolvesTheHighestGeneration(t *testing.T) {
+	base := t.TempDir()
+	if dir, g := Latest(base, "review-r1"); g != 0 || dir != filepath.Join(base, "review-r1") {
+		t.Fatalf("free name = %q gen %d, want the bare name at generation 0", dir, g)
+	}
+	for _, d := range []string{"review-r1", "review-r1+2", "review-r1+10", "review-r1b", "review-r1+02", "review-r1+1", "review-r1+x", "review-r10+40"} {
+		if err := os.Mkdir(filepath.Join(base, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(base, "review-r1+99"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if dir, g := Latest(base, "review-r1"); g != 10 || dir != filepath.Join(base, "review-r1+10") {
+		t.Fatalf("Latest = %q gen %d, want review-r1+10 gen 10", dir, g)
+	}
+	if got := GenerationDir(base, "review-r1", 11); got != filepath.Join(base, "review-r1+11") {
+		t.Fatalf("GenerationDir = %q", got)
+	}
+	// A generation is reachable by path only: no caller can name one.
+	if _, err := ResolveName("review-r1+2", base); err == nil {
+		t.Fatal("a generation must not be a valid job name")
+	}
+}
+
+// References follow the name to its latest generation, members included.
+func TestResolveRefFollowsTheLatestGeneration(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := t.TempDir()
+	first, _ := ResolveName("consult-r1", repo)
+	base := filepath.Dir(first)
+	for _, d := range []string{first, GenerationDir(base, "consult-r1", 2)} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := GenerationDir(base, "consult-r1", 2)
+	if ref, _ := ResolveRef("consult-r1", repo); ref != want {
+		t.Fatalf("ResolveRef(name) = %q, want %q", ref, want)
+	}
+	if ref, _ := ResolveRef("consult-r1/codex", repo); ref != filepath.Join(want, "codex") {
+		t.Fatalf("ResolveRef(name/member) = %q, want the member under %q", ref, want)
+	}
+	// The first generation stays an identity, reachable by its path.
+	if ref, _ := ResolveRef(first, repo); ref != first {
+		t.Fatalf("ResolveRef(path) = %q, want %q", ref, first)
 	}
 }
 

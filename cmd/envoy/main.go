@@ -44,8 +44,14 @@ THE LOOP
     envoy collect review-r1
 
   A <job> is a name (one path segment; letters, digits, . _ -) kept in this
-  project's store under ~/.local/state/envoy, or a directory path. A name is
-  used once: running it again is refused, so a round 2 gets a new name.
+  project's store under ~/.local/state/envoy, or a directory path. A name
+  means the latest job dispatched under it, so a name earlier work already
+  used is yours to use: once that job has been collected, the new one runs
+  beside it in <name>+2 (then +3), the name means the new job from then on,
+  and the old one stays readable by its directory path. Only a name whose
+  job is still running or was never collected is held, and a dispatch under
+  it is refused. A round 2 still gets its own name (review-r2), so that
+  round 1 stays readable by name.
 
 VOICES
   --with provider[:model[:effort]]   a cold session
@@ -133,8 +139,9 @@ EXIT CODES OF A RUN, AND WHAT EACH ONE LICENSES
   0 ok           result.md holds the answer
   1 failed       the provider ran and reported a failure; partial work may exist
   2 infra        envoy or the environment failed, not the model
-  3 usage        flags were rejected, the name is taken, or a session is
-                 locked; for a single turn, nothing ran
+  3 usage        flags were rejected, the name is held by a job not yet
+                 collected, or a session is locked; for a single turn,
+                 nothing ran
   4 timeout      the cap elapsed — not evidence the provider hung
   5 interrupted  a signal stopped the turn
   6 partial      fan-out only: some members returned a result and others did
@@ -145,11 +152,13 @@ EXIT CODES OF A RUN, AND WHAT EACH ONE LICENSES
   it and read each member's own status. Collect exits 0 whenever it printed
   the job, whatever the job's status.
 
-  For any non-zero exit, collect the job and follow its `+"`next:`"+` line instead of
-  re-dispatching: whether the provider accepted the prompt decides between a
-  safe retry and duplicating work that already changed the tree, and the job
-  knows which happened. After a crash or restart, `+"`envoy pending`"+` finds the jobs
-  whose completion you may have missed.
+  Exit 3 ran nothing and its message is the whole story; a held name is
+  re-dispatched under another name, never collected — that name reads the
+  other job. For any other non-zero exit, collect the job and follow its
+  `+"`next:`"+` line instead of re-dispatching: whether the provider accepted
+  the prompt decides between a safe retry and duplicating work that already
+  changed the tree, and the job knows which happened. After a crash or
+  restart, `+"`envoy pending`"+` finds the jobs whose completion you may have missed.
 
   Efforts — claude: %s · codex: %s
 `,
