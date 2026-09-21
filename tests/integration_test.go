@@ -547,6 +547,8 @@ func TestResumeLockConflictFailsFast(t *testing.T) {
 		t.Fatalf("exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
 	}
 	mustContain(t, "stderr", res.stderr, "lock error:", "already has a live turn", "/tmp/live-job")
+	// envoy -h tells a caller to recognise a dispatch that ran nothing by this.
+	mustNotContain(t, "stdout", res.stdout, "job:")
 	if _, err := os.Stat(outDir); !os.IsNotExist(err) {
 		t.Fatal("a refused continuation must leave no job dir behind — the name is free again")
 	}
@@ -946,8 +948,9 @@ func TestANameAddressesItsLatestGeneration(t *testing.T) {
 	if held.code != 3 {
 		t.Fatalf("dispatch under a held name = %d, want 3\n%s", held.code, held.stderr)
 	}
+	mustNotContain(t, "a held-name refusal's stdout", held.stdout, "job:")
 	mustContain(t, "stderr", held.stderr, "nothing was dispatched", "has not been collected",
-		"now reads that job — nothing new ran", "review-r1-b", "yours or its caller is gone", "envoy collect '"+firstDir+"'")
+		"now reads an earlier job, not a new one", "review-r1-b", "yours or its caller is gone", "envoy collect '"+firstDir+"'")
 	if _, err := os.Stat(secondDir); !os.IsNotExist(err) {
 		t.Fatalf("a refused dispatch must reserve nothing, found %s", secondDir)
 	}
@@ -1435,13 +1438,14 @@ func TestHelpIsSelfSufficient(t *testing.T) {
 		"envoy collect review-r1", // the read path, by name
 		"nothing to read back",    // why the name is chosen up front
 		"means the latest job your session dispatched under it", // what a reused name means
-		"says so in a \"note:\" line",                           // a name that fell back is visible
+		"Another session's job never refuses your dispatch",     // a name that fell back is visible
 		"ENVOY_CALLER, else Claude",                             // where the session identity comes from
 		"<name>+2",                                              // so a +N directory is not read as a fault
 		"without ever printing a \"job:\" line ran nothing",     // the observable mark of a refusal that ran nothing
-		"\"lock error:\" naming the job",                        // a held session is one of them, and says where to look
-		"for a held name, pick\n  another",                      // the one collision a caller hears about
-		"a\n  fan-out's 3 included",                             // but a fan-out's exit 3 may have run members
+		"reads an earlier job if there is one",                  // and why such a dispatch is never collected
+		"names the job that owns the session",                   // a held session is one of them, and says where to look
+		"for a held name, pick another",                         // the one collision a caller hears about
+		"fan-out's 3 included",                                  // but a fan-out's exit 3 may have run members
 		"VOICES",
 		"--with codex::high",                          // effort without a model
 		"--with @<job>",                               // continuation

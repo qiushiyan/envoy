@@ -241,7 +241,9 @@ Consequences that are load-bearing, not incidental:
   A member's status lives in that member's `meta.json` and nowhere else, so the
   two cannot drift. Collect re-reads the members; the manifest records only
   what the supervisor itself knows: the roster, whose names are the member
-  directories, and the tree, cap and anchor the members share.
+  directories; the tree, cap and anchor the members share; and who dispatched
+  it and from which process, since those must be readable before any member
+  has a record.
 - **Recovery stays per member; a round addresses the set.** Prompt state is
   per member: one `accepted` member licenses only a resume while its
   `not_started` sibling licenses an identical retry, so there is no group-wide

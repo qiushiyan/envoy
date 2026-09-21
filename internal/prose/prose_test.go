@@ -308,7 +308,16 @@ func TestContinueVocabulary(t *testing.T) {
 		{NameHold{Kind: HoldUnreadable}, []string{"cannot be read", "Inspect that directory"}, []string{"envoy collect", "removing"}},
 	} {
 		got := NameHeld("review-r1", "/jobs/review-r1+2", c.hold)
-		for _, w := range append(c.want, "nothing was dispatched", "/jobs/review-r1+2", "now reads that job — nothing new ran", "review-r1-b") {
+		// Only a job that can be read is described as readable: a directory
+		// with no record, or an unreadable one, makes no claim about collect.
+		readable := c.hold.Kind == HoldRunning || c.hold.Kind == HoldUncollected || c.hold.Member != ""
+		if strings.Contains(got, "now reads an earlier job, not a new one") != readable {
+			t.Fatalf("NameHeld(%+v) = %q: the collect claim must appear exactly when a job can be read", c.hold, got)
+		}
+		if strings.Contains(got, "reads that job") {
+			t.Fatalf("NameHeld(%+v) = %q: the holder is not always what the name reads", c.hold, got)
+		}
+		for _, w := range append(c.want, "nothing was dispatched", "/jobs/review-r1+2", "review-r1-b") {
 			if !strings.Contains(got, w) {
 				t.Fatalf("NameHeld(%+v) = %q, missing %q", c.hold, got, w)
 			}

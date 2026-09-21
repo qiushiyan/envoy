@@ -104,7 +104,7 @@ func TestANameMeansItsCallersOwnJob(t *testing.T) {
 	// block says which happened, directly under the job it resolved to.
 	picked := runEnvoyIn(t, c, project, "collect", "consult-r1")
 	mustContain(t, "C's block", picked.stdout,
-		"job: "+aDir+"+3\nnote: this session has dispatched no job named consult-r1", "another session dispatched it", "Check it is the job you mean")
+		"job: "+aDir+"+3\nnote: this session has dispatched no job named consult-r1", "another session dispatched it", "Check it is the job you mean", "prompt.md holds what it was asked")
 	for who, r := range map[string]runResult{
 		"its own job":          runEnvoyIn(t, b, project, "collect", "consult-r1"),
 		"no identity":          runEnvoyIn(t, nobody, project, "collect", "consult-r1"),
@@ -256,7 +256,7 @@ func TestAnUnreadableRecordNeverYieldsAnOlderGeneration(t *testing.T) {
 	if col.code != 2 {
 		t.Fatalf("collect past an unreadable newer record = %d, want 2\nstdout:\n%s\nstderr:\n%s", col.code, col.stdout, col.stderr)
 	}
-	mustContain(t, "stderr", col.stderr, "was not resolved", dirs[1], "an older one must not answer for it")
+	mustContain(t, "stderr", col.stderr, "was not resolved", dirs[1], "cannot be shown to mean this session's latest job")
 	mustNotContain(t, "stdout", col.stdout, "status: ok")
 	if r := runEnvoyIn(t, a, project, "run", "consult-r1", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5"); r.code != 2 {
 		t.Fatalf("dispatch past an unreadable record = %d, want 2\n%s", r.code, r.stderr)

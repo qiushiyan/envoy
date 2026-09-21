@@ -46,20 +46,25 @@ THE LOOP
   A <job> is a name (one path segment; letters, digits, . _ -) kept in this
   project's store under ~/.local/state/envoy, or a directory path. A name
   means the latest job your session dispatched under it, so sessions that
-  share a checkout use the same names without ever reading each other's
-  jobs. Every dispatch runs in a directory of its own — <name>, then
-  <name>+2, +3 — and earlier ones stay readable by that path. A session that
-  never used a name reads the newest job under it: that is how work from an
-  earlier session is picked up, and the block says so in a "note:" line, so
-  a job you expected to be your own and is not shows itself. A dispatch is
-  refused only while your own earlier job under the name is still running or
-  uncollected. A round 2 still gets its own name (review-r2), so that round 1
-  stays readable by name.
+  share a checkout use the same names without reading each other's jobs.
+  Every dispatch runs in a directory of its own — <name>, then <name>+2, +3
+  — and each stays readable by that path. A session that has dispatched
+  nothing under a name reads the newest job under it, which is how work from
+  an earlier session is picked up; the block then carries a "note:" line
+  saying another session dispatched it, so read that line when you expected
+  a job of your own.
 
-  Your session is the one your harness exports: ENVOY_CALLER, else Claude
-  Code's CLAUDE_CODE_SESSION_ID. A caller with neither has no session: to it
-  a name means the newest job of anyone's, so its jobs and everyone else's
-  hold a name against each other while running or uncollected.
+  Another session's job never refuses your dispatch. Only your own earlier
+  job under the name does, while it is still running or uncollected — so
+  once you have collected a job its name is free to reuse. A round 2 takes
+  its own name anyway (review-r2), because that keeps round 1 readable by
+  name.
+
+  Your session is what your harness exports: ENVOY_CALLER, else Claude
+  Code's CLAUDE_CODE_SESSION_ID. A caller with neither is the exception to
+  both rules: to it a name means the newest job of anyone's, and its jobs
+  and everyone else's refuse each other's dispatches under a shared name
+  while running or uncollected.
 
 VOICES
   --with provider[:model[:effort]]   a cold session
@@ -147,9 +152,8 @@ EXIT CODES OF A RUN, AND WHAT EACH ONE LICENSES
   0 ok           result.md holds the answer
   1 failed       the provider ran and reported a failure; partial work may exist
   2 infra        envoy or the environment failed, not the model
-  3 usage        flags were rejected, the name is held by a job not yet
-                 collected, or a session is locked; for a single turn,
-                 nothing ran
+  3 usage        flags were rejected, the name is held, or a session is
+                 locked; for a single turn, nothing ran
   4 timeout      the cap elapsed — not evidence the provider hung
   5 interrupted  a signal stopped the turn
   6 partial      fan-out only: some members returned a result and others did
@@ -160,16 +164,17 @@ EXIT CODES OF A RUN, AND WHAT EACH ONE LICENSES
   it and read each member's own status. Collect exits 0 whenever it printed
   the job, whatever the job's status.
 
-  A dispatch that exits 3 without ever printing a "job:" line ran nothing
-  and left no job of yours, so there is nothing of yours to collect under
-  that name: its message ("usage error:", or "lock error:" naming the job
-  that owns the session) says what to change — for a held name, pick
-  another — and then dispatch again. For every other non-zero exit, a
-  fan-out's 3 included, collect the job and follow its `+"`next:`"+` line instead
-  of re-dispatching: whether the provider accepted the prompt decides between
-  a safe retry and duplicating work that already changed the tree, and the
-  job knows which happened. After a crash or restart, `+"`envoy pending`"+` finds
-  the jobs whose completion you may have missed.
+  A dispatch that exits 3 without ever printing a "job:" line ran nothing,
+  so collecting its name reads an earlier job if there is one, never this
+  dispatch. Its message says what to do instead: a "usage error:" names what
+  to change (for a held name, pick another) before dispatching again; a
+  "lock error:" names the job that owns the session, which is the one to
+  collect. For every other non-zero exit, a fan-out's 3 included, collect
+  the job and follow its `+"`next:`"+` line instead of re-dispatching: whether the
+  provider accepted the prompt decides between a safe retry and duplicating
+  work that already changed the tree, and the job knows which happened.
+  After a crash or restart, `+"`envoy pending`"+` finds the jobs whose completion
+  you may have missed.
 
   Efforts — claude: %s · codex: %s
 `,

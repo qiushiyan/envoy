@@ -457,14 +457,14 @@ func NameFellBack(name string, ownerKnown bool) string {
 		owner = "another session dispatched it"
 	}
 	return fmt.Sprintf("this session has dispatched no job named %s, so this is the newest job under that name — %s. "+
-		"Check it is the job you mean before using it.", name, owner)
+		"Check it is the job you mean before using it: a job's prompt.md holds what it was asked.", name, owner)
 }
 
 // ContinuedAnotherSession is the note on a turn whose conversation was begun
 // by a different session than the one that dispatched this turn.
 func ContinuedAnotherSession() string {
 	return "this turn continued a conversation another session began (resumed-from, above). " +
-		"If you meant a conversation of your own, its result is not an answer to yours: continue your own job by its directory."
+		"If you meant to continue your own, this result does not belong to it: send the follow-up again, naming your own job by its directory."
 }
 
 // UnattributedGeneration stops a name from resolving past a job whose record
@@ -472,7 +472,7 @@ func ContinuedAnotherSession() string {
 // answer to the name as though it were the latest, which is the wrong-job
 // read names exist to prevent.
 func UnattributedGeneration(name, dir string, err error) string {
-	return fmt.Sprintf("the name %s was not resolved: the record in %s could not be read (%s), so whether that is this session's latest job under the name is unknown, and an older one must not answer for it. "+
+	return fmt.Sprintf("the name %s was not resolved: the record in %s could not be read (%s), so the name cannot be shown to mean this session's latest job. "+
 		"Name the job you want by its directory; to see what that one holds: %s", name, dir, err, CollectCommand(dir))
 }
 
@@ -598,33 +598,38 @@ func NameHeld(name, dir string, hold NameHold) string {
 	if hold.Member != "" {
 		subject = fmt.Sprintf("whose member %s", hold.Member)
 	}
+	// What a collect of the name would do differs by holder, and only the
+	// two kinds with a finished-or-running job behind them can be read at all:
+	// the caller then gets a job that was already there — the holder, or an
+	// older one of its own — so the sentence claims no more than "earlier".
+	earlier := fmt.Sprintf(" Collecting %s now reads an earlier job, not a new one.", name)
 	var state, release string
 	switch hold.Kind {
 	case HoldRunning:
 		state = "is still running"
-		release = "The name frees once that job has finished and its own caller has collected it."
+		release = earlier + " The name frees once that job has finished and its own caller has collected it."
 	case HoldUncollected:
 		state = "finished but has not been collected"
-		release = "If that job is yours or its caller is gone, collecting it frees the name: " + CollectCommand(dir)
+		release = earlier + " If that job is yours or its caller is gone, collecting it frees the name: " + CollectCommand(dir)
 	case HoldUnrecorded:
 		switch {
 		case hold.Member != "":
 			state = "has written no record while the process running that fan-out may still be alive, so it may yet start"
-			release = "The name frees once that fan-out has finished and its own caller has collected it."
+			release = earlier + " The name frees once that fan-out has finished and its own caller has collected it."
 		case hold.Empty:
 			state = "was reserved and holds no record — a dispatch in its first moments, or one that died there, and nothing here says which"
-			release = "Once you have established that no envoy run owns that directory and it is still empty, removing it frees the name."
+			release = " Once you have established that no envoy run owns that directory and it is still empty, removing it frees the name."
 		default:
 			state = "was reserved and holds no record — a dispatch in its first moments, or one that died there, and nothing here says which"
-			release = "Read what that directory holds, and establish that no envoy run owns it, before anything reuses its name."
+			release = " Read what that directory holds, and establish that no envoy run owns it, before anything reuses its name."
 		}
 	default:
 		state = "holds a record that cannot be read"
-		release = "Inspect that directory before anything reuses its name."
+		release = " Inspect that directory before anything reuses its name."
 	}
 	return fmt.Sprintf("nothing was dispatched: the name %s is held by another job, %s, %s %s. "+
-		"Collecting %s now reads that job — nothing new ran. Dispatch again under a different name (%s-b, say). %s",
-		name, dir, subject, state, name, name, release)
+		"Dispatch again under a different name (%s-b, say).%s",
+		name, dir, subject, state, name, release)
 }
 
 // RunNeedsVoice refuses a run with no member at all.
