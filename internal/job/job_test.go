@@ -124,7 +124,7 @@ func TestReserveIsAtomicAndRefusesAnExistingName(t *testing.T) {
 // look-alike suffix never captures the name.
 func TestLatestResolvesTheHighestGeneration(t *testing.T) {
 	base := t.TempDir()
-	if dir, g := Latest(base, "review-r1"); g != 0 || dir != filepath.Join(base, "review-r1") {
+	if dir, g, _ := Latest(base, "review-r1"); g != 0 || dir != filepath.Join(base, "review-r1") {
 		t.Fatalf("free name = %q gen %d, want the bare name at generation 0", dir, g)
 	}
 	for _, d := range []string{"review-r1", "review-r1+2", "review-r1+10", "review-r1b", "review-r1+02", "review-r1+1", "review-r1+x", "review-r10+40"} {
@@ -135,11 +135,19 @@ func TestLatestResolvesTheHighestGeneration(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(base, "review-r1+99"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if dir, g := Latest(base, "review-r1"); g != 10 || dir != filepath.Join(base, "review-r1+10") {
+	if dir, g, _ := Latest(base, "review-r1"); g != 10 || dir != filepath.Join(base, "review-r1+10") {
 		t.Fatalf("Latest = %q gen %d, want review-r1+10 gen 10", dir, g)
 	}
 	if got := GenerationDir(base, "review-r1", 11); got != filepath.Join(base, "review-r1+11") {
 		t.Fatalf("GenerationDir = %q", got)
+	}
+	// The bare directory is not what makes later generations findable: a
+	// name whose first job was cleaned away still means its newest one.
+	if err := os.Remove(filepath.Join(base, "review-r1")); err != nil {
+		t.Fatal(err)
+	}
+	if dir, g, _ := Latest(base, "review-r1"); g != 10 || dir != filepath.Join(base, "review-r1+10") {
+		t.Fatalf("Latest without generation 1 = %q gen %d, want review-r1+10 gen 10", dir, g)
 	}
 	// A generation is reachable by path only: no caller can name one.
 	if _, err := ResolveName("review-r1+2", base); err == nil {

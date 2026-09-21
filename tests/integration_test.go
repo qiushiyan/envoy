@@ -1012,7 +1012,7 @@ func TestANameAddressesItsLatestGeneration(t *testing.T) {
 	if again.code != 3 {
 		t.Fatalf("re-running a taken path = %d, want 3\n%s", again.code, again.stderr)
 	}
-	mustContain(t, "stderr", again.stderr, "already exists", "envoy collect '"+outDir+"'")
+	mustContain(t, "stderr", again.stderr, "a directory holds one job", "envoy collect '"+outDir+"'")
 }
 
 // A running job holds its name: its caller will collect by it when the
@@ -1435,15 +1435,16 @@ func TestHelpIsSelfSufficient(t *testing.T) {
 		"nothing to read back",                     // why the name is chosen up front
 		"means the latest job dispatched under it", // what a reused name means
 		"<name>+2",                                 // so a +N directory is not read as a fault
-		"a held name is",                           // the one collision a caller hears about
-		"never collected — that name reads the",    // exit 3 is exempt from collect-first
+		"for a held name, pick another",            // the one collision a caller hears about
+		"would read an\n  earlier job",             // a refusal that ran nothing is not collected
+		"a fan-out's 3 included",                   // but a fan-out's exit 3 may have run members
 		"VOICES",
-		"--with codex::high", // effort without a model
-		"--with @<job>",      // continuation
+		"--with codex::high",                          // effort without a model
+		"--with @<job>",                               // continuation
 		"--with @consult-r1/codex --with claude:opus", // warm beside cold
-		"stands alone",                 // a fan-out reference
-		"--with <voice>=<file>",        // a voice's own prompt
-		"--with @consult-r1=round2.md", // a round on one NEW prompt
+		"stands alone",                                // a fan-out reference
+		"--with <voice>=<file>",                       // a voice's own prompt
+		"--with @consult-r1=round2.md",                // a round on one NEW prompt
 		"WHAT A JOB LEAVES BEHIND",
 		"RUNNING PROVIDERS THROUGH A LAUNCHER",
 		"ENVOY_CODEX_CMD=\"headroom launch --vendor codex --\"",

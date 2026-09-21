@@ -288,26 +288,34 @@ func TestContinueVocabulary(t *testing.T) {
 
 	// A taken path is refused with the way to read what holds it, and a
 	// write conversation is kept whole by continuing alone.
-	if got := JobExists("/jobs/r1"); !strings.Contains(got, "already exists") || !strings.Contains(got, "envoy collect '/jobs/r1'") {
+	if got := JobExists("/jobs/r1"); !strings.Contains(got, "a directory holds one job") || !strings.Contains(got, "envoy collect '/jobs/r1'") {
 		t.Fatalf("JobExists = %q", got)
 	}
 	// A held name says nothing ran, that collecting the name reads the other
 	// job, and what frees it — with the collect command only where collecting
-	// is what frees it, and only for a job that is the caller's to collect.
-	for kind, want := range map[NameHoldKind][]string{
-		HoldRunning:     {"still running", "its own caller has collected it"},
-		HoldUncollected: {"has not been collected", "yours or its caller is gone", "envoy collect '/jobs/review-r1+2'"},
-		HoldUnrecorded:  {"holds no record", "removing that empty directory"},
-		HoldUnreadable:  {"cannot be read", "Inspect that directory"},
+	// is what frees it, and removal only of a directory seen to be empty.
+	for _, c := range []struct {
+		hold NameHold
+		want []string
+		not  []string
+	}{
+		{NameHold{Kind: HoldRunning}, []string{"which is still running", "its own caller has collected it"}, []string{"envoy collect", "removing"}},
+		{NameHold{Kind: HoldRunning, Member: "codex"}, []string{"whose member codex is still running"}, []string{"envoy collect"}},
+		{NameHold{Kind: HoldUncollected}, []string{"has not been collected", "yours or its caller is gone", "envoy collect '/jobs/review-r1+2'"}, []string{"removing"}},
+		{NameHold{Kind: HoldUnrecorded, Empty: true}, []string{"holds no record", "removing that empty directory"}, []string{"envoy collect"}},
+		{NameHold{Kind: HoldUnrecorded}, []string{"holds no record", "read what that directory holds"}, []string{"envoy collect", "removing", "empty"}},
+		{NameHold{Kind: HoldUnreadable}, []string{"cannot be read", "Inspect that directory"}, []string{"envoy collect", "removing"}},
 	} {
-		got := NameHeld("review-r1", "/jobs/review-r1+2", kind)
-		for _, w := range append(want, "nothing was dispatched", "/jobs/review-r1+2", "would read that job, not yours", "review-r1-b") {
+		got := NameHeld("review-r1", "/jobs/review-r1+2", c.hold)
+		for _, w := range append(c.want, "nothing was dispatched", "/jobs/review-r1+2", "would read that job, not yours", "review-r1-b") {
 			if !strings.Contains(got, w) {
-				t.Fatalf("NameHeld(%s) = %q, missing %q", kind, got, w)
+				t.Fatalf("NameHeld(%+v) = %q, missing %q", c.hold, got, w)
 			}
 		}
-		if kind != HoldUncollected && strings.Contains(got, "envoy collect") {
-			t.Fatalf("NameHeld(%s) hands over a collect that frees nothing: %q", kind, got)
+		for _, n := range c.not {
+			if strings.Contains(got, n) {
+				t.Fatalf("NameHeld(%+v) = %q, must not say %q", c.hold, got, n)
+			}
 		}
 	}
 	if got := WriteSourceInRoster("/jobs/w", 60); !strings.Contains(got, "--allow-write") || !strings.Contains(got, ContinueCommand("/jobs/w", 60)) {

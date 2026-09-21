@@ -141,38 +141,56 @@ func Inspect(dir string) (*Source, prose.ResumeBlockerKind, error) {
 // does, and pending lists it. A directory with no record holds too: it is a
 // dispatch between its reservation and its first record, or one that died
 // there, and the engine cannot tell which.
-func NameHold(dir string) (prose.NameHoldKind, bool) {
-	if job.IsGroupDir(dir) {
-		gw := job.GroupWorkspace{Dir: dir}
-		group, err := job.ReadGroupFile(gw.GroupPath())
-		if err != nil {
-			return prose.HoldUnreadable, true
-		}
-		for _, name := range group.Members {
-			if kind, held := turnHold(gw.Member(name).Dir); held {
-				return kind, true
-			}
-		}
-		return "", false
+//
+// A fan-out holds through any member that does. One case differs from a
+// single turn: a member the roster names that never wrote a record — a
+// session held at dispatch refuses that member alone — has nothing a collect
+// could ever deliver. Members start together, so once a sibling has a record
+// the fan-out is past its first moments, and the recordless member holds
+// nothing; while no member has one, the fan-out itself reads as unrecorded.
+func NameHold(dir string) (prose.NameHold, bool) {
+	if !job.IsGroupDir(dir) {
+		return turnHold(dir)
 	}
-	return turnHold(dir)
+	gw := job.GroupWorkspace{Dir: dir}
+	group, err := job.ReadGroupFile(gw.GroupPath())
+	if err != nil {
+		return prose.NameHold{Kind: prose.HoldUnreadable}, true
+	}
+	recorded := 0
+	for _, name := range group.Members {
+		memberDir := gw.Member(name).Dir
+		if !hasFile(job.Workspace{Dir: memberDir}.MetaPath()) {
+			continue
+		}
+		recorded++
+		if hold, held := turnHold(memberDir); held {
+			hold.Member = name
+			return hold, true
+		}
+	}
+	if recorded == 0 {
+		return prose.NameHold{Kind: prose.HoldUnrecorded}, true
+	}
+	return prose.NameHold{}, false
 }
 
-func turnHold(dir string) (prose.NameHoldKind, bool) {
+func turnHold(dir string) (prose.NameHold, bool) {
 	metaPath := job.Workspace{Dir: dir}.MetaPath()
 	if !hasFile(metaPath) {
-		return prose.HoldUnrecorded, true
+		entries, err := os.ReadDir(dir)
+		return prose.NameHold{Kind: prose.HoldUnrecorded, Empty: err == nil && len(entries) == 0}, true
 	}
 	meta, err := job.ReadMetaFile(metaPath)
 	switch {
 	case err != nil:
-		return prose.HoldUnreadable, true
+		return prose.NameHold{Kind: prose.HoldUnreadable}, true
 	case meta.Status == job.StatusRunning:
-		return prose.HoldRunning, true
+		return prose.NameHold{Kind: prose.HoldRunning}, true
 	case meta.CollectedAt == nil:
-		return prose.HoldUncollected, true
+		return prose.NameHold{Kind: prose.HoldUncollected}, true
 	}
-	return "", false
+	return prose.NameHold{}, false
 }
 
 // ---------- classification and recovery ----------

@@ -547,13 +547,27 @@ const (
 	HoldUnreadable  NameHoldKind = "unreadable"
 )
 
+// NameHold is what internal/collect observed holding a name: why, through
+// which fan-out member if any, and — for a directory with no record —
+// whether it was seen to be empty.
+type NameHold struct {
+	Kind   NameHoldKind
+	Member string
+	Empty  bool
+}
+
 // NameHeld refuses a dispatch under a name whose job was not delivered yet.
 // A delivered job's name passes on silently, so this is the one collision a
 // caller ever hears about, and it leads with the fact a caller must not
-// miss: collecting this name now reads the other job.
-func NameHeld(name, dir string, kind NameHoldKind) string {
+// miss: collecting this name now reads the other job. dir is the job — for a
+// fan-out the whole one, since one collect covers every member.
+func NameHeld(name, dir string, hold NameHold) string {
+	subject := "which"
+	if hold.Member != "" {
+		subject = fmt.Sprintf("whose member %s", hold.Member)
+	}
 	var state, release string
-	switch kind {
+	switch hold.Kind {
 	case HoldRunning:
 		state = "is still running"
 		release = "The name frees once that job has finished and its own caller has collected it."
@@ -562,14 +576,17 @@ func NameHeld(name, dir string, kind NameHoldKind) string {
 		release = "If that job is yours or its caller is gone, collecting it frees the name: " + CollectCommand(dir)
 	case HoldUnrecorded:
 		state = "was reserved and holds no record — a dispatch in its first moments, or one that died there"
-		release = "If no dispatch is starting there, removing that empty directory frees the name."
+		release = "If it is still there in a minute no dispatch is starting; read what that directory holds before anything reuses its name."
+		if hold.Empty {
+			release = "If it is still there in a minute no dispatch is starting, and removing that empty directory frees the name."
+		}
 	default:
 		state = "holds a record that cannot be read"
 		release = "Inspect that directory before anything reuses its name."
 	}
-	return fmt.Sprintf("nothing was dispatched: the name %s is held by another job, %s, which %s. "+
+	return fmt.Sprintf("nothing was dispatched: the name %s is held by another job, %s, %s %s. "+
 		"Collecting %s now would read that job, not yours. Dispatch again under a different name (%s-b, say). %s",
-		name, dir, state, name, name, release)
+		name, dir, subject, state, name, name, release)
 }
 
 // RunNeedsVoice refuses a run with no member at all.

@@ -110,7 +110,14 @@ sandbox once broke the calling session's own tooling).
   different job); always passing the name on (a caller still waiting on a
   running or uncollected job would collect the newcomer's result, so that
   one case stays a refusal — the only collision a caller hears about); an
-  age threshold for "stale" (judgment; delivery is an observation).
+  age threshold for "stale" (judgment; delivery is an observation). Two
+  edges follow from holding only what a collect could still deliver. A
+  fan-out member refused before its first record — a session held at
+  dispatch — has nothing to deliver, so once a sibling has a record it holds
+  nothing; counting it would pin the name for good, since no collect stamps
+  a member that has no record. And a store that exists but cannot be listed
+  is an error, never generation zero: the bare name there could be an older
+  job served as the latest.
 - **Records hold facts; collect renders.** `meta.json` carries what the turn
   was dispatched with and what the engine observed, never a rendered command
   or prescription: a persisted command drifts with every wording or verb

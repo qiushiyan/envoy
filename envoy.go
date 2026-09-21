@@ -201,11 +201,14 @@ func reserve(arg, dir string) (reserved, refusal string, err error) {
 	}
 	base, name := filepath.Dir(dir), filepath.Base(dir)
 	for range 4 {
-		latest, generation := job.Latest(base, name)
+		latest, generation, lerr := job.Latest(base, name)
+		if lerr != nil {
+			return "", "", lerr
+		}
 		next := latest
 		if generation > 0 {
-			if kind, held := collect.NameHold(latest); held {
-				return "", prose.NameHeld(name, latest, kind), nil
+			if hold, held := collect.NameHold(latest); held {
+				return "", prose.NameHeld(name, latest, hold), nil
 			}
 			next = job.GenerationDir(base, name, generation+1)
 		}
@@ -567,6 +570,11 @@ func Collect(req CollectRequest) int {
 		return usageError(stderr, "collect takes the job to print: the name it was run as, or its directory")
 	}
 	dir, err := job.ResolveRef(req.Job, invocationCwd)
+	var unreadable *job.StoreUnreadableError
+	if errors.As(err, &unreadable) {
+		fmt.Fprintf(stderr, "collect error: %s\n", prose.UnreadableStore(unreadable.Base, unreadable.Err))
+		return ExitInfra
+	}
 	if err != nil {
 		return usageError(stderr, "%s", err)
 	}

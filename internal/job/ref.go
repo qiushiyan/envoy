@@ -64,9 +64,26 @@ func ResolveRef(arg, invocationCwd string) (string, error) {
 		}
 	}
 	name, member, _ := strings.Cut(arg, "/")
-	dir, _ := Latest(DefaultBase(invocationCwd), name)
+	dir, _, err := Latest(DefaultBase(invocationCwd), name)
+	if err != nil {
+		return "", err
+	}
 	return filepath.Join(dir, filepath.FromSlash(member)), nil
 }
+
+// StoreUnreadableError reports a project store whose generations could not be
+// listed. It is not "no such job": an unlisted store may hold a newer
+// generation than any a guess would land on.
+type StoreUnreadableError struct {
+	Base string
+	Err  error
+}
+
+func (e *StoreUnreadableError) Error() string {
+	return fmt.Sprintf("the job store at %s could not be read: %s", e.Base, e.Err)
+}
+
+func (e *StoreUnreadableError) Unwrap() error { return e.Err }
 
 // generationSep joins a name to its generation. It is outside namePattern, so
 // a caller can never name a generation directly — only its path does — and it
@@ -84,9 +101,15 @@ func GenerationDir(base, name string, generation int) string {
 
 // Latest returns the directory a name addresses — its highest generation —
 // and that generation's number. Generation 0 means nothing holds the name
-// yet, and dir is where its first job would go.
-func Latest(base, name string) (dir string, generation int) {
-	entries, _ := os.ReadDir(base)
+// yet, and dir is where its first job would go. Only a store that does not
+// exist yet reads as empty: one that exists and cannot be listed is an error,
+// because resolving to the bare name there could serve an older generation
+// as the latest.
+func Latest(base, name string) (dir string, generation int, err error) {
+	entries, err := os.ReadDir(base)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", 0, &StoreUnreadableError{Base: base, Err: err}
+	}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -95,7 +118,7 @@ func Latest(base, name string) (dir string, generation int) {
 			generation = g
 		}
 	}
-	return GenerationDir(base, name, generation), generation
+	return GenerationDir(base, name, generation), generation, nil
 }
 
 // generationOf reads which generation of name an entry is, 0 for none. Only
