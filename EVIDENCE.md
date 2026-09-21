@@ -339,3 +339,12 @@ will look anyway.
   caller that reads a `+N` directory as a fault. Revise if held-name
   refusals recur among sessions that were not concurrent, or if a caller
   continues the wrong conversation through `@<name>` after a reuse.
+  Review r1 (codex, cold) raised that last case as foundational: caller A
+  collects `consult-r1`, caller B reuses the name, and A's later
+  `@consult-r1/codex` continues B's conversation — delivery proves receipt,
+  not that the caller is done with the name. Measured exposure over the same
+  window: 11 pairs of distinct sessions used one name in one project, 2
+  within 24 h, and in none was the first session still calling envoy after
+  the second dispatched. The hazard is real and so far unobserved; the
+  harness exports a per-session id (`CLAUDE_CODE_SESSION_ID`), so scoping a
+  name to its caller first is available if overlap ever shows up.
