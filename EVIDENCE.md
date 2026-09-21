@@ -355,3 +355,10 @@ will look anyway.
   read as identity-less. Compare next pass: name refusals among Claude Code
   callers should be only self-holds; a Codex caller refused by another
   session's job is the signal that Codex needs an identity of its own.
+  Review r2 kept one foundational point: the fallback cannot tell a pickup
+  from a caller whose identity changed. The user chose to report it rather
+  than refuse it, so a fell-back name and a continuation of another
+  session's conversation each carry a `note:`. Compare next pass: how often
+  the note fires, and whether callers that see it check the job or read past
+  it — a note nobody acts on is a candidate for removal, a wrong pickup that
+  carried one and was used anyway is the case for something stronger.

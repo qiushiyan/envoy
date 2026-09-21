@@ -610,7 +610,30 @@ func Collect(req CollectRequest) int {
 	if err != nil {
 		return usageError(stderr, "%s", err)
 	}
-	return collect.Collect(dir, mode, stdout, stderr)
+	return collect.Collect(dir, fallbackNote(req.Job, dir), mode, stdout, stderr)
+}
+
+// fallbackNote says when a name did not resolve to a job of the caller's own.
+// A path names what it names; a caller with no identity has no jobs of its
+// own to fall back from; and a job whose record cannot say whose it is gets
+// no note, since collect reports that record itself.
+func fallbackNote(arg, dir string) string {
+	caller := job.CallerFromEnv()
+	if job.IsPath(arg) || caller == "" {
+		return ""
+	}
+	name, member, _ := strings.Cut(arg, "/")
+	if member != "" {
+		dir = filepath.Dir(dir)
+	}
+	owner, err := job.CallerOf(dir)
+	if err != nil || owner == caller {
+		return ""
+	}
+	if _, err := os.Stat(dir); err != nil {
+		return ""
+	}
+	return prose.NameFellBack(name, owner != "")
 }
 
 // Pending prints the discovery-only recovery index for base ("" = the default

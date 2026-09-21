@@ -149,11 +149,20 @@ sandbox once broke the calling session's own tooling).
   record for its first moments, so it cannot say whose it is, and a second
   caller dispatching the same name in that instant is refused rather than
   guessed about.
-  Known limit, left open on purpose: the fallback to the newest of anyone's
-  is a reading, not an observation. A caller whose identity changes mid-task
-  owns no generation under its new one, so its names fall back; if another
-  session reused the name meanwhile, the fallback is that session's job. A
-  path never has this problem, and every `resume:` line hands one over.
+  The fallback to the newest of anyone's is a reading, not an observation,
+  and the engine cannot tell its two causes apart: work picked up on purpose,
+  and a caller whose identity changed mid-task, which owns no generation
+  under its new one — where, if another session reused the name meanwhile,
+  the fallback is that session's job. Refusing an ambiguous fallback was
+  rejected: in a checkout that outlives one task nearly every name has
+  several owners, so picking work up by name would almost always be refused
+  and the caller would have to learn paths. Instead the engine reports the
+  one thing only it knows. A collect whose name fell back carries a `note:`
+  under the job it resolved to (on stderr for `--result-only`, which is the
+  payload alone), and a turn whose `resumedFrom` was dispatched by a
+  different recorded caller carries one under `resumed-from:` — rendered
+  from the two records, so it appears wherever that job is read. A path
+  never falls back, and every `resume:` line hands one over.
 - **Records hold facts; collect renders.** `meta.json` carries what the turn
   was dispatched with and what the engine observed, never a rendered command
   or prescription: a persisted command drifts with every wording or verb

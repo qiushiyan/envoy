@@ -50,9 +50,11 @@ THE LOOP
   jobs. Every dispatch runs in a directory of its own — <name>, then
   <name>+2, +3 — and earlier ones stay readable by that path. A session that
   never used a name reads the newest job under it: that is how work from an
-  earlier session is picked up. A dispatch is refused only while your own
-  earlier job under the name is still running or uncollected. A round 2 still
-  gets its own name (review-r2), so that round 1 stays readable by name.
+  earlier session is picked up, and the block says so in a "note:" line, so
+  a job you expected to be your own and is not shows itself. A dispatch is
+  refused only while your own earlier job under the name is still running or
+  uncollected. A round 2 still gets its own name (review-r2), so that round 1
+  stays readable by name.
 
   Your session is the one your harness exports: ENVOY_CALLER, else Claude
   Code's CLAUDE_CODE_SESSION_ID. A caller with neither has no session: to it

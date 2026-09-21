@@ -17,6 +17,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -362,22 +363,38 @@ const (
 // full first, written to the caller second, and only a write that succeeded
 // stamps anything. A caller whose output broke mid-block is still owed the
 // job, and pending discovery keeps listing it.
-func Collect(dir string, mode Mode, w, errW io.Writer) int {
+func Collect(dir, note string, mode Mode, w, errW io.Writer) int {
 	if job.IsGroupDir(dir) {
-		return collectGroup(dir, mode, w, errW)
+		return collectGroup(dir, note, mode, w, errW)
 	}
 	var body bytes.Buffer
 	r := renderJob(dir, mode, &body, errW, true)
 	if r.code != 0 {
 		return r.code
 	}
-	if !deliver(w, errW, body.Bytes()) {
+	if !deliver(w, errW, withNote(body.Bytes(), note, mode, errW)) {
 		return job.ExitInfra
 	}
 	if r.stamp {
 		stampCollected(dir, r.meta)
 	}
 	return 0
+}
+
+// withNote places what the caller must know about how its reference was
+// resolved directly under the block's first line, which names the job it
+// resolved to. A result-only read is the payload alone, so there the note
+// goes to the error stream instead of into the result.
+func withNote(body []byte, note string, mode Mode, errW io.Writer) []byte {
+	if note == "" {
+		return body
+	}
+	if mode == ModeResultOnly {
+		fmt.Fprintf(errW, "note: %s\n", note)
+		return body
+	}
+	head, rest, _ := bytes.Cut(body, []byte("\n"))
+	return slices.Concat(head, []byte("\nnote: "+note+"\n"), rest)
 }
 
 // deliver writes a rendered block to the caller and reports whether all of
@@ -540,6 +557,12 @@ func renderJob(dir string, mode Mode, w io.Writer, errW io.Writer, showGit bool)
 	}
 	if meta.ResumedFrom != nil {
 		fmt.Fprintf(w, "resumed-from: %s\n", *meta.ResumedFrom)
+		// Both records say who dispatched them, so a turn that continued
+		// another session's conversation — a name that fell back at dispatch
+		// is how that happens unasked — says so where its result is read.
+		if source, err := job.CallerOf(*meta.ResumedFrom); err == nil && meta.Caller != nil && source != "" && source != *meta.Caller {
+			fmt.Fprintf(w, "note: %s\n", prose.ContinuedAnotherSession())
+		}
 	}
 	if meta.SessionID != nil {
 		// The bare id is printed only when no command carries it: the
@@ -622,7 +645,7 @@ func stampCollected(dir string, meta *job.Meta) {
 // an abandoned turn — and an aggregate that disagreed with the sections below
 // it would be worse than no aggregate at all. Nothing is stamped until the
 // whole block has reached the caller.
-func collectGroup(dir string, mode Mode, w, errW io.Writer) int {
+func collectGroup(dir, note string, mode Mode, w, errW io.Writer) int {
 	gw := job.GroupWorkspace{Dir: dir}
 	group, err := job.ReadGroupFile(gw.GroupPath())
 	if err != nil {
@@ -721,7 +744,7 @@ func collectGroup(dir string, mode Mode, w, errW io.Writer) int {
 			fmt.Fprintf(&body, "\nnext: %s\n", closing())
 		}
 	}
-	if !deliver(w, errW, body.Bytes()) {
+	if !deliver(w, errW, withNote(body.Bytes(), note, mode, errW)) {
 		return job.ExitInfra
 	}
 	for _, s := range stamps {

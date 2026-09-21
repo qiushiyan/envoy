@@ -1435,6 +1435,7 @@ func TestHelpIsSelfSufficient(t *testing.T) {
 		"envoy collect review-r1", // the read path, by name
 		"nothing to read back",    // why the name is chosen up front
 		"means the latest job your session dispatched under it", // what a reused name means
+		"says so in a \"note:\" line",                           // a name that fell back is visible
 		"ENVOY_CALLER, else Claude",                             // where the session identity comes from
 		"<name>+2",                                              // so a +N directory is not read as a fault
 		"without ever printing a \"job:\" line ran nothing",     // the observable mark of a refusal that ran nothing

@@ -92,11 +92,40 @@ func TestANameMeansItsCallersOwnJob(t *testing.T) {
 
 	// A caller with no generation of its own — work picked up in a new
 	// session — and one with no identity at all both read the newest.
-	for _, e := range []*env{base.as("session-c", ""), base.as("", "")} {
+	c, nobody := base.as("session-c", "sess-c"), base.as("", "")
+	for _, e := range []*env{c, nobody} {
 		if got := collectDir(e, "consult-r1"); got != aDir+"+3" {
 			t.Fatalf("a caller with no generation of its own reads %q, want the newest %s", got, aDir+"+3")
 		}
 	}
+
+	// Only the engine knows a name fell back, and it cannot tell work picked
+	// up on purpose from a caller whose identity changed under it — so the
+	// block says which happened, directly under the job it resolved to.
+	picked := runEnvoyIn(t, c, project, "collect", "consult-r1")
+	mustContain(t, "C's block", picked.stdout,
+		"job: "+aDir+"+3\nnote: this session has dispatched no job named consult-r1", "another session dispatched it", "Check it is the job you mean")
+	for who, r := range map[string]runResult{
+		"its own job":          runEnvoyIn(t, b, project, "collect", "consult-r1"),
+		"no identity":          runEnvoyIn(t, nobody, project, "collect", "consult-r1"),
+		"a path":               runEnvoyIn(t, c, project, "collect", bDir),
+		"its own continuation": runEnvoyIn(t, a, project, "collect", "review-r1"),
+	} {
+		mustNotContain(t, "a block read by "+who, r.stdout+r.stderr, "note:")
+	}
+	// The payload alone stays the payload: the note moves to stderr.
+	payload := runEnvoyIn(t, c, project, "collect", "--result-only", "consult-r1")
+	mustNotContain(t, "result-only stdout", payload.stdout, "note:")
+	mustContain(t, "result-only stderr", payload.stderr, "note: this session has dispatched no job named consult-r1")
+
+	// A continuation by a name that fell back continues another session's
+	// conversation. The new job is the caller's own, so its block is where
+	// that is said — from the two records, whoever reads it.
+	if r := run(c, "pickup-r2", "--with", "@consult-r1"); r.code != 0 {
+		t.Fatalf("C's continuation = %d\n%s", r.code, r.stderr)
+	}
+	mustContain(t, "C's continued block", runEnvoyIn(t, c, project, "collect", "pickup-r2").stdout,
+		"resumed-from: "+aDir+"+3\nnote: this turn continued a conversation another session began")
 }
 
 // A caller without an identity shares the newest-of-anyone meaning of a name

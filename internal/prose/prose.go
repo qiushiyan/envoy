@@ -445,6 +445,28 @@ func UnreadableStore(base string, err error) string {
 		"check the path and its permissions.", base, err)
 }
 
+// NameFellBack is the note on a block whose name did not resolve to a job of
+// the caller's own: the caller has an identity and no job under the name, so
+// it read the newest of anyone's. That is how earlier work is picked up, and
+// also what a caller whose identity changed mid-task gets in place of its
+// own job — the engine cannot tell the two apart, so it says which happened
+// and leaves the judgment to the caller.
+func NameFellBack(name string, ownerKnown bool) string {
+	owner := "a caller with no recorded session dispatched it"
+	if ownerKnown {
+		owner = "another session dispatched it"
+	}
+	return fmt.Sprintf("this session has dispatched no job named %s, so this is the newest job under that name — %s. "+
+		"Check it is the job you mean before using it.", name, owner)
+}
+
+// ContinuedAnotherSession is the note on a turn whose conversation was begun
+// by a different session than the one that dispatched this turn.
+func ContinuedAnotherSession() string {
+	return "this turn continued a conversation another session began (resumed-from, above). " +
+		"If you meant a conversation of your own, its result is not an answer to yours: continue your own job by its directory."
+}
+
 // UnattributedGeneration stops a name from resolving past a job whose record
 // cannot say whose it is. Skipping it would let an older job of the caller's
 // answer to the name as though it were the latest, which is the wrong-job
