@@ -413,6 +413,9 @@ func claudeTranscript(sessionID string, since time.Time) *transcriptResult {
 	if sessionID == "" || !safeSessionID.MatchString(sessionID) {
 		return nil
 	}
+	// Best-effort lookup in envoy's environment: a launcher may choose a
+	// different child config dir that envoy cannot know. Shared projects
+	// stores still work; never infer a config dir from the launcher command.
 	configDir := os.Getenv("CLAUDE_CONFIG_DIR")
 	if configDir == "" {
 		home, err := os.UserHomeDir()

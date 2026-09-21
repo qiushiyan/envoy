@@ -131,6 +131,26 @@ sandbox once broke the calling session's own tooling).
   with a plain lock file — so the engine only ever says no and points at the
   job to inspect. Correctness of a shared conversation outranks convenience.
 
+## Provider launchers
+
+The provider driver owns its native arguments and environment additions;
+`ENVOY_<PROVIDER>_CMD` supplies only the executable and prefix arguments that
+run them. Resolution happens for every turn, including continuations, so a
+launcher can choose an account at dispatch time. Account selection and child
+environment changes belong entirely to that launcher. Envoy neither detects
+launchers nor falls back when one fails. The same process group, pipes and
+session-id locks supervise the resulting command.
+
+Whitespace splitting without a shell keeps this a literal argv prefix, not a
+second command language. Empty values use the bare provider; complex setup
+belongs in a wrapper executable. `commandPrefix` is an optional schema-9
+observation; absence means unavailable. `providerArgv` retains its native
+meaning, and the executed argv is `commandPrefix + providerArgv[1:]`.
+Continuation and retry commands still resolve the current environment rather
+than replaying this observation. A launcher exit without provider evidence
+cannot prove that no work ran: the existing infra outcome preserves stderr
+and keeps prompt state unknown. Only a spawn failure proves not_started.
+
 ## Fan-out: several turns, one job
 
 Several `--with` voices run several turns at once, each on its own prompt or

@@ -1296,6 +1296,13 @@ func TestHelpIsSelfSufficient(t *testing.T) {
 		"--with <voice>=<file>",        // a voice's own prompt
 		"--with @consult-r1=round2.md", // a round on one NEW prompt
 		"WHAT A JOB LEAVES BEHIND",
+		"RUNNING PROVIDERS THROUGH A LAUNCHER",
+		"ENVOY_CODEX_CMD=\"headroom launch --vendor codex --\"",
+		"ENVOY_CLAUDE_CMD=\"headroom launch --\"",
+		"no shell, quoting or expansion",
+		"Each fresh or resumed turn reads the current setting",
+		"commandPrefix",
+		"with no fallback",
 		"FACTS THE FLAGS CANNOT TELL YOU",
 		"envoy never substitutes", // no model substitution
 		"not a sandbox",           // --allow-write is intent

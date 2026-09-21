@@ -24,7 +24,7 @@ func (r *run) initMeta() {
 	if !r.deadline.IsZero() {
 		deadlineAt = job.Ptr(job.ISO(r.deadline))
 	}
-	// The argv is computed exactly once: what meta records is what spawns.
+	// Compute native argv once; record its launch prefix alongside it before spawn.
 	r.argv = r.driver.Argv()
 	r.meta = &job.Meta{
 		SchemaVersion:    job.MetaSchemaVersion,
@@ -43,6 +43,7 @@ func (r *run) initMeta() {
 		TimeoutMin:       r.opts.TimeoutMin,
 		DeadlineAt:       deadlineAt,
 		ProviderArgv:     append([]string{r.opts.Provider}, r.argv...),
+		CommandPrefix:    commandPrefix(r.opts.Provider),
 		RunnerPid:        os.Getpid(),
 		RunnerInstanceID: r.instance,
 		PromptState:      job.PromptUnknown,

@@ -85,6 +85,19 @@ FLAGS
   --allow-write     let a single voice edit files and run commands unattended
   --max-budget-usd  spend cap for a single claude voice (a program's safety net)
 
+RUNNING PROVIDERS THROUGH A LAUNCHER
+  ENVOY_CODEX_CMD and ENVOY_CLAUDE_CMD replace the bare provider command with
+  a prefix. One possible launcher is headroom:
+    export ENVOY_CODEX_CMD="headroom launch --vendor codex --"
+    export ENVOY_CLAUDE_CMD="headroom launch --"
+  Unset, empty or whitespace-only values keep the bare binary from PATH.
+  Prefixes split on whitespace; no shell, quoting or expansion. Paths and
+  arguments with spaces need a wrapper executable on PATH. Provider arguments
+  are appended intact. Each fresh or resumed turn reads the current setting;
+  fan-out members use their own provider's setting. meta.json records it as
+  commandPrefix. Launcher failures are infra (exit 2), with no fallback;
+  stderr.log preserves launcher stderr, and stderr alone does not mean failure.
+
 WHAT A JOB LEAVES BEHIND
   result.md     the answer — this is the return value
   prompt.md     exactly what was sent

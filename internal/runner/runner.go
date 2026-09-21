@@ -16,6 +16,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"syscall"
 	"time"
@@ -232,11 +233,12 @@ func (r *run) execute(promptText string) Result {
 		defer stderrFile.Close()
 	}
 
-	child, err := spawn(r.opts.Provider, r.argv, r.opts.Cwd, r.driver.ExtraEnv())
+	prefix := r.meta.CommandPrefix
+	child, err := spawn(prefix[0], slices.Concat(prefix[1:], r.argv), r.opts.Cwd, r.driver.ExtraEnv())
 	if err != nil {
 		r.finish(finishArgs{
 			status:              job.StatusInfra,
-			errorText:           prose.SpawnFailed(r.opts.Provider, err),
+			errorText:           prose.SpawnFailed(prefix[0], err),
 			promptState:         job.PromptNotStarted,
 			promptStateEvidence: job.Ptr("provider spawn error"),
 			hasEvidence:         true,

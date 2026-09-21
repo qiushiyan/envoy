@@ -89,6 +89,34 @@ Exit codes of a run: `0` ok · `1` provider failure · `2` infra · `3` usage ·
 returned a result and others did not). A fan-out with no result exits with its
 worst member's code; collect exits `0` whenever it printed the job.
 
+## Running providers through a launcher
+
+Set `ENVOY_CODEX_CMD` or `ENVOY_CLAUDE_CMD` to a command prefix. For example,
+`headroom` is one possible launcher that selects an account when each turn starts:
+
+```sh
+export ENVOY_CODEX_CMD="headroom launch --vendor codex --"
+export ENVOY_CLAUDE_CMD="headroom launch --"
+```
+
+Unset, empty or whitespace-only values use the bare `codex` / `claude` from
+PATH. Otherwise envoy splits on whitespace and appends the provider's normal
+arguments. No shell runs: quotes, escapes, variables and wildcards are literal;
+paths or arguments containing spaces are unsupported in the prefix. Use a
+wrapper executable on PATH for more complex setup.
+
+Every turn, including a continuation or fan-out member, reads its provider's
+current environment setting. A continuation does not inherit the old prefix
+or pin an account. A missing launcher or a launcher that exits before starting
+the provider is `infra` (exit 2), with no fallback; launcher stderr is preserved
+in `stderr.log`. Stderr alone does not fail a turn.
+
+`meta.json.commandPrefix` records the resolved executable and prefix arguments,
+including `["codex"]` / `["claude"]` for defaults. The executed argv is
+`commandPrefix + providerArgv[1:]`; `providerArgv` retains its provider-native
+meaning. This optional observation retains schema 9: an absent field in an
+older record means unavailable, and other schema versions remain refused.
+
 ## Design invariants
 
 - **A screen is not an API.** Providers run headless; results are parsed from

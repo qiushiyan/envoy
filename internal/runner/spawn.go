@@ -3,10 +3,21 @@ package runner
 import (
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 
 	"github.com/qiushiyan/envoy/internal/proc"
 )
+
+// commandPrefix is resolved for each turn, including continuations. It is
+// argv, not shell code: quoting, expansion and escaping are not interpreted.
+func commandPrefix(provider string) []string {
+	words := strings.Fields(os.Getenv("ENVOY_" + strings.ToUpper(provider) + "_CMD"))
+	if len(words) == 0 {
+		return []string{provider}
+	}
+	return words
+}
 
 // childProcess wraps the provider CLI with raw pipe fds. The fds are passed
 // directly (no exec-package copy goroutines), so wait() observes pure process

@@ -67,14 +67,19 @@ type Meta struct {
 	// ResumedFrom is the job dir whose conversation this turn continues;
 	// absent for a fresh conversation. It is the source a faithful
 	// re-dispatch names again.
-	ResumedFrom               *string  `json:"resumedFrom,omitempty"`
-	SessionLockConflict       *string  `json:"sessionLockConflict"`
-	StartedAt                 string   `json:"startedAt"`
-	EndedAt                   *string  `json:"endedAt"`
-	DurationMs                *int64   `json:"durationMs"`
-	TimeoutMin                float64  `json:"timeoutMin"`
-	DeadlineAt                *string  `json:"deadlineAt"`
-	ProviderArgv              []string `json:"providerArgv"`
+	ResumedFrom         *string  `json:"resumedFrom,omitempty"`
+	SessionLockConflict *string  `json:"sessionLockConflict"`
+	StartedAt           string   `json:"startedAt"`
+	EndedAt             *string  `json:"endedAt"`
+	DurationMs          *int64   `json:"durationMs"`
+	TimeoutMin          float64  `json:"timeoutMin"`
+	DeadlineAt          *string  `json:"deadlineAt"`
+	ProviderArgv        []string `json:"providerArgv"`
+	// CommandPrefix is the resolved executable and launcher arguments. The
+	// executed argv is CommandPrefix + ProviderArgv[1:]; ProviderArgv keeps
+	// its provider-native meaning. Absent in older records means unknown.
+	// This observation is never inherited by a continuation.
+	CommandPrefix             []string `json:"commandPrefix,omitempty"`
 	RunnerPid                 int      `json:"runnerPid"`
 	RunnerInstanceID          string   `json:"runnerInstanceId"`
 	ProviderPid               *int     `json:"providerPid"`

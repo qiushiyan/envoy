@@ -298,3 +298,23 @@ will look anyway.
   proposal, a JSON seat for the `=`-in-path corner, is recorded in
   `DESIGN.md` § Fan-out: several turns, one job. **Supervision only, zero lifecycle change — the same
   admission test the fan-out itself passed.**
+- **2026-09-21 — provider launchers keep account choice outside the engine.**
+  Bare provider binaries inherited the dispatching environment instead of
+  following headroom's account board; the primary Codex account was at 98%
+  weekly usage while another had room. `ENVOY_CODEX_CMD` and
+  `ENVOY_CLAUDE_CMD` now supply literal command prefixes, resolved anew for
+  every turn. **A launch failure never licenses falling back to the account
+  the launcher was meant to avoid.** Stub launchers pin argv/environment/stdin,
+  fresh and resumed turns, fan-out, stderr-only noise, refusal without
+  fallback, session locks, and timeout/cancel cleanup of stubborn descendants
+  with both exec and non-exec launchers. The default spawn path retains its
+  argv and environment; optional `commandPrefix` preserves schema 9 and
+  `providerArgv` semantics. A live smoke test with codex-cli 0.155.1 and
+  `headroom launch --vendor codex --` completed both fresh and resumed turns
+  on the board's already-selected second account: each child's command
+  printed that account's `CODEX_HOME`, both records captured the prefix,
+  and the resumed turn recalled the first turn's marker in the same session.
+  Live board observations around those turns (10:46:18–10:47:54 UTC) moved
+  the second account from 3% to 4% and the primary from 98% to 99%.
+  Routing and continuation are verified; the board does not isolate these
+  turns' billing, so the requested primary-unchanged check is inconclusive.

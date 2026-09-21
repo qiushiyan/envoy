@@ -14,6 +14,10 @@ const perProvider = (name, fallback) =>
 const scenario = perProvider('ENVOY_FAKE_SCENARIO', 'success');
 const sessionId = perProvider('ENVOY_FAKE_SESSION_ID', 'fake-session-id');
 const finalText = process.env.ENVOY_FAKE_FINAL_TEXT ?? 'fake provider result';
+const invocationFile = perProvider('ENVOY_FAKE_INVOCATION_FILE', '');
+if (invocationFile) {
+  fs.writeFileSync(invocationFile, JSON.stringify({ argv: providerArgs, env: process.env, pid: process.pid }));
+}
 
 if (!['codex', 'claude'].includes(provider)) {
   process.stderr.write(`unknown fake provider: ${provider}\n`);
