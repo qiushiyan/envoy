@@ -50,7 +50,7 @@ manager** (the caller's background-task layer owns liveness and completion
 notification; `pending` is only a recovery index over durable files after a
 notification may have been missed) and **not a sandbox** (`--allow-write` is
 intent, not enforcement; read-only is a prompt convention, and codex
-sandboxing is governed by `~/.codex/config.toml` alone — a derived read-only
+sandboxing is left to the provider's own configuration — a derived read-only
 sandbox once broke the calling session's own tooling).
 
 ## Commitments
@@ -133,23 +133,24 @@ sandbox once broke the calling session's own tooling).
 
 ## Provider launchers
 
-The provider driver owns its native arguments and environment additions;
-`ENVOY_<PROVIDER>_CMD` supplies only the executable and prefix arguments that
-run them. Resolution happens for every turn, including continuations, so a
-launcher can choose an account at dispatch time. Account selection and child
-environment changes belong entirely to that launcher. Envoy neither detects
-launchers nor falls back when one fails. The same process group, pipes and
-session-id locks supervise the resulting command.
+A driver owns provider-native arguments and environment additions; the runner
+prepends the command from the dispatch environment. Account selection and
+child environment changes belong to that launcher. Envoy never detects a
+launcher or falls back when one fails: fallback could spend on the very account
+the caller meant to avoid. Process groups, pipes and session-id locks supervise
+the resulting command unchanged.
 
-Whitespace splitting without a shell keeps this a literal argv prefix, not a
-second command language. Empty values use the bare provider; complex setup
-belongs in a wrapper executable. `commandPrefix` is an optional schema-9
-observation; absence means unavailable. `providerArgv` retains its native
-meaning, and the executed argv is `commandPrefix + providerArgv[1:]`.
-Continuation and retry commands still resolve the current environment rather
-than replaying this observation. A launcher exit without provider evidence
-cannot prove that no work ran: the existing infra outcome preserves stderr
-and keeps prompt state unknown. Only a spawn failure proves not_started.
+The prefix is literal whitespace-separated argv, with complex setup left to a
+wrapper executable. `commandPrefix` records it as an optional observation;
+continuations and retries resolve the current environment, so account choice
+stays with the launcher. `README.md` § Running providers through a launcher
+owns the configuration and recorded-argv contract. After a successful spawn,
+an exit without provider evidence leaves prompt state unknown: silence cannot
+prove that no work ran, even when a launcher's stderr explains its refusal.
+
+Claude transcript recovery is best-effort in envoy's own config directory.
+A launcher may choose a child directory envoy cannot know; a shared projects
+store can preserve recovery, but the engine cannot infer it from command text.
 
 ## Fan-out: several turns, one job
 

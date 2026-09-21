@@ -30,8 +30,8 @@ The caller names the job, so nothing printed by a dispatch has to be read
 back: run it in the background, let the process exit, then collect by the same
 name. A name is used once — a taken name is refused, never suffixed. A voice
 is `provider[:model[:effort]]` for a cold session; omitting the model or
-effort hands the choice to the provider's own config (`~/.codex/config.toml`
-for codex), and the engine never substitutes one of its own. `@<job>` continues
+effort hands the choice to the provider's own configuration, and the engine
+never substitutes one of its own. `@<job>` continues
 a finished job's conversation with the session and settings read from its
 records, and `@<job>/<member>` names one member of a fan-out.
 
@@ -48,8 +48,8 @@ demand). The durable files in the job dir are authoritative:
 - **`meta.json`:** machine-readable lifecycle and recovery facts, atomically
   replaced, plus supported usage measurements; collect renders commands from it.
 - **`progress.log`:** runner-owned semantic progress + 30s heartbeat.
-- **`raw.log`:** verbatim provider stdout (stream-json / JSONL).
-- **`stderr.log`:** provider stderr.
+- **`raw.log`:** verbatim stdout, including provider events and launcher output.
+- **`stderr.log`:** provider and launcher stderr.
 - **`last-message.txt`:** codex's `-o` recovery surface (codex turns only).
 
 Claude jobs expose live primary-turn context samples in `meta.json.usage`;
@@ -105,11 +105,10 @@ arguments. No shell runs: quotes, escapes, variables and wildcards are literal;
 paths or arguments containing spaces are unsupported in the prefix. Use a
 wrapper executable on PATH for more complex setup.
 
-Every turn, including a continuation or fan-out member, reads its provider's
-current environment setting. A continuation does not inherit the old prefix
-or pin an account. A missing launcher or a launcher that exits before starting
-the provider is `infra` (exit 2), with no fallback; launcher stderr is preserved
-in `stderr.log`. Stderr alone does not fail a turn.
+Every dispatch, including a continuation, retry or fan-out member, reads its
+provider's current environment setting; the recorded prefix does not pin an
+account. Missing or refusing launchers yield `infra` (exit 2), with no fallback.
+Their stderr lands in `stderr.log`; stderr alone does not fail a turn.
 
 `meta.json.commandPrefix` records the resolved executable and prefix arguments,
 including `["codex"]` / `["claude"]` for defaults. The executed argv is

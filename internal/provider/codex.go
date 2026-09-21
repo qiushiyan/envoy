@@ -12,8 +12,8 @@ import (
 // codex drives `codex exec --json` and streams its JSONL events. The
 // last-message file is retained as a recovery surface.
 //
-// No sandbox/permission flag EVER: ~/.codex/config.toml governs. A derived
-// read-only sandbox breaks the session's own tooling.
+// No sandbox/permission flag EVER: the provider's own configuration governs.
+// A derived read-only sandbox breaks the session's own tooling.
 type codex struct {
 	opts          Options
 	ws            job.Workspace
