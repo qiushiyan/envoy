@@ -52,11 +52,12 @@ notification may have been missed) and **not a sandbox** (`--allow-write` is
 intent, not enforcement; read-only is a prompt convention, and codex
 sandboxing is left to the provider's own configuration — a derived read-only
 sandbox once broke the calling session's own tooling). For claude that means
-one fixed `--permission-mode bypassPermissions` on every turn: a headless
-turn has no one to answer a permission prompt, so any other mode refuses
-reads outside the cwd, and a mode keyed to `--allow-write` is a read-only
-sandbox by another name — a consult that answers without the files its brief
-cited (EVIDENCE.md, 2026-09-27).
+one fixed `--permission-mode bypassPermissions` on every turn. Left to
+inherit, a headless turn resolves its mode from the project's settings, the
+model and the `auto` classifier, and where that lands on `default` there is
+no one to answer a prompt: reads outside the cwd are refused, and a consult
+answers without the files its brief cited (EVIDENCE.md, 2026-09-27). A mode
+keyed to `--allow-write` is a read-only sandbox by another name.
 
 ## Commitments
 

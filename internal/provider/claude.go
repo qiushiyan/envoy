@@ -54,10 +54,11 @@ func (c *claude) Argv() []string {
 	} else {
 		args = append(args, "--session-id", c.sessionID)
 	}
-	// Every turn, whatever its write intent: headless has no one to answer a
-	// permission prompt, so any other mode silently refuses reads outside the
-	// cwd and compound shell commands — a consult then answers without the
-	// files its brief cited. Read-only is the prompt's job, not the engine's.
+	// Every turn, whatever its write intent. An inherited mode depends on the
+	// project's settings, the model and the auto classifier; where it lands on
+	// `default`, headless has no one to answer a prompt, so reads outside the
+	// cwd are refused and a consult answers without the files its brief cited.
+	// Read-only is the prompt's job, not the engine's.
 	args = append(args, "--permission-mode", "bypassPermissions")
 	if c.opts.MaxBudgetUSD != nil {
 		args = append(args, "--max-budget-usd", fmt.Sprintf("%g", *c.opts.MaxBudgetUSD))

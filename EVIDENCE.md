@@ -367,13 +367,19 @@ will look anyway.
   result opened by saying the lesson files and the setup doc its brief cited
   were unreadable: 23 tool calls refused, reads outside the cwd plus
   multi-part Bash commands. envoy passed no permission flag on a turn without
-  `--allow-write`, so Claude Code ran in `default` mode, and a headless
-  session has no one to approve anything. Inheriting the user's config was
-  not the fix: its `defaultMode: "auto"` is ignored by `claude -p` (2.1.283
-  init reports `default`, even with `--permission-mode auto` passed), and the
-  user's interactive YOLO comes from a launcher flag the provider child never
-  sees. Claude turns now always run with `bypassPermissions`; the user
-  trusts the prompt to keep a consult design-only. 1 other claude turn of 73
-  since August had a refusal. Compare next pass: a read-only claude turn
-  whose `git status` changed under it is the signal that the prompt is not
-  enough.
+  `--allow-write`, so the turn took whatever mode its settings resolved to.
+  The user's is `auto`, and 70 of the 75 claude turns since 09-14 ran in it:
+  across 60 turns whose briefs cited files outside the cwd, 184 were opened
+  and none refused. tabtype's own `.claude/settings.local.json` sets
+  `defaultMode: "bypassPermissions"`, which overrides `auto`, and a headless
+  2.1.283 turn does not honor a bypass mode from settings: init reports
+  `default` (`auto` with `--setting-sources user,project`), and `default`
+  has no one to approve anything. A first diagnosis blamed `claude -p` for
+  ignoring `auto`; its probe ran Haiku, which falls back to `default` in any
+  directory. The resolved mode depends on project settings, model support
+  and the `auto` classifier (the one refusal elsewhere, local-dev-cleanup
+  `consult-r1`, was the classifier declining a `cat` into another account's
+  transcripts), so claude turns now always run with `bypassPermissions`; the
+  user trusts the prompt to keep a consult design-only. Compare next pass: a
+  read-only claude turn whose `git status` changed under it is the signal
+  that the prompt is not enough.
