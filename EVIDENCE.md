@@ -362,3 +362,18 @@ will look anyway.
   the note fires, and whether callers that see it check the job or read past
   it — a note nobody acts on is a candidate for removal, a wrong pickup that
   carried one and was used anyway is the case for something stronger.
+- **2026-09-27 — the read-only turn that could not read.** A tabtype consult
+  (`consult-r1b`, claude-fable-5-1) finished ok after 6 minutes, but its
+  result opened by saying the lesson files and the setup doc its brief cited
+  were unreadable: 23 tool calls refused, reads outside the cwd plus
+  multi-part Bash commands. envoy passed no permission flag on a turn without
+  `--allow-write`, so Claude Code ran in `default` mode, and a headless
+  session has no one to approve anything. Inheriting the user's config was
+  not the fix: its `defaultMode: "auto"` is ignored by `claude -p` (2.1.283
+  init reports `default`, even with `--permission-mode auto` passed), and the
+  user's interactive YOLO comes from a launcher flag the provider child never
+  sees. Claude turns now always run with `bypassPermissions`; the user
+  trusts the prompt to keep a consult design-only. 1 other claude turn of 73
+  since August had a refusal. Compare next pass: a read-only claude turn
+  whose `git status` changed under it is the signal that the prompt is not
+  enough.

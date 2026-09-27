@@ -101,7 +101,7 @@ FLAGS
                     each member of a fan-out gets it separately
   --cwd DIR         directory the session works in (default: current dir)
   --baseline SHA    diff anchor collect prints; write turns default to HEAD
-  --allow-write     let a single voice edit files and run commands unattended
+  --allow-write     a single voice will edit files: collect diffs its work
   --max-budget-usd  spend cap for a single claude voice (a program's safety net)
 
 RUNNING PROVIDERS THROUGH A LAUNCHER
@@ -134,9 +134,11 @@ FACTS THE FLAGS CANNOT TELL YOU
   recorded either way; `+"`collect --status-only`"+` prints it, and a difference from the
   request is the provider's own aliasing, not a substitution.
 
-  Write intent, not a sandbox. Without --allow-write the session is
-  effectively read-only, and "analyse only, change nothing" still belongs in
-  the prompt — envoy does not enforce it.
+  Write intent, not a sandbox. envoy restricts no session: claude runs with
+  its permission prompts bypassed, since a headless turn has no one to answer
+  them, and codex under its own configuration. --allow-write records the
+  intent and anchors the diff; any turn can still write, so "analyse only,
+  change nothing" belongs in the prompt.
 
   Continuing. A finished job that holds a session prints `+"`resume:`"+`, the exact
   command that continues its conversation as a new job — for a fan-out, the

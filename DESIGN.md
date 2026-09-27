@@ -51,7 +51,12 @@ notification; `pending` is only a recovery index over durable files after a
 notification may have been missed) and **not a sandbox** (`--allow-write` is
 intent, not enforcement; read-only is a prompt convention, and codex
 sandboxing is left to the provider's own configuration — a derived read-only
-sandbox once broke the calling session's own tooling).
+sandbox once broke the calling session's own tooling). For claude that means
+one fixed `--permission-mode bypassPermissions` on every turn: a headless
+turn has no one to answer a permission prompt, so any other mode refuses
+reads outside the cwd, and a mode keyed to `--allow-write` is a read-only
+sandbox by another name — a consult that answers without the files its brief
+cited (EVIDENCE.md, 2026-09-27).
 
 ## Commitments
 
@@ -459,8 +464,8 @@ the same second once shared one (EVIDENCE.md, 2026-07-27).
   2026-07-28). A supplement is a follow-up turn, `--with @<job>`; a `steer`
   command saying so is surface the caller learns and never reaches for
   (EVIDENCE.md, 2026-09-12).
-- No sandbox flag for codex, ever; no permission machinery beyond claude's
-  own `--permission-mode`.
+- No sandbox flag for codex, ever; for claude, no permission flag beyond the
+  fixed bypass — no allow-lists, no `--add-dir`, no mode keyed to write intent.
 - No activity-based hang detector; no timeout that resets on output.
 - No prompt templating; prompts arrive as files, whole — one file per voice
   when the voices' questions differ.

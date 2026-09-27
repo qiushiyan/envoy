@@ -32,7 +32,8 @@ func TestValidateEffort(t *testing.T) {
 func TestClaudeArgv(t *testing.T) {
 	fresh := newClaude(Options{}, time.Now())
 	argv := fresh.Argv()
-	want := []string{"-p", "--output-format", "stream-json", "--verbose", "--session-id", fresh.sessionID}
+	want := []string{"-p", "--output-format", "stream-json", "--verbose", "--session-id", fresh.sessionID,
+		"--permission-mode", "bypassPermissions"}
 	if !reflect.DeepEqual(argv, want) {
 		t.Fatalf("fresh argv = %v, want %v", argv, want)
 	}

@@ -54,12 +54,11 @@ func (c *claude) Argv() []string {
 	} else {
 		args = append(args, "--session-id", c.sessionID)
 	}
-	// Write intent, not a sandbox: bypassPermissions lets the delegate edit and
-	// run unattended. Without it the turn stays effectively read-only
-	// (unpermitted tools fail; headless never prompts).
-	if c.opts.AllowWrite {
-		args = append(args, "--permission-mode", "bypassPermissions")
-	}
+	// Every turn, whatever its write intent: headless has no one to answer a
+	// permission prompt, so any other mode silently refuses reads outside the
+	// cwd and compound shell commands — a consult then answers without the
+	// files its brief cited. Read-only is the prompt's job, not the engine's.
+	args = append(args, "--permission-mode", "bypassPermissions")
 	if c.opts.MaxBudgetUSD != nil {
 		args = append(args, "--max-budget-usd", fmt.Sprintf("%g", *c.opts.MaxBudgetUSD))
 	}
