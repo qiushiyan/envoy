@@ -23,7 +23,6 @@ import (
 
 	"github.com/qiushiyan/envoy/internal/job"
 	"github.com/qiushiyan/envoy/internal/lock"
-	"github.com/qiushiyan/envoy/internal/proc"
 	"github.com/qiushiyan/envoy/internal/prose"
 	"github.com/qiushiyan/envoy/internal/provider"
 	"github.com/qiushiyan/envoy/internal/text"
@@ -76,8 +75,8 @@ type Options struct {
 }
 
 type termination struct {
-	kind        string // "timeout" | "interrupted" | "lock_conflict"
-	signal      string
+	reason      stopReason
+	signal      string // the signal an interrupt received; "" for any other stop
 	requestedAt time.Time
 	// stream is the provider's stream as it stood the instant the stop was
 	// requested, captured before any signal goes out. Tearing a turn down can
@@ -111,18 +110,16 @@ type run struct {
 	stderrTail string
 	lineBuf    []byte
 
-	term               *termination
-	waitDone           bool
-	stdoutDone         bool
-	stderrDone         bool
-	childExit          exitResult
-	childDone          bool
-	residualCleanup    bool
-	forceKillTimer     *time.Timer
-	exitFallbackTimer  *time.Timer
-	forceFinalizeTimer *time.Timer
-	finished           bool
-	exitCode           int
+	term              *termination
+	escalation        escalation
+	escalationTimer   *time.Timer // the pending escalation step
+	exitFallbackTimer *time.Timer // finalizes a child that exited while its streams stay open
+	waitDone          bool
+	stdoutDone        bool
+	stderrDone        bool
+	childExit         exitResult
+	done              bool // terminal state is being, or has been, published
+	exitCode          int
 
 	callCh   chan func()
 	stdoutCh chan []byte
@@ -177,7 +174,6 @@ func Run(opts Options) Result {
 
 	driver, err := provider.New(opts.Provider, opts.Turn, r.ws, startedAt)
 	if err != nil {
-		r.releaseLock()
 		fmt.Fprintf(opts.Stderr, "usage error: %s\n", err)
 		return Result{ExitCode: job.ExitUsage}
 	}
@@ -185,7 +181,6 @@ func Run(opts Options) Result {
 
 	promptText, err := os.ReadFile(opts.PromptFile)
 	if err != nil {
-		r.releaseLock()
 		fmt.Fprintf(opts.Stderr, "envoy: cannot read prompt file: %s\n", err)
 		return Result{ExitCode: job.ExitInfra}
 	}
@@ -243,6 +238,7 @@ func (r *run) execute(promptText string) Result {
 	prefix := r.meta.CommandPrefix
 	child, err := spawn(prefix[0], slices.Concat(prefix[1:], r.argv), r.opts.Cwd, r.driver.ExtraEnv())
 	if err != nil {
+		r.done = true
 		r.finish(provider.Outcome{
 			Status:      job.StatusInfra,
 			ErrorText:   prose.SpawnFailed(prefix[0], err),
@@ -299,7 +295,7 @@ func (r *run) execute(promptText string) Result {
 	}
 
 	stdoutCh, stderrCh := r.stdoutCh, r.stderrCh
-	for !r.finished {
+	for !r.done {
 		select {
 		case fn := <-r.callCh:
 			fn()
@@ -322,13 +318,13 @@ func (r *run) execute(promptText string) Result {
 		case res := <-r.waitCh:
 			r.onExit(res)
 		case sig := <-r.sigCh:
-			r.requestTermination("interrupted", proc.SignalName(sig))
+			r.requestTermination(stopInterrupted, sig)
 		case <-heartbeatC:
 			r.heartbeat()
 		case <-timeoutC:
 			if !time.Now().Before(r.deadline) {
 				timeoutC = nil
-				r.requestTermination("timeout", "SIGTERM")
+				r.requestTermination(stopTimeout, nil)
 			}
 		}
 	}
@@ -473,7 +469,7 @@ func (r *run) onSessionStarted(ev provider.Event, rest []provider.Event) (abort 
 				job.KV{K: "session", V: ev.SessionID},
 				job.KV{K: "action", V: "stopping"},
 			)
-			r.requestTermination("lock_conflict", "SIGTERM")
+			r.requestTermination(stopLockConflict, nil)
 			return true
 		}
 		r.sessionLock = handle

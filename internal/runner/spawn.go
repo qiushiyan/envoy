@@ -118,10 +118,9 @@ func (c *childProcess) pump(f *os.File, ch chan []byte) {
 // wait blocks until the process exits and reports code/signal the way the
 // meta schema records them: a signal death has a signal name and a nil code.
 func (c *childProcess) wait() exitResult {
-	err := c.cmd.Wait()
+	c.cmd.Wait() // the error restates ProcessState, which is read below
 	state := c.cmd.ProcessState
 	if state == nil {
-		_ = err
 		return exitResult{}
 	}
 	if ws, ok := state.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
@@ -135,7 +134,7 @@ func (c *childProcess) wait() exitResult {
 // signalTree signals the whole process group, falling back to the direct
 // child when the group probe fails for a reason other than "already gone".
 func (r *run) signalTree(sig syscall.Signal) {
-	if r.child == nil || r.childDone {
+	if r.child == nil || r.done {
 		return
 	}
 	err := syscall.Kill(-r.child.pid, sig)

@@ -87,17 +87,8 @@ func (r *run) printStartupBlock() {
 // finish publishes how the turn ended — a driver's conclusion, or one the
 // runner assembled for an ending the driver did not see through — as terminal
 // state: result.md, final meta, the terminal coordinate block, and the exit
-// code. Idempotent; first caller wins.
+// code. It runs once: from onChildDone, or for a provider that never spawned.
 func (r *run) finish(out provider.Outcome, exit exitResult) {
-	if r.finished {
-		return
-	}
-	r.finished = true
-	for _, t := range []*time.Timer{r.forceKillTimer, r.exitFallbackTimer, r.forceFinalizeTimer} {
-		if t != nil {
-			t.Stop()
-		}
-	}
 	if out.SessionID != "" {
 		r.setSession(out.SessionID)
 	}
@@ -182,7 +173,7 @@ func elapsed(since time.Time) string {
 // recognizes such events: for it, zero is an observation; for any other, a
 // zero would claim a link held that nothing watched, so the field stays nil.
 func connectionTally(d provider.Driver) *job.ConnectionErrors {
-	if d != nil && d.ObservesConnectionErrors() {
+	if d.ObservesConnectionErrors() {
 		return &job.ConnectionErrors{}
 	}
 	return nil

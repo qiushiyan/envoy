@@ -2,10 +2,12 @@ package runner
 
 import (
 	"fmt"
+	"os"
 	"syscall"
 	"time"
 
 	"github.com/qiushiyan/envoy/internal/job"
+	"github.com/qiushiyan/envoy/internal/proc"
 	"github.com/qiushiyan/envoy/internal/prose"
 	"github.com/qiushiyan/envoy/internal/provider"
 )
@@ -21,71 +23,108 @@ func (r *run) afterFunc(d time.Duration, fn func()) *time.Timer {
 	})
 }
 
-// requestTermination starts a stop: TERM the tree, escalate to KILL, then
-// give streams one final drain window before publishing terminal metadata.
-func (r *run) requestTermination(kind, signalName string) {
-	if r.finished || r.childDone {
+// stopReason is why the runner, rather than the provider, ended a turn.
+type stopReason int
+
+const (
+	stopTimeout stopReason = iota + 1
+	stopInterrupted
+	stopLockConflict
+)
+
+// escalation is how far stopping the provider tree has gone. Each step
+// replaces the one timer that schedules the next.
+type escalation int
+
+const (
+	notStopping escalation = iota
+	terminating            // the tree was asked to stop; SIGKILL follows after sigkillAfter
+	killing                // SIGKILL sent; finalize after closeGrace
+)
+
+// requestTermination starts a stop the runner decided on: TERM the tree (INT
+// for an interrupt that was an INT), escalate to KILL, then give streams one
+// final drain window before publishing terminal metadata. received is the
+// signal that asked for an interrupt, nil otherwise.
+func (r *run) requestTermination(reason stopReason, received os.Signal) {
+	if r.done {
 		return
 	}
 	if r.term != nil {
 		// A second interrupt is an explicit request to stop waiting for cleanup.
-		if kind == "interrupted" {
-			if r.forceKillTimer != nil {
-				r.forceKillTimer.Stop()
-			}
-			r.forceStopThenFinalize()
+		if reason == stopInterrupted {
+			r.kill()
 		}
 		return
 	}
 	requestedAt := time.Now()
 	r.term = &termination{
-		kind:        kind,
-		signal:      signalName,
+		reason:      reason,
 		requestedAt: requestedAt,
 		stream:      r.capStream(requestedAt),
 	}
+	progressReason, treeSignal := "SIGTERM", syscall.SIGTERM
+	switch reason {
+	case stopTimeout:
+		progressReason = "hard_cap"
+	case stopInterrupted:
+		r.term.signal = proc.SignalName(received)
+		progressReason = r.term.signal
+		if received == syscall.SIGINT {
+			treeSignal = syscall.SIGINT
+		}
+	}
 	r.writeMeta(func(m *job.Meta) {
 		m.TerminationRequestedAt = job.Ptr(job.ISO(requestedAt))
-		if kind == "interrupted" {
-			m.InterruptionSignal = job.Ptr(signalName)
+		if reason == stopInterrupted {
+			m.InterruptionSignal = job.Ptr(r.term.signal)
 		}
 	})
-	reason := signalName
-	if kind == "timeout" {
-		reason = "hard_cap"
-	}
 	r.progress.Append("stopping",
-		job.KV{K: "reason", V: reason},
+		job.KV{K: "reason", V: progressReason},
 		job.KV{K: "elapsed", V: elapsed(r.startedAt)},
 		job.KV{K: "prompt", V: r.meta.PromptState},
 	)
-	sig := syscall.SIGTERM
-	if signalName == "SIGINT" {
-		sig = syscall.SIGINT
-	}
+	r.escalate(treeSignal)
+}
+
+// escalate signals the provider tree and, the first time, schedules SIGKILL:
+// a stop already under way keeps the deadline it set.
+func (r *run) escalate(sig syscall.Signal) {
 	r.signalTree(sig)
-	r.forceKillTimer = r.afterFunc(sigkillAfter, r.forceStopThenFinalize)
+	if r.escalation == notStopping {
+		r.escalation = terminating
+		r.schedule(sigkillAfter, r.kill)
+	}
 }
 
-func (r *run) forceStopThenFinalize() {
-	if r.forceFinalizeTimer != nil || r.childDone {
+// kill sends SIGKILL to the tree and finalizes after one last drain window,
+// whatever the streams are still doing.
+func (r *run) kill() {
+	if r.done || r.escalation == killing {
 		return
 	}
+	r.escalation = killing
 	r.signalTree(syscall.SIGKILL)
-	r.forceFinalizeTimer = r.afterFunc(closeGrace, func() {
-		r.onChildDone(r.childExit)
-	})
+	r.schedule(closeGrace, func() { r.onChildDone(r.childExit) })
 }
 
-// cleanupResidualThenFinalize handles a dead child whose group still has
-// members: stop them too before publishing terminal state.
-func (r *run) cleanupResidualThenFinalize() {
-	if r.residualCleanup || r.childDone {
+// schedule replaces the pending escalation step with fn after d.
+func (r *run) schedule(d time.Duration, fn func()) {
+	if r.escalationTimer != nil {
+		r.escalationTimer.Stop()
+	}
+	r.escalationTimer = r.afterFunc(d, fn)
+}
+
+// cleanupResidual handles a dead child whose group still has members: stop
+// them too before publishing terminal state. A stop already under way covers
+// them.
+func (r *run) cleanupResidual() {
+	if r.done || r.escalation != notStopping {
 		return
 	}
-	r.residualCleanup = true
-	r.signalTree(syscall.SIGTERM)
-	r.forceKillTimer = r.afterFunc(sigkillAfter, r.forceStopThenFinalize)
+	r.escalate(syscall.SIGTERM)
 }
 
 // onExit is process exit — the JS 'exit' event. Direct-child exit is not
@@ -96,11 +135,11 @@ func (r *run) onExit(res exitResult) {
 	r.waitDone = true
 	if r.term == nil {
 		r.exitFallbackTimer = r.afterFunc(closeGrace, func() {
-			if r.childDone {
+			if r.done {
 				return
 			}
 			if r.groupAlive() {
-				r.cleanupResidualThenFinalize()
+				r.cleanupResidual()
 			} else {
 				r.onChildDone(r.childExit)
 			}
@@ -112,13 +151,11 @@ func (r *run) onExit(res exitResult) {
 // maybeStreamsClosed is the JS 'close' event: process exited and both stream
 // pipes reached EOF (all writers gone).
 func (r *run) maybeStreamsClosed() {
-	if !r.waitDone || !r.stdoutDone || !r.stderrDone || r.childDone {
+	if !r.waitDone || !r.stdoutDone || !r.stderrDone || r.done {
 		return
 	}
 	if r.groupAlive() {
-		if r.term == nil {
-			r.cleanupResidualThenFinalize()
-		}
+		r.cleanupResidual()
 		return
 	}
 	r.onChildDone(r.childExit)
@@ -128,11 +165,11 @@ func (r *run) maybeStreamsClosed() {
 // lock conflict, then requested termination, then unexpected signal, then the
 // provider's own conclusion.
 func (r *run) onChildDone(exit exitResult) {
-	if r.childDone {
+	if r.done {
 		return
 	}
-	r.childDone = true
-	for _, t := range []*time.Timer{r.forceKillTimer, r.exitFallbackTimer, r.forceFinalizeTimer} {
+	r.done = true
+	for _, t := range []*time.Timer{r.escalationTimer, r.exitFallbackTimer} {
 		if t != nil {
 			t.Stop()
 		}
@@ -185,20 +222,9 @@ func (r *run) onChildDone(exit exitResult) {
 // whatever acceptance evidence survives. Never redispatch merely because
 // output was quiet: that is the recovery invariant these messages encode.
 func (r *run) finishAfterStop(exit exitResult) {
-	var stopped string
-	if r.term.kind == "timeout" {
-		stopped = prose.TimedOut(r.opts.TimeoutMin, r.opts.Provider, r.term.stream)
-	} else {
-		sig := r.term.signal
-		if sig == "" {
-			sig = "an external signal"
-		}
-		stopped = fmt.Sprintf("envoy stopped %s after receiving %s.", r.opts.Provider, sig)
-	}
-
-	status := job.StatusInterrupted
-	if r.term.kind == "timeout" {
-		status = job.StatusTimeout
+	status, stopped := job.StatusInterrupted, fmt.Sprintf("envoy stopped %s after receiving %s.", r.opts.Provider, r.term.signal)
+	if r.term.reason == stopTimeout {
+		status, stopped = job.StatusTimeout, prose.TimedOut(r.opts.TimeoutMin, r.opts.Provider, r.term.stream)
 	}
 	r.finish(r.driver.Recovery().Outcome(status, stopped), exit)
 }
