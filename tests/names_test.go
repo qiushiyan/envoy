@@ -428,3 +428,49 @@ func TestARunningJobHoldsItsName(t *testing.T) {
 	mustContain(t, "stderr", held.stderr, "is still running")
 	mustContain(t, "stderr", held.stderr, "nothing was dispatched", "its own caller has collected it")
 }
+
+// An engine whose meta schema moved must not take the store's names hostage.
+// A generation an earlier engine wrote still says whose it is, so a reused
+// name resolves and dispatches as before; the earlier job itself is refused
+// by name when read, never reinterpreted — and since this engine cannot
+// deliver it, it holds no name, even uncollected.
+func TestAnEarlierSchemasJobsLeaveTheirNamesWorking(t *testing.T) {
+	project := t.TempDir()
+	prompt := writePrompt(t, t.TempDir())
+	a := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").as("session-a", "")
+	probe := runEnvoyIn(t, a, project, "run", "probe", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5")
+	if probe.code != 0 {
+		t.Fatalf("probe dispatch = %d\n%s", probe.code, probe.stderr)
+	}
+	store := filepath.Dir(jobLineOf(probe.stdout))
+	earlier := map[string]string{
+		"consult-r1": `{"schemaVersion":9,"status":"ok","provider":"codex","caller":"old-session","collectedAt":"2026-09-01T00:00:00.000Z"}`,
+		"review-r1":  `{"schemaVersion":9,"status":"ok","provider":"codex","collectedAt":null}`,
+	}
+	for name, meta := range earlier {
+		dir := filepath.Join(store, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte(meta), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	r := runEnvoyIn(t, a, project, "run", "consult-r1", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5")
+	if r.code != 0 || jobLineOf(r.stdout) != filepath.Join(store, "consult-r1+2") {
+		t.Fatalf("reusing a name over an earlier engine's job = %d, job %q\n%s", r.code, jobLineOf(r.stdout), r.stderr)
+	}
+	if col := runEnvoyIn(t, a, project, "collect", "--status-only", "consult-r1"); col.code != 0 || jobLineOf(col.stdout) != filepath.Join(store, "consult-r1+2") {
+		t.Fatalf("the name must mean the caller's own new job: %d\n%s%s", col.code, col.stdout, col.stderr)
+	}
+	old := runEnvoyIn(t, a, project, "collect", filepath.Join(store, "consult-r1"))
+	if old.code != 3 {
+		t.Fatalf("an earlier schema's job must be refused when read, got %d\n%s", old.code, old.stdout)
+	}
+	mustContain(t, "stderr", old.stderr, "schema 9")
+
+	if r := runEnvoyIn(t, a.as("", ""), project, "run", "review-r1", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5"); r.code != 0 {
+		t.Fatalf("an earlier schema's uncollected job must not hold its name: %d\n%s", r.code, r.stderr)
+	}
+}

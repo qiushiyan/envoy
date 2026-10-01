@@ -174,6 +174,37 @@ func ReadMeta(dir string) (*Meta, error) {
 	return meta, err
 }
 
+// Stamp is the part of a turn record that naming reads: who dispatched it,
+// and whether it is finished and delivered. No schema change has altered what
+// these fields mean — status and collectedAt since the first schema, caller
+// since it was first recorded (absent before, which reads as no identity) —
+// so a stamp is read from a record of any version. A schema change must
+// never take a store's names hostage; everything else in a record of another
+// version is still refused by name (ReadMeta).
+type Stamp struct {
+	SchemaVersion int     `json:"schemaVersion"`
+	Status        string  `json:"status"`
+	Caller        *string `json:"caller"`
+	CollectedAt   *string `json:"collectedAt"`
+}
+
+// ReadStamp reads the stamp of the turn record in dir, ErrNoRecord when it
+// has none. A record that does not parse is an error, never a blank stamp.
+func ReadStamp(dir string) (*Stamp, error) {
+	data, err := os.ReadFile(Workspace{Dir: dir}.MetaPath())
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, ErrNoRecord
+	}
+	if err != nil {
+		return nil, err
+	}
+	var s Stamp
+	if err := json.Unmarshal(data, &s); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
 // ReadMetaFile parses a meta.json this engine wrote.
 func ReadMetaFile(path string) (*Meta, error) {
 	data, err := os.ReadFile(path)

@@ -91,13 +91,14 @@ func NameHold(dir string) (prose.NameHold, bool) {
 	}
 	mayStillStart := proc.PidLiveness(fan.Group.RunnerPid) != proc.Gone
 	for _, m := range fan.Members {
-		if errors.Is(m.Err, job.ErrNoRecord) {
+		stamp, err := job.ReadStamp(m.Dir)
+		if errors.Is(err, job.ErrNoRecord) {
 			if mayStillStart {
 				return prose.NameHold{Kind: prose.HoldUnrecorded, Member: m.Name}, true
 			}
 			continue
 		}
-		if hold, held := recordHold(m.Meta, m.Err); held {
+		if hold, held := stampHold(stamp, err); held {
 			hold.Member = m.Name
 			return hold, true
 		}
@@ -106,22 +107,26 @@ func NameHold(dir string) (prose.NameHold, bool) {
 }
 
 func turnHold(dir string) (prose.NameHold, bool) {
-	meta, err := job.ReadMeta(dir)
+	stamp, err := job.ReadStamp(dir)
 	if errors.Is(err, job.ErrNoRecord) {
 		entries, err := os.ReadDir(dir)
 		return prose.NameHold{Kind: prose.HoldUnrecorded, Empty: err == nil && len(entries) == 0}, true
 	}
-	return recordHold(meta, err)
+	return stampHold(stamp, err)
 }
 
-// recordHold is the hold a turn record — as read — places on its name.
-func recordHold(meta *job.Meta, err error) (prose.NameHold, bool) {
+// stampHold is the hold a turn record — its stamp, as read — places on its
+// name. A record of another schema version holds nothing: this engine cannot
+// deliver it, so no caller can be waiting to collect it by the name here.
+func stampHold(stamp *job.Stamp, err error) (prose.NameHold, bool) {
 	switch {
 	case err != nil:
 		return prose.NameHold{Kind: prose.HoldUnreadable}, true
-	case meta.Status == job.StatusRunning:
+	case stamp.SchemaVersion != job.MetaSchemaVersion:
+		return prose.NameHold{}, false
+	case stamp.Status == job.StatusRunning:
 		return prose.NameHold{Kind: prose.HoldRunning}, true
-	case meta.CollectedAt == nil:
+	case stamp.CollectedAt == nil:
 		return prose.NameHold{Kind: prose.HoldUncollected}, true
 	}
 	return prose.NameHold{}, false

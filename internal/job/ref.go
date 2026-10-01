@@ -215,14 +215,14 @@ func CallerOf(dir string) (string, error) {
 		}
 		return Deref(g.Caller), nil
 	}
-	m, err := ReadMeta(dir)
+	s, err := ReadStamp(dir)
 	if errors.Is(err, ErrNoRecord) {
 		return "", nil
 	}
 	if err != nil {
 		return "", err
 	}
-	return Deref(m.Caller), nil
+	return Deref(s.Caller), nil
 }
 
 // CallerEnvKeys are the variables a harness exports its session identity in,

@@ -185,8 +185,12 @@ keyed to `--allow-write` is a read-only sandbox by another name.
   error, the remedy and the lock refusal instead — the last with an
   `envoy collect` command inside it, so a verb change would have left every
   stored conflict prescribing a command that no longer existed; schema 10
-  replaced them with what they were worded from. The archive is what was
-  sent: `prompt.md` is written from the one read that feeds the provider's
+  replaced them with what they were worded from. A refused version stays
+  out of naming, though: a name reads only a record's stamp — `caller`,
+  `status`, `collectedAt`, whose meaning no schema change has altered — so
+  a bump never leaves a store's reused names unresolvable, and a record of
+  another version holds no name, since this engine cannot deliver it. The
+  archive is what was sent: `prompt.md` is written from the one read that feeds the provider's
   stdin, never from a second read of the caller's file. A record is also what makes a directory
   a job — `meta.json` for a turn, `group.json` for a fan-out — so discovery
   keys on records and a reserved name released without one was never a job.
