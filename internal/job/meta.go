@@ -27,15 +27,21 @@ type Tokens struct {
 	ReasoningOutput *int64 `json:"reasoningOutput,omitempty"`
 }
 
-// Pairs returns the set fields in display order.
-func (t *Tokens) Pairs() [][2]any {
+// TokenCount is one token field the provider reported.
+type TokenCount struct {
+	Name  string
+	Count int64
+}
+
+// Counts returns the set fields in display order.
+func (t *Tokens) Counts() []TokenCount {
 	if t == nil {
 		return nil
 	}
-	var out [][2]any
-	add := func(k string, v *int64) {
+	var out []TokenCount
+	add := func(name string, v *int64) {
 		if v != nil {
-			out = append(out, [2]any{k, *v})
+			out = append(out, TokenCount{name, *v})
 		}
 	}
 	add("input", t.Input)

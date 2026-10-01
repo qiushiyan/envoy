@@ -123,6 +123,39 @@ func ContextUsage(u *job.Usage) string {
 	return line
 }
 
+// Tokens renders the provider-reported token counts, "n/a" when it reported
+// none.
+func Tokens(t *job.Tokens) string {
+	counts := t.Counts()
+	if len(counts) == 0 {
+		return "n/a"
+	}
+	parts := make([]string, len(counts))
+	for i, c := range counts {
+		parts[i] = c.Name + " " + groupThousands(c.Count)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func groupThousands(n int64) string {
+	s := fmt.Sprintf("%d", n)
+	if len(s) <= 3 {
+		return s
+	}
+	var b strings.Builder
+	lead := len(s) % 3
+	if lead > 0 {
+		b.WriteString(s[:lead])
+	}
+	for i := lead; i < len(s); i += 3 {
+		if b.Len() > 0 {
+			b.WriteString(",")
+		}
+		b.WriteString(s[i : i+3])
+	}
+	return b.String()
+}
+
 func compactTokens(n int64) string {
 	unit, suffix := float64(1), ""
 	switch {
