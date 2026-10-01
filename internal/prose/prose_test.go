@@ -253,10 +253,6 @@ func TestFanNextPrescribesPerMemberRecovery(t *testing.T) {
 	}
 }
 
-// The one case where the prompt-file placeholder closes is a steer supplement.
-// The filled command is rendered from the turn's structured fields, never by
-// editing the placeholder out of a finished string — so a dispatched path that
-// happens to contain the placeholder text cannot collide with the slot.
 // Every refusal of a continuation must carry a runnable next step — the
 // reader is an agent whose next move is a command, not a diagnosis — and may
 // prescribe only what the blocker actually observed: a running job gets

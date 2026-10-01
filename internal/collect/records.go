@@ -202,9 +202,9 @@ func resumeCommand(dir string, meta *job.Meta) string {
 }
 
 // recoveryAction is the prescription for a terminal job that did not
-// deliver, rendered from its records: what the prompt state licenses, the
-// driver's own remedy where it recorded one, and the commands that continue
-// or repeat the dispatch.
+// deliver, rendered from its records: the lock refusal when the session was
+// held, otherwise what the prompt state licenses, the remedy its recorded
+// failure calls for, and the commands that continue or repeat the dispatch.
 func recoveryAction(dir string, meta *job.Meta) string {
 	if meta.SessionLockConflict != nil {
 		return prose.LockedSession(meta.SessionLockConflict, false)

@@ -266,7 +266,8 @@ var ErrJobExists = errors.New("job already exists")
 
 // Reserve creates dir atomically, and an existing directory is an error: the
 // primitive never picks another. Which directory a name's next job gets is
-// decided by the caller of Reserve, from Latest and what holds that one.
+// decided by the caller of Reserve, from Resolve and what holds the job a
+// name means.
 func Reserve(dir string) error {
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 		return err

@@ -17,7 +17,7 @@ import (
 // session, inherit the recorded settings (model, effort, cwd), take the cap
 // from this dispatch (the cap is phase policy), and record where the
 // conversation came from.
-func TestTurnResumeFromContinuesSession(t *testing.T) {
+func TestContinuedVoiceResumesSession(t *testing.T) {
 	e := newEnv(t).
 		set("ENVOY_FAKE_SCENARIO", "success").
 		set("ENVOY_FAKE_SESSION_ID", "sess-consult")
@@ -37,9 +37,9 @@ func TestTurnResumeFromContinuesSession(t *testing.T) {
 	r2 := filepath.Join(t.TempDir(), "review")
 	res = runEnvoy(t, e, "run", r2, "--with", "@"+r1, "--prompt-file", review, "--timeout-min", "7")
 	if res.code != 0 {
-		t.Fatalf("resume-from exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+		t.Fatalf("continued dispatch exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
-	mustContain(t, "resume-from stdout", res.stdout,
+	mustContain(t, "continued dispatch stdout", res.stdout,
 		"resumed-from: "+r1,
 		// Inherited from the records; the cap stays this dispatch's own.
 		"provider: codex · model fake-m · effort high · hard cap 7m",
@@ -119,7 +119,7 @@ func TestContinuationRefusals(t *testing.T) {
 // A mixed roster is one dispatch: the continued voice resumes its recorded
 // session with its recorded settings, the cold voice starts fresh, and the
 // fan-out runs in the continued conversation's tree unless --cwd overrides.
-func TestFanWithFromMixedRoster(t *testing.T) {
+func TestContinuedVoiceBesideAColdVoice(t *testing.T) {
 	e := newEnv(t).
 		set("ENVOY_FAKE_SCENARIO", "success").
 		set("ENVOY_FAKE_SESSION_ID_CODEX", "sess-consult").
@@ -235,7 +235,7 @@ func TestRosterRefusals(t *testing.T) {
 
 // Collect and dispatch share one definition of "this session may continue":
 // while a turn records status running, collect must not advertise the resume
-// command that --resume-from refuses for the same job.
+// command that an @<job> voice refuses for the same job.
 func TestRunningJobIsNotAdvertisedAsContinuable(t *testing.T) {
 	e := newEnv(t)
 	dir := t.TempDir()
@@ -266,7 +266,7 @@ func TestRunningJobIsNotAdvertisedAsContinuable(t *testing.T) {
 // A warm source's recorded baseline is part of the conversation being
 // continued: it inherits like cwd does, and two warm sources that disagree
 // are refused rather than silently anchored to one of them.
-func TestFanWithFromBaselines(t *testing.T) {
+func TestContinuedVoicesInheritBaselines(t *testing.T) {
 	prompt := writePrompt(t, t.TempDir())
 	shared := t.TempDir()
 
@@ -303,7 +303,7 @@ func TestFanWithFromBaselines(t *testing.T) {
 
 // Two continued conversations from different trees cannot share one fan-out
 // silently: the engine will not choose which tree the members run in.
-func TestFanWithFromRefusesMixedTrees(t *testing.T) {
+func TestContinuedVoicesRefuseMixedTrees(t *testing.T) {
 	prompt := writePrompt(t, t.TempDir())
 	cwdA, cwdB := t.TempDir(), t.TempDir()
 
