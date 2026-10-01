@@ -105,19 +105,24 @@ func (g *Group) WriteFile(path string) error {
 // which reads as no identity and no known runner), so a stamp is read from a
 // manifest of any version. The roster is not part of it: its entries changed
 // shape between schemas, so another version's members are found by the
-// records they hold instead (ReadFan).
+// records they hold instead (RecordedMembers).
 type GroupStamp struct {
 	SchemaVersion int     `json:"schemaVersion"`
 	Caller        *string `json:"caller"`
 	RunnerPid     int     `json:"runnerPid"`
 }
 
-// readGroupFile reads a fan-out manifest once. Its stamp comes back from a
-// manifest of any schema version; the rest of it only from this engine's,
-// decoded after the version is known, so another schema's roster is refused
-// as that schema (*SchemaError) and never misread as damage.
-func readGroupFile(path string) (*GroupStamp, *Group, error) {
-	data, err := os.ReadFile(path)
+// ReadGroupRecord reads the fan-out manifest in dir once. Its stamp comes
+// back from a manifest of any schema version; the rest of it only from this
+// engine's, decoded after the version is known, so another schema's roster is
+// refused as that schema (*SchemaError) and never misread as damage.
+// ErrNoRecord when dir has none; any other error with no stamp is a manifest
+// that does not parse — damage, never a blank stamp.
+func ReadGroupRecord(dir string) (*GroupStamp, *Group, error) {
+	data, err := os.ReadFile(GroupWorkspace{Dir: dir}.GroupPath())
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil, ErrNoRecord
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -133,19 +138,6 @@ func readGroupFile(path string) (*GroupStamp, *Group, error) {
 		return &stamp, nil, err
 	}
 	return &stamp, &g, nil
-}
-
-// ReadGroupStamp reads the stamp of the fan-out manifest in dir, from a
-// manifest of any schema version, ErrNoRecord when it has none.
-func ReadGroupStamp(dir string) (*GroupStamp, error) {
-	stamp, _, err := readGroupFile(GroupWorkspace{Dir: dir}.GroupPath())
-	if stamp != nil {
-		return stamp, nil
-	}
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, ErrNoRecord
-	}
-	return nil, err
 }
 
 // GroupWorkspace is one fan-out directory and the fixed names inside it. Each
@@ -185,7 +177,6 @@ func HasRecord(dir string) bool {
 // member was meant to run, so a member that never wrote a record is still
 // here, carrying ErrNoRecord.
 type Fan struct {
-	Stamp   *GroupStamp
 	Group   *Group
 	Members []Member
 }
@@ -201,42 +192,35 @@ type Member struct {
 	Err   error
 }
 
-// ReadFan reads the fan-out in dir, ErrNoRecord when it holds no group.json.
-//
-// A manifest of another schema version comes back as a partial fan with its
-// *SchemaError: the stamp, no Group, and as Members the subdirectories that
-// hold a turn record — found the way discovery finds jobs in a store, since
-// that roster is not this engine's to read. A member that never wrote a
-// record is invisible there; only a roster could name it.
+// ReadFan reads the fan-out in dir as this engine's schema: ErrNoRecord when
+// it holds no group.json, and a manifest of another version refused as a
+// *SchemaError.
 func ReadFan(dir string) (*Fan, error) {
-	gw := GroupWorkspace{Dir: dir}
-	stamp, group, err := readGroupFile(gw.GroupPath())
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, ErrNoRecord
-	}
-	var other *SchemaError
-	if errors.As(err, &other) {
-		members, lerr := recordedMembers(dir)
-		if lerr != nil {
-			return nil, lerr
-		}
-		return &Fan{Stamp: stamp, Members: members}, err
-	}
+	_, group, err := ReadGroupRecord(dir)
 	if err != nil {
 		return nil, err
 	}
-	fan := &Fan{Stamp: stamp, Group: group, Members: make([]Member, len(group.Members))}
-	for i, name := range group.Members {
-		m := Member{Name: name, Dir: gw.Member(name).Dir}
-		m.Stamp, m.Meta, m.Err = ReadRecord(m.Dir)
-		fan.Members[i] = m
-	}
-	return fan, nil
+	return &Fan{Group: group, Members: ReadMembers(dir, group)}, nil
 }
 
-// recordedMembers lists the subdirectories of a fan-out that hold a turn
-// record, each read once, in name order.
-func recordedMembers(dir string) ([]Member, error) {
+// ReadMembers reads every member group's roster names, in roster order, each
+// member's record read once.
+func ReadMembers(dir string, group *Group) []Member {
+	members := make([]Member, len(group.Members))
+	for i, name := range group.Members {
+		m := Member{Name: name, Dir: GroupWorkspace{Dir: dir}.Member(name).Dir}
+		m.Stamp, m.Meta, m.Err = ReadRecord(m.Dir)
+		members[i] = m
+	}
+	return members
+}
+
+// RecordedMembers lists the members of a fan-out whose roster this engine
+// cannot read — another schema's — as the subdirectories holding a turn
+// record, found the way discovery finds jobs in a store, each read once, in
+// name order. A member that never wrote a record is invisible here; only a
+// roster could name it.
+func RecordedMembers(dir string) ([]Member, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err

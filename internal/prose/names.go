@@ -61,6 +61,10 @@ const (
 	HoldUncollected NameHoldKind = "uncollected"
 	HoldUnrecorded  NameHoldKind = "unrecorded"
 	HoldUnreadable  NameHoldKind = "unreadable"
+	// HoldOtherVersion is a job another envoy version is still running. It
+	// holds only while that run lasts: this version cannot collect it, so no
+	// collect is what releases it.
+	HoldOtherVersion NameHoldKind = "other-version"
 )
 
 // NameHold is what internal/collect observed holding a name: why, through
@@ -93,6 +97,9 @@ func NameHeld(name, dir string, hold NameHold) string {
 	case HoldRunning:
 		state = "is still running"
 		release = earlier + " The name frees once that job has finished and its own caller has collected it."
+	case HoldOtherVersion:
+		state = "is still running under another envoy version"
+		release = " The name frees once the envoy process running it has exited; this envoy version cannot collect it."
 	case HoldUncollected:
 		state = "finished but has not been collected"
 		release = earlier + " If that job is yours or its caller is gone, collecting it frees the name: " + CollectCommand(dir)

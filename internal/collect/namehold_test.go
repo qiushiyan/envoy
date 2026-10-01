@@ -66,6 +66,21 @@ func writeOtherGroup(t *testing.T, dir string, runnerPid int) {
 	}
 }
 
+// Another version's fan-out holds or releases its name on its stamp alone:
+// what its directory lists is no part of that decision, so a directory that
+// cannot be listed releases a name its stamp releases.
+func TestAnotherSchemasFanOutHoldsOnItsStampAlone(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "job")
+	writeOtherGroup(t, dir, 0)
+	if err := os.Chmod(dir, 0o300); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	if hold, held := NameHold(dir); held {
+		t.Fatalf("NameHold = %+v; a stamp recording no runner holds nothing, listable or not", hold)
+	}
+}
+
 // A name is released by delivery and by nothing else: not by success, not by
 // the first member being done, and never by a record that is missing or
 // unreadable where one could still appear.
@@ -130,7 +145,12 @@ func TestNameHoldClassifiesWhatStillHoldsAName(t *testing.T) {
 		// this engine can deliver nothing under the name.
 		{"another schema's fan-out, its runner alive", func(d string) {
 			writeOtherGroup(t, d, os.Getpid())
-		}, prose.NameHold{Kind: prose.HoldRunning}, true},
+		}, prose.NameHold{Kind: prose.HoldOtherVersion}, true},
+		{"another schema's turn, its runner alive", func(d string) {
+			os.MkdirAll(d, 0o755)
+			meta := fmt.Sprintf(`{"schemaVersion":9,"status":"running","provider":"codex","runnerPid":%d}`, os.Getpid())
+			os.WriteFile(filepath.Join(d, "meta.json"), []byte(meta), 0o644)
+		}, prose.NameHold{Kind: prose.HoldOtherVersion}, true},
 		{"another schema's fan-out, its runner gone", func(d string) {
 			writeOtherGroup(t, d, gone)
 			writeTurn(t, filepath.Join(d, "codex"), "ok", false)

@@ -481,7 +481,7 @@ func TestAnEarlierSchemasJobsLeaveTheirNamesWorking(t *testing.T) {
 			t.Fatal(err)
 		}
 		collected := `"2026-09-01T00:00:00.000Z"`
-		if name == "owed-fan" {
+		if name != "fan-r1" {
 			collected = "null"
 		}
 		meta := fmt.Sprintf(`{"schemaVersion":9,"status":"ok","provider":"codex","collectedAt":%s}`, collected)
@@ -536,7 +536,10 @@ func TestAnEarlierSchemasJobsLeaveTheirNamesWorking(t *testing.T) {
 	if r := runEnvoyIn(t, a, project, "run", "live-fan", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5"); r.code != 3 {
 		t.Fatalf("another engine's live fan-out must hold its name: %d\n%s", r.code, r.stdout)
 	} else {
-		mustContain(t, "stderr", r.stderr, "is still running")
+		// This engine cannot collect another version's job, so collecting is
+		// never what the refusal says frees the name.
+		mustContain(t, "stderr", r.stderr, "still running under another envoy version", "this envoy version cannot collect it")
+		mustNotContain(t, "stderr", r.stderr, "its own caller has collected it")
 	}
 	oldFan := runEnvoyIn(t, a, project, "collect", filepath.Join(store, "fan-r1"))
 	if oldFan.code != 3 {
@@ -551,7 +554,8 @@ func TestAnEarlierSchemasJobsLeaveTheirNamesWorking(t *testing.T) {
 	pend := runEnvoyIn(t, a, project, "pending")
 	mustContain(t, "pending", pend.stdout, "[other-schema] "+filepath.Join(store, "review-r1")+"\n", "schema 9",
 		"[other-schema] "+filepath.Join(store, "dead-r1")+"\n", "[other-schema] "+filepath.Join(store, "locked-r1")+"\n",
-		"[other-schema] "+filepath.Join(store, "owed-fan")+"\n", "group.json is schema 1")
+		"[other-schema] "+filepath.Join(store, "owed-fan")+"\n", "group.json is schema 1",
+		"next: read each member's result.md and meta.json under "+filepath.Join(store, "owed-fan")+" directly, or collect it with the envoy version that wrote it\n")
 	mustNotContain(t, "pending", pend.stdout, filepath.Join(store, "consult-r1")+"\n", filepath.Join(store, "live-r1")+"\n",
 		filepath.Join(store, "fan-r1")+"\n", filepath.Join(store, "live-fan")+"\n", "corrupt", "damaged")
 }

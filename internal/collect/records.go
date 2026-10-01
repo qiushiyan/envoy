@@ -85,16 +85,16 @@ func NameHold(dir string) (prose.NameHold, bool) {
 	if !job.IsGroupDir(dir) {
 		return turnHold(dir)
 	}
-	fan, err := job.ReadFan(dir)
+	stamp, group, err := job.ReadGroupRecord(dir)
 	var other *job.SchemaError
 	switch {
 	case errors.As(err, &other):
-		return otherFanHold(fan.Stamp)
+		return otherFanHold(stamp)
 	case err != nil:
 		return prose.NameHold{Kind: prose.HoldUnreadable}, true
 	}
-	mayStillStart := proc.PidLiveness(fan.Group.RunnerPid) != proc.Gone
-	for _, m := range fan.Members {
+	mayStillStart := proc.PidLiveness(group.RunnerPid) != proc.Gone
+	for _, m := range job.ReadMembers(dir, group) {
 		if errors.Is(m.Err, job.ErrNoRecord) {
 			if mayStillStart {
 				return prose.NameHold{Kind: prose.HoldUnrecorded, Member: m.Name}, true
@@ -110,14 +110,14 @@ func NameHold(dir string) (prose.NameHold, bool) {
 }
 
 // otherFanHold is the hold another schema version's fan-out places on its
-// name: like another version's turn, it holds only while its own engine may
-// still be running it — the runner its stamp records, not provably gone. This
-// engine can deliver nothing under that name, so a hold past the runner would
-// strand it for good, and a manifest that records no runner gives this engine
-// nothing to wait on.
+// name, decided from its stamp alone: like another version's turn, it holds
+// only while its own engine may still be running it — the runner its stamp
+// records, not provably gone. This engine can deliver nothing under that
+// name, so a hold past the runner would strand it for good, and a manifest
+// that records no runner gives this engine nothing to wait on.
 func otherFanHold(stamp *job.GroupStamp) (prose.NameHold, bool) {
 	if stamp.RunnerPid > 0 && proc.PidLiveness(stamp.RunnerPid) != proc.Gone {
-		return prose.NameHold{Kind: prose.HoldRunning}, true
+		return prose.NameHold{Kind: prose.HoldOtherVersion}, true
 	}
 	return prose.NameHold{}, false
 }
@@ -146,7 +146,7 @@ func stampHold(stamp *job.Stamp) (prose.NameHold, bool) {
 		return prose.NameHold{Kind: prose.HoldUnreadable}, true
 	case stamp.SchemaVersion != job.MetaSchemaVersion:
 		if stamp.Status == job.StatusRunning && proc.PidLiveness(stamp.RunnerPid) != proc.Gone {
-			return prose.NameHold{Kind: prose.HoldRunning}, true
+			return prose.NameHold{Kind: prose.HoldOtherVersion}, true
 		}
 		return prose.NameHold{}, false
 	case stamp.Status == job.StatusRunning:

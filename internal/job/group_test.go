@@ -80,9 +80,10 @@ func TestGroupManifestIsARosterOnly(t *testing.T) {
 
 // Another version's manifest is refused, but its stamp is not: who
 // dispatched it and the runner supervising it mean what they always have, so
-// naming reads them from any version. Its roster changed shape between
-// schemas and is never read; the members are the subdirectories that hold a
-// record, as the jobs in a store are.
+// naming reads them from any version — and from a manifest of this version
+// whose roster is damaged, as a turn's stamp is read past its damage. The
+// roster changed shape between schemas and is never read; another version's
+// members are the subdirectories that hold a record, as a store's jobs are.
 func TestAnotherSchemasFanOutKeepsItsStamp(t *testing.T) {
 	dir := t.TempDir()
 	gw := GroupWorkspace{Dir: dir}
@@ -100,16 +101,31 @@ func TestAnotherSchemasFanOutKeepsItsStamp(t *testing.T) {
 	if caller, err := CallerOf(dir); err != nil || caller != "session-a" {
 		t.Fatalf("CallerOf = %q, %v; want the stamp's caller", caller, err)
 	}
-	fan, err := ReadFan(dir)
+	stamp, group, err := ReadGroupRecord(dir)
 	var other *SchemaError
 	if !errors.As(err, &other) || other.Record != "group.json" || other.Version != 1 || other.Reads != GroupSchemaVersion {
-		t.Fatalf("ReadFan err = %v, want group.json's *SchemaError", err)
+		t.Fatalf("ReadGroupRecord err = %v, want group.json's *SchemaError", err)
 	}
-	if fan == nil || fan.Group != nil || fan.Stamp.RunnerPid != 42 {
-		t.Fatalf("fan = %+v, want the stamp and no roster", fan)
+	if stamp == nil || stamp.RunnerPid != 42 || group != nil {
+		t.Fatalf("ReadGroupRecord = %+v, %+v; want the stamp and no roster", stamp, group)
 	}
-	if len(fan.Members) != 1 || fan.Members[0].Name != "codex" || fan.Members[0].Stamp.CollectedAt != nil {
-		t.Fatalf("members = %+v, want codex found by its record", fan.Members)
+	if fan, err := ReadFan(dir); fan != nil || !errors.As(err, &other) {
+		t.Fatalf("ReadFan = %+v, %v; another version's fan-out is refused whole", fan, err)
+	}
+	members, err := RecordedMembers(dir)
+	if err != nil || len(members) != 1 || members[0].Name != "codex" || members[0].Stamp.CollectedAt != nil {
+		t.Fatalf("RecordedMembers = %+v, %v; want codex found by its record", members, err)
+	}
+
+	damaged := `{"schemaVersion":2,"caller":"session-b","members":5}`
+	if err := os.WriteFile(gw.GroupPath(), []byte(damaged), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if caller, err := CallerOf(dir); err != nil || caller != "session-b" {
+		t.Fatalf("CallerOf over a damaged roster = %q, %v; want the stamp's caller", caller, err)
+	}
+	if _, err := ReadFan(dir); err == nil {
+		t.Fatal("a damaged roster must not read as a fan-out")
 	}
 }
 

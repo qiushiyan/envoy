@@ -109,17 +109,18 @@ func pendingTurn(dir string, stamp *job.Stamp, meta *job.Meta, err error) (pendi
 // why; the prescription for each of them is per member, and printing it is
 // collect's job, not the index's.
 func pendingGroup(dir string) (pendingItem, bool) {
-	fan, err := job.ReadFan(dir)
+	stamp, group, err := job.ReadGroupRecord(dir)
 	var other *job.SchemaError
 	switch {
 	case errors.As(err, &other):
-		return pendingOtherFan(dir, fan, other)
+		return pendingOtherFan(dir, stamp, other)
 	case err != nil:
 		return pendingItem{label: "corrupt", dir: dir,
 			why: prose.PendingUnreadable("group.json", err), next: prose.PendingUnreadableNext(dir)}, true
 	}
+	members := job.ReadMembers(dir, group)
 	var reasons []string
-	for _, m := range fan.Members {
+	for _, m := range members {
 		// A member the roster names but that never wrote a record is the one
 		// case the member's own files cannot report; the roster is the only
 		// evidence it was meant to run, so the group carries it.
@@ -135,22 +136,28 @@ func pendingGroup(dir string) (pendingItem, bool) {
 		return pendingItem{}, false
 	}
 	return pendingItem{label: "group", dir: dir,
-		why: prose.PendingMembers(reasons, len(fan.Members)), next: prose.CollectCommand(dir)}, true
+		why: prose.PendingMembers(reasons, len(members)), next: prose.CollectCommand(dir)}, true
 }
 
 // pendingOtherFan classifies another engine version's fan-out, which is not
 // damage either. Its stamp says whether its own engine is provably still
 // running it — skipped then, like any live job — and past that, the stamps of
-// the members its directory holds records for say whether anything is owed.
-// This engine reads no further, so the entry names the files, not a member.
-func pendingOtherFan(dir string, fan *job.Fan, other *job.SchemaError) (pendingItem, bool) {
-	if proc.PidLiveness(fan.Stamp.RunnerPid) == proc.Live {
+// the members its directory holds records for say whether anything is owed;
+// a directory that cannot be listed cannot show that nothing is. This engine
+// reads no further, so the entry names the files, not a member.
+func pendingOtherFan(dir string, stamp *job.GroupStamp, other *job.SchemaError) (pendingItem, bool) {
+	if proc.PidLiveness(stamp.RunnerPid) == proc.Live {
 		return pendingItem{}, false
 	}
-	for _, m := range fan.Members {
+	item := pendingItem{label: "other-schema", dir: dir,
+		why: prose.PendingOtherSchema(other.Record, other.Version, other.Reads), next: prose.PendingOtherSchemaFanNext(dir)}
+	members, err := job.RecordedMembers(dir)
+	if err != nil {
+		return item, true
+	}
+	for _, m := range members {
 		if _, owed := pendingTurn(m.Dir, m.Stamp, m.Meta, m.Err); owed {
-			return pendingItem{label: "other-schema", dir: dir,
-				why: prose.PendingOtherSchema(other.Record, other.Version, other.Reads), next: prose.PendingOtherSchemaFanNext(dir)}, true
+			return item, true
 		}
 	}
 	return pendingItem{}, false
