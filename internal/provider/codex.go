@@ -19,7 +19,8 @@ type codex struct {
 	sessionID     string // learned from thread.started on a fresh thread
 	threadStarted bool
 	finalText     *string
-	failedText    *string // turn.failed's message: the provider's own verdict
+	failed        bool    // turn.failed arrived: the provider's own verdict
+	failedText    *string // its message, when it gave one
 	lastErrorText *string // the latest transient `error` event; detail, never a verdict
 	tokens        *job.Tokens
 }
@@ -126,13 +127,10 @@ func (c *codex) Feed(line string) []Event {
 		}
 		events = append(events, Event{Kind: KindTerminal, Terminal: "codex turn.completed"})
 	case "turn.failed":
-		message := "turn failed"
+		c.failed = true
 		if errObj, ok := event["error"].(map[string]any); ok {
-			if m := str(errObj, "message"); m != "" {
-				message = m
-			}
+			c.failedText = job.PtrIfNonEmpty(str(errObj, "message"))
 		}
-		c.failedText = job.Ptr(message)
 		events = append(events, Event{Kind: KindTerminal, Terminal: "codex turn.failed"})
 	case "error":
 		// A bare `error` event is transient: codex emits one per reconnect
@@ -180,7 +178,7 @@ func (c *codex) Recovery() Evidence {
 
 func (c *codex) Conclude(exit ExitInfo) Outcome {
 	ev := c.Recovery()
-	if c.failedText != nil {
+	if c.failed {
 		return ev.Outcome(job.StatusFailed, job.Failure{Cause: job.CauseProviderVerdict, Message: c.failedText})
 	}
 	if ev.Partial == nil {

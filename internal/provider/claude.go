@@ -203,7 +203,7 @@ func (c *claude) recovery(parsed claudeParse) Evidence {
 		envelopePartial = job.Ptr(parsed.partial)
 	}
 	if transcript != nil {
-		transcriptPartial = job.Ptr(transcript.partial)
+		transcriptPartial = job.Ptr(joinReplies(transcript.replies, exclude))
 	}
 	ev.Partial = firstText(envelopePartial, job.Ptr(joinReplies(c.replies, exclude)), transcriptPartial)
 	if parsed.kind != envelopeMissing {
@@ -250,8 +250,8 @@ func (c *claude) Conclude(exit ExitInfo) Outcome {
 			SessionID:   parsed.sessionID,
 		}
 	default: // envelopeFailed
-		out := c.recovery(parsed).Outcome(job.StatusFailed,
-			job.Failure{Cause: job.CauseProviderVerdict, Message: job.Ptr(parsed.errorText)})
+		out := c.recovery(parsed).Outcome(job.StatusFailed, job.Failure{Cause: job.CauseProviderVerdict,
+			Message: job.PtrIfNonEmpty(parsed.errorText), Code: job.PtrIfNonEmpty(parsed.subtype)})
 		out.SessionID = parsed.sessionID
 		return out
 	}
@@ -279,7 +279,8 @@ type claudeParse struct {
 	costUSD   *float64
 	tokens    *job.Tokens
 	text      string
-	errorText string
+	errorText string // the provider's own words for a failure, "" when it gave none
+	subtype   string
 	partial   string
 }
 
@@ -307,6 +308,7 @@ func (c *claude) parse() claudeParse {
 	}
 
 	subtype := str(envelope, "subtype")
+	out.subtype = subtype
 	if subtype == "error_max_budget_usd" {
 		out.kind = envelopeBudget
 		out.partial = joinReplies(c.replies, "")
@@ -323,8 +325,6 @@ func (c *claude) parse() claudeParse {
 				parts = append(parts, fmt.Sprint(e))
 			}
 			out.errorText = strings.Join(parts, " | ")
-		} else {
-			out.errorText = fmt.Sprintf("turn failed (%s)", subtype)
 		}
 		// Recover real partial work; exclude the trailing assistant block that
 		// just echoes the error itself.
@@ -377,7 +377,7 @@ func joinReplies(replies [][]string, exclude string) string {
 
 type transcriptResult struct {
 	accepted bool
-	partial  string
+	replies  [][]string // each assistant message's text blocks, as the stream's are kept
 }
 
 var safeSessionID = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -460,7 +460,6 @@ func claudeTranscript(sessionID string, since time.Time) *transcriptResult {
 		}
 	}
 
-	var replies [][]string
 	result := &transcriptResult{}
 	for raw := range strings.SplitSeq(text, "\n") {
 		if !strings.HasPrefix(strings.TrimSpace(raw), "{") {
@@ -480,10 +479,9 @@ func claudeTranscript(sessionID string, since time.Time) *transcriptResult {
 		}
 		result.accepted = true
 		if blocks := replyText(record); typ == "assistant" && len(blocks) > 0 {
-			replies = append(replies, blocks)
+			result.replies = append(result.replies, blocks)
 		}
 	}
-	result.partial = joinReplies(replies, "")
 	return result
 }
 

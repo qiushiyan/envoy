@@ -12,8 +12,11 @@ package job
 type Failure struct {
 	Cause string `json:"cause"`
 	// Message is the provider's own failure verdict, or the error that
-	// stopped a spawn.
+	// stopped a spawn; absent when the provider gave no words.
 	Message *string `json:"message,omitempty"`
+	// Code is the provider's own name for its verdict, where it gives one
+	// (claude's result subtype).
+	Code *string `json:"code,omitempty"`
 	// StderrTail is the last few non-empty lines of the command's stderr, for
 	// an exit that left no result.
 	StderrTail []string `json:"stderrTail,omitempty"`

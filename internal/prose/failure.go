@@ -23,7 +23,7 @@ func Failure(m *job.Meta) string {
 		// The one failure where re-sending the same prompt is provably safe.
 		return fmt.Sprintf("envoy could not start %s: %s", command(m), job.Deref(f.Message))
 	case job.CauseProviderVerdict:
-		return fmt.Sprintf("%s reported a provider failure: %s", provider, job.Deref(f.Message))
+		return fmt.Sprintf("%s reported a provider failure: %s", provider, verdict(f))
 	case job.CauseBudgetCap:
 		budget := 0.0
 		if m.MaxBudgetUSD != nil {
@@ -57,6 +57,18 @@ func Failure(m *job.Meta) string {
 	default:
 		return fmt.Sprintf("This turn did not deliver (recorded cause %q).", f.Cause)
 	}
+}
+
+// verdict is the provider's own words for a failure, or — when it gave none
+// — that the turn failed, with the provider's code for it where there is one.
+func verdict(f *job.Failure) string {
+	switch {
+	case f.Message != nil:
+		return *f.Message
+	case f.Code != nil:
+		return fmt.Sprintf("turn failed (%s)", *f.Code)
+	}
+	return "turn failed"
 }
 
 // remedy is the fix a cause demands before any recovery, "" when it needs

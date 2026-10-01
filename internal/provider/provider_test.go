@@ -1,6 +1,9 @@
 package provider
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -181,6 +184,92 @@ func TestClaudeFailureExcludesErrorEcho(t *testing.T) {
 	}
 	if out.Partial == nil || *out.Partial != "real partial work" {
 		t.Fatalf("partial must keep real work and drop the error echo, got %v", out.Partial)
+	}
+}
+
+// The echo is left out of every source work is recovered from: a failed turn
+// whose only assistant text repeats the error recovered nothing, whether the
+// stream or the session transcript holds that text, and work the transcript
+// keeps beside the echo is recovered without it.
+func TestClaudeFailureExcludesErrorEchoFromTheTranscript(t *testing.T) {
+	cases := []struct {
+		name       string
+		transcript []string
+		want       string
+	}{
+		{"echo only", []string{"boom"}, ""},
+		{"work beside the echo", []string{"real work", "boom"}, "real work"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			config := t.TempDir()
+			t.Setenv("CLAUDE_CONFIG_DIR", config)
+			writeClaudeTranscript(t, config, "s1", tc.transcript...)
+			c := newClaude(Options{}, time.Now().Add(-time.Minute))
+			c.Feed(`{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s1","errors":["boom"]}`)
+
+			out := c.Conclude(ExitInfo{Code: job.Ptr(1)})
+			if got := job.Deref(out.Partial); got != tc.want {
+				t.Fatalf("partial = %q, want %q", got, tc.want)
+			}
+			if out.PromptState != job.PromptAccepted || out.Evidence != "claude session transcript" {
+				t.Fatalf("the transcript proves acceptance whatever text survives: %s by %q", out.PromptState, out.Evidence)
+			}
+		})
+	}
+}
+
+// Recovered work keeps every assistant message as its own paragraph, with
+// one message's text blocks run together as the provider split them.
+func TestClaudeRecoversWorkAcrossMessages(t *testing.T) {
+	c := newClaude(Options{}, time.Now())
+	c.Feed(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"first"}]}}`)
+	c.Feed(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"second "},{"type":"tool_use","name":"Read"},{"type":"text","text":"half"}]}}`)
+	c.Feed(`{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s1","errors":["boom"]}`)
+
+	out := c.Conclude(ExitInfo{Code: job.Ptr(1)})
+	if got := job.Deref(out.Partial); got != "first\n\nsecond half" {
+		t.Fatalf("partial = %q", got)
+	}
+}
+
+// A verdict the provider gave no words for is recorded as exactly that: the
+// provider's own code where it gave one, and no message the engine made up.
+func TestAVerdictWithoutWordsRecordsNoMessage(t *testing.T) {
+	c := newClaude(Options{}, time.Now())
+	c.Feed(`{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s1"}`)
+	if f := c.Conclude(ExitInfo{Code: job.Ptr(1)}).Failure; f.Cause != job.CauseProviderVerdict || f.Message != nil ||
+		job.Deref(f.Code) != "error_during_execution" {
+		t.Fatalf("claude failure = %+v", f)
+	}
+
+	x := newCodex(Options{}, job.Workspace{Dir: t.TempDir()})
+	x.Feed(`{"type":"thread.started","thread_id":"tid"}`)
+	x.Feed(`{"type":"turn.failed"}`)
+	if f := x.Conclude(ExitInfo{Code: job.Ptr(1)}).Failure; f.Cause != job.CauseProviderVerdict || f.Message != nil {
+		t.Fatalf("codex failure = %+v", f)
+	}
+}
+
+// writeClaudeTranscript writes a session transcript under config holding one
+// assistant message per text, stamped now.
+func writeClaudeTranscript(t *testing.T, config, sessionID string, texts ...string) {
+	t.Helper()
+	dir := filepath.Join(config, "projects", "-tmp-project")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, text := range texts {
+		record, _ := json.Marshal(map[string]any{
+			"type":      "assistant",
+			"timestamp": time.Now().Format(time.RFC3339),
+			"message":   map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": text}}},
+		})
+		lines = append(lines, string(record))
+	}
+	if err := os.WriteFile(filepath.Join(dir, sessionID+".jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
