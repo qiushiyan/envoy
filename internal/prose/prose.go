@@ -39,9 +39,9 @@ func ContinueCommand(dir string, timeoutMin float64) string {
 		jobPlaceholder, text.ShellQuote(dir), timeoutMin, promptPlaceholder)
 }
 
-// Voice spells a member the way a caller types it: provider[:model[:effort]].
+// voiceSpec spells a member the way a caller types it: provider[:model[:effort]].
 // An effort without a model keeps the middle slot empty (codex::high).
-func Voice(provider, model, effort string) string {
+func voiceSpec(provider, model, effort string) string {
 	switch {
 	case effort != "":
 		return provider + ":" + model + ":" + effort
@@ -61,7 +61,7 @@ func Voice(provider, model, effort string) string {
 // The new dispatch reads its own environment, including the launcher prefix;
 // CommandPrefix is an observation, not a setting this command replays.
 func RedispatchCommand(dir string, m *job.Meta) string {
-	voice := Voice(m.Provider, job.Deref(m.Model), job.Deref(m.Effort))
+	voice := voiceSpec(m.Provider, job.Deref(m.Model), job.Deref(m.Effort))
 	if m.ResumedFrom != nil {
 		voice = "@" + text.ShellQuote(*m.ResumedFrom)
 	}
@@ -328,9 +328,9 @@ func LockedSession(detail string, providerAlive bool) string {
 		"two live turns on one conversation corrupt it.", strings.TrimRight(detail, ". \t\n"), warning)
 }
 
-// StatusGloss says what a terminal status rules in or out, so the caller need
+// statusGloss says what a terminal status rules in or out, so the caller need
 // not carry envoy's status table to act on one word.
-func StatusGloss(status string) string {
+func statusGloss(status string) string {
 	switch status {
 	case job.StatusOK:
 		return ""
@@ -351,7 +351,7 @@ func StatusGloss(status string) string {
 
 // StatusLine renders a status with its gloss.
 func StatusLine(status string) string {
-	if gloss := StatusGloss(status); gloss != "" {
+	if gloss := statusGloss(status); gloss != "" {
 		return fmt.Sprintf("%s — %s", status, gloss)
 	}
 	return status
@@ -722,11 +722,13 @@ func BaselineMix(firstDir, firstBaseline, secondDir, secondBaseline string) stri
 
 // Fan-out aggregate statuses. Only "ok" is shared with a single turn; the
 // others describe a set, and none of them replaces a member's own status.
+// FanOK alone is exported: whether every member returned a result is the one
+// aggregate collect tests for.
 const (
-	FanRunning  = "running"
+	fanRunning  = "running"
 	FanOK       = "ok"
-	FanPartial  = "partial"
-	FanNoResult = "no-result"
+	fanPartial  = "partial"
+	fanNoResult = "no-result"
 )
 
 // fanTally counts what a set of member statuses contains. A member that never
@@ -748,13 +750,13 @@ func FanStatus(statuses []string) string {
 	ok, running, total := fanTally(statuses)
 	switch {
 	case running > 0:
-		return FanRunning
+		return fanRunning
 	case total > 0 && ok == total:
 		return FanOK
 	case ok > 0:
-		return FanPartial
+		return fanPartial
 	default:
-		return FanNoResult
+		return fanNoResult
 	}
 }
 
@@ -763,12 +765,12 @@ func FanStatus(statuses []string) string {
 func FanStatusLine(statuses []string) string {
 	ok, running, total := fanTally(statuses)
 	switch FanStatus(statuses) {
-	case FanRunning:
+	case fanRunning:
 		return fmt.Sprintf("running — %d of %s have not finished, so nothing here is final yet",
 			running, turnCount(total))
 	case FanOK:
 		return fmt.Sprintf("ok — all %s returned a result", turnCount(total))
-	case FanPartial:
+	case fanPartial:
 		return fmt.Sprintf("partial — %d of %s returned a result; the rest each carry their own status and next action below",
 			ok, turnCount(total))
 	default:
@@ -828,7 +830,7 @@ func FanNext(groupDir string, statuses []string) string {
 	switch FanStatus(statuses) {
 	case FanOK:
 		return collect + " — it prints every member's result in one block."
-	case FanPartial:
+	case fanPartial:
 		return collect + " — the members that returned a result are usable as they are, and each member that did not " +
 			"carries its own next action in its section. One member's outcome licenses nothing about another: " +
 			"re-dispatch or resume per member, never the whole fan-out."
@@ -843,12 +845,12 @@ func FanNext(groupDir string, statuses []string) string {
 // payload the way CollectedOK does for a single turn.
 func FanCollected(groupDir string, statuses []string) string {
 	switch FanStatus(statuses) {
-	case FanRunning:
+	case fanRunning:
 		return "This fan-out has members still running, so the sections above are not final. Wait for its process to exit, " +
 			"then collect it again: " + CollectCommand(groupDir) + "."
 	case FanOK:
 		return "the member results above are this fan-out's return value — use them in the step that dispatched it."
-	case FanPartial:
+	case fanPartial:
 		return "the member results above are usable as they are. Each member that returned none carries its own next " +
 			"action in its section — act on it per member; the members that succeeded need nothing."
 	default:

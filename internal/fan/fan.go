@@ -17,8 +17,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"regexp"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -201,32 +199,6 @@ func printTerminalBlock(opts Options, outcomes []outcome, statuses []string) {
 	}
 	fmt.Fprintf(w, "group: %s\n", job.GroupWorkspace{Dir: opts.OutDir}.GroupPath())
 	fmt.Fprintf(w, "next: %s\n", prose.FanNext(opts.OutDir, statuses))
-}
-
-// memberNameUnsafe is the member-name rule: lowercase, path-safe, and free of
-// leading or trailing separators, because the name is both a directory and the
-// label every group line uses for that member.
-var memberNameUnsafe = regexp.MustCompile(`[^a-z0-9._-]+`)
-
-// Name allocates a member's address from its base — the provider plus the
-// model when one was named, or a preset name carried over from an earlier
-// round — against the addresses already taken. A repeat is numbered, and the
-// numbered form is checked against the taken set too: a base that happens to
-// spell a sibling's numbered name must not land on that sibling's directory.
-func Name(base string, taken map[string]bool) string {
-	base = strings.Trim(memberNameUnsafe.ReplaceAllString(strings.ToLower(base), "-"), "-")
-	if base == "" {
-		base = "member"
-	}
-	if len(base) > 40 {
-		base = base[:40]
-	}
-	name := base
-	for n := 2; taken[name]; n++ {
-		name = fmt.Sprintf("%s-%d", base, n)
-	}
-	taken[name] = true
-	return name
 }
 
 // prefixWriter labels one member's warnings on the shared stderr and

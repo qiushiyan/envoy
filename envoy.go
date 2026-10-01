@@ -15,6 +15,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/qiushiyan/envoy/internal/collect"
@@ -407,7 +408,7 @@ func resolveTurns(req RunRequest, invocationCwd, caller string, timeoutMin float
 	turns := make([]fan.Turn, len(voices))
 	for i, v := range voices {
 		turns[i] = fan.Turn{
-			Name: fan.Name(v.base, taken),
+			Name: memberName(v.base, taken),
 			Options: runner.Options{
 				Provider:    v.provider,
 				PromptFile:  v.promptFile,
@@ -569,6 +570,32 @@ func voiceBase(providerName, model string) string {
 		return providerName + "-" + model
 	}
 	return providerName
+}
+
+// memberNameUnsafe is the member-name rule: lowercase, path-safe, and free of
+// leading or trailing separators, because the name is both a directory and the
+// label every group line uses for that member.
+var memberNameUnsafe = regexp.MustCompile(`[^a-z0-9._-]+`)
+
+// memberName allocates a member's address from its base — the provider plus the
+// model when one was named, or a preset name carried over from an earlier
+// round — against the addresses already taken. A repeat is numbered, and the
+// numbered form is checked against the taken set too: a base that happens to
+// spell a sibling's numbered name must not land on that sibling's directory.
+func memberName(base string, taken map[string]bool) string {
+	base = strings.Trim(memberNameUnsafe.ReplaceAllString(strings.ToLower(base), "-"), "-")
+	if base == "" {
+		base = "member"
+	}
+	if len(base) > 40 {
+		base = base[:40]
+	}
+	name := base
+	for n := 2; taken[name]; n++ {
+		name = fmt.Sprintf("%s-%d", base, n)
+	}
+	taken[name] = true
+	return name
 }
 
 // CollectRequest selects one job and which of its sections to print.

@@ -40,8 +40,8 @@ func (c *Conflict) Error() string { return c.Message }
 
 var unsafeChars = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
-// Path returns the lock file location for a session id.
-func Path(sessionID string) string {
+// lockPath returns the lock file location for a session id.
+func lockPath(sessionID string) string {
 	return filepath.Join(job.StateDir(), "locks", unsafeChars.ReplaceAllString(sessionID, "-")+".lock")
 }
 
@@ -54,7 +54,7 @@ type Handle struct {
 // Acquire takes the session lock or returns a *Conflict. Any other error is
 // an infrastructure failure.
 func Acquire(sessionID, outDir, runnerInstanceID string) (*Handle, error) {
-	p := Path(sessionID)
+	p := lockPath(sessionID)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return nil, err
 	}

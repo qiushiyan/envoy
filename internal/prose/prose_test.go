@@ -122,7 +122,7 @@ func TestRedispatchRepeatsTheDispatch(t *testing.T) {
 	if strings.Contains(got, "--max-budget-usd") || strings.Contains(got, "--baseline") {
 		t.Fatalf("redispatch command invented a setting: %q", got)
 	}
-	if got := Voice("codex", "", "high"); got != "codex::high" {
+	if got := voiceSpec("codex", "", "high"); got != "codex::high" {
 		t.Fatalf("effort without a model = %q, want the empty model slot kept", got)
 	}
 }
@@ -210,15 +210,15 @@ func TestFanStatusLineSaysHowManyResultsExist(t *testing.T) {
 		wants    []string
 	}{
 		{[]string{job.StatusOK, job.StatusOK}, FanOK, []string{"ok — all 2 turns returned a result"}},
-		{[]string{job.StatusOK, job.StatusTimeout}, FanPartial,
+		{[]string{job.StatusOK, job.StatusTimeout}, fanPartial,
 			[]string{"partial — 1 of 2 turns returned a result", "their own status and next action below"}},
-		{[]string{job.StatusTimeout, job.StatusFailed}, FanNoResult,
+		{[]string{job.StatusTimeout, job.StatusFailed}, fanNoResult,
 			[]string{"none of the 2 turns returned a result"}},
-		{[]string{job.StatusRunning, job.StatusOK}, FanRunning,
+		{[]string{job.StatusRunning, job.StatusOK}, fanRunning,
 			[]string{"1 of 2 turns have not finished", "nothing here is final yet"}},
 		// A member that never published a status counts as one with no result;
 		// claiming otherwise would license reading a result that is not there.
-		{[]string{job.StatusOK, ""}, FanPartial, []string{"partial — 1 of 2 turns returned a result"}},
+		{[]string{job.StatusOK, ""}, fanPartial, []string{"partial — 1 of 2 turns returned a result"}},
 	}
 	for _, c := range cases {
 		if got := FanStatus(c.statuses); got != c.status {

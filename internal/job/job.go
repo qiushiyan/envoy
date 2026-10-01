@@ -86,8 +86,8 @@ func ISO(t time.Time) string {
 	return t.UTC().Format("2006-01-02T15:04:05.000Z")
 }
 
-// RandomHex returns n bytes of entropy as lowercase hex.
-func RandomHex(n int) string {
+// randomHex returns n bytes of entropy as lowercase hex.
+func randomHex(n int) string {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
 		panic(err) // crypto/rand failure means the platform is broken
@@ -101,7 +101,7 @@ func UUID4() string { return uuid.NewV4().String() }
 // WriteFileAtomic replaces path by writing a sibling temp file and renaming it,
 // so a kill can never leave a half-written document.
 func WriteFileAtomic(path string, data []byte) error {
-	tmp := fmt.Sprintf("%s.%d.%s.tmp", path, os.Getpid(), RandomHex(8))
+	tmp := fmt.Sprintf("%s.%d.%s.tmp", path, os.Getpid(), randomHex(8))
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		os.Remove(tmp)
 		return err
