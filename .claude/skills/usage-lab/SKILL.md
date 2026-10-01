@@ -16,8 +16,10 @@ dated entry forward, and end by advancing it.
 
 Summarize every job under `~/.local/state/envoy/jobs/<project>/` into
 compact rows — status, promptState, provider/model, duration against its
-cap, errorText, collectedAt (field truth: `internal/job/meta.go` and
-`group.go`). Fan-outs nest: `group.json` sits in the job dir and member
+cap, failure cause, collectedAt (field truth: `internal/job/meta.go`,
+`failure.go` and `group.go`). Records of schema 9 and earlier carry a
+worded `error` string where later ones carry the `failure` object, and the
+store holds both. Fan-outs nest: `group.json` sits in the job dir and member
 `meta.json` files sit **one level deeper**, so glob both depths. Read a few
 `group.json` files whole — contract strings recorded there (watch/resume
 commands) have carried bugs the summaries hide.

@@ -178,24 +178,24 @@ keyed to `--allow-write` is a read-only sandbox by another name.
   fields plus the directory the record was read from, so the identical retry
   can repeat the dispatch it replaces — the same source conversation, the
   archived prompt, the spend cap — and the resume line can never disagree
-  with what dispatch would accept. The same holds for why a turn did not
-  deliver: the record keeps the cause and the provider's own words
-  (`failure`), and a session lock it could not take as the lock file's
-  account of the holder (`sessionLockConflict`). Schema 9 stored the worded
-  error, the remedy and the lock refusal instead — the last with an
-  `envoy collect` command inside it, so a verb change would have left every
-  stored conflict prescribing a command that no longer existed; schema 10
-  replaced them with what they were worded from. A refused version stays
-  out of naming, though: a name reads only a record's stamp — `caller`,
-  `status`, `collectedAt`, whose meaning no schema change has altered — so
-  a bump never leaves a store's reused names unresolvable, and a record of
-  another version holds no name, since this engine cannot deliver it.
-  `pending` reads the same stamp: a collected one owes nothing, and an
-  uncollected one is listed as another version's, never as damage. The
-  archive is what was sent: `prompt.md` is written from the one read that feeds the provider's
-  stdin, never from a second read of the caller's file. A record is also what makes a directory
-  a job — `meta.json` for a turn, `group.json` for a fan-out — so discovery
-  keys on records and a reserved name released without one was never a job.
+  with what dispatch would accept. Why a turn did not deliver is recorded the
+  same way: `failure` keeps the cause and the provider's own words, and
+  `sessionLockConflict` keeps the lock file's account of the turn holding the
+  session; `internal/prose` words both whenever the record is read. Storing
+  the sentence is the alternative this beats — a lock refusal carries an
+  `envoy collect` command, so a stored one would go on prescribing a verb
+  after the verb changed.
+  The refusal stops short of naming. A name reads only a record's stamp —
+  `caller`, `status`, `collectedAt`, whose meaning no schema has changed — so
+  a schema bump leaves every reused name in a store resolvable (EVIDENCE.md,
+  2026-10-01). A record of another version holds no name, since this engine
+  cannot deliver it, and `pending` reads the same stamp: a collected one owes
+  nothing, an uncollected one is listed as another version's, never as damage.
+  The archive is what was sent: `prompt.md` is written from the one read that
+  feeds the provider's stdin, never from a second read of the caller's file.
+  A record is also what makes a directory a job — `meta.json` for a turn,
+  `group.json` for a fan-out — so discovery keys on records and a reserved
+  name released without one was never a job.
 - **A provider's transient error is an observation; only its verdict fails a
   turn.** codex emits a bare `error` event per reconnect attempt and then
   carries on; a driver that let the last one stand as the outcome recorded
@@ -442,8 +442,8 @@ Optional observations do not move the meta schema: existing fields and
 continuation eligibility keep their meaning, and readers treat absent usage
 as unavailable. Bumping the schema for an addition would refuse compatible
 jobs and force callers to change their schema pins; only a replaced field
-moves it, as schema 10's failure observations did. `TestUsageSchemaCompatibility` pins this
-boundary; the engine version identifies feature availability. The captured
+moves it. `TestUsageSchemaCompatibility` pins this boundary; the engine
+version identifies feature availability. The captured
 evidence behind the accounting lives in `EVIDENCE.md`, 2026-09-14.
 
 ## Storage

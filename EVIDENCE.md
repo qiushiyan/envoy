@@ -383,3 +383,15 @@ will look anyway.
   user trusts the prompt to keep a consult design-only. Compare next pass: a
   read-only claude turn whose `git status` changed under it is the signal
   that the prompt is not enough.
+- **2026-10-01 — a schema bump read against the real store.** Moving the
+  worded error, remedy and lock refusal out of `meta.json` made it schema 10.
+  Run before install against the store, the new binary found all 471 records
+  there (every turn and fan-out member `meta.json`, counted 2026-10-01)
+  schema 9 — and name resolution read each generation's `caller` through the
+  schema-strict reader, so every caller with an identity (every Claude Code
+  session) reusing a name over an existing turn was refused with exit 2 as an
+  unattributable generation, and `pending` in one project grew from 1 entry
+  to 8, each a collected job labeled damaged. Names arrived after schema 9,
+  so no earlier bump had crossed them. What stands: naming and `pending` read
+  only a version-independent stamp (`DESIGN.md`, Records hold facts). Not a
+  mining pass; no usage since 2026-09-27 was read for it.

@@ -49,7 +49,9 @@ demand). The durable files in the job dir are authoritative:
 - **`prompt.md`:** the exact dispatched prompt.
 - **`result.md`:** final provider text, or failure + recovered partial output.
 - **`meta.json`:** machine-readable lifecycle and recovery facts, atomically
-  replaced, plus supported usage measurements; collect renders commands from it.
+  replaced, plus supported usage measurements. It holds observations only — a
+  failure as its cause and the provider's own words — and collect renders
+  every command and sentence from it.
 - **`progress.log`:** runner-owned semantic progress + 30s heartbeat.
 - **`raw.log`:** verbatim stdout, including provider events and launcher output.
 - **`stderr.log`:** provider and launcher stderr.
@@ -162,8 +164,8 @@ envoy.Collect(envoy.CollectRequest{Job: "review-r1"})
 envoy.Pending(base, os.Stdout, os.Stderr)
 ```
 
-Providers implement `internal/provider.Driver`; adding one is a single driver
-file, the lifecycle never changes. Everything envoy says to its caller is
+Providers implement `internal/provider.Driver`; adding one is a driver file
+and one entry in the provider registry, and the lifecycle never changes. Everything envoy says to its caller is
 worded in `internal/prose` — one situation, one wording.
 
 ## Development
