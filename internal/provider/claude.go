@@ -22,11 +22,19 @@ type claude struct {
 	opts      Options
 	startedAt time.Time
 	sessionID string
-	accepted  bool
-	evidence  string
-	messages  []map[string]any
-	usage     claudeUsage
+	// evidence is how acceptance was first proven; "" while it is unproven.
+	evidence string
+	// envelope is the first result record, nil until one arrives.
+	envelope map[string]any
+	// replies is each assistant message's text, kept as the stream arrives so
+	// the end of a turn never rescans it. Everything else the stream carried —
+	// tool output included — is in raw.log, not in memory.
+	replies [][]string
+	usage   claudeUsage
 }
+
+// transcriptEvidence labels acceptance read from the session transcript.
+const transcriptEvidence = "claude session transcript"
 
 func newClaude(opts Options, startedAt time.Time) *claude {
 	sessionID := opts.Resume
@@ -97,23 +105,17 @@ func (c *claude) consume(parsed any) []Event {
 	if !ok {
 		return nil
 	}
-	c.messages = append(c.messages, event)
 	typ := str(event, "type")
 	if typ == "" {
 		typ = "unknown"
 	}
 	events := []Event{{Kind: KindActivity, Type: typ}}
-	if id := str(event, "session_id"); id != "" && c.sessionID == "" {
-		c.sessionID = id
-	}
 	subtype := str(event, "subtype")
-	if typ == "system" && subtype == "init" {
+	switch {
+	case typ == "system" && subtype == "init":
 		session := str(event, "session_id")
 		if session == "" {
 			session = c.sessionID
-		}
-		if session == "" {
-			session = "pending"
 		}
 		fields := []job.KV{{K: "session", V: session}}
 		if model := str(event, "model"); model != "" {
@@ -121,19 +123,24 @@ func (c *claude) consume(parsed any) []Event {
 			events = append(events, Event{Kind: KindModelReported, Model: model})
 		}
 		events = append(events, Event{Kind: KindNote, State: "provider-initialized", Fields: fields})
-	} else if typ == "system" && subtype == "api_retry" {
+	case typ == "system" && subtype == "api_retry":
 		events = append(events, Event{Kind: KindNote, State: "provider-retry", Fields: []job.KV{
 			{K: "attempt", V: event["attempt"]},
 			{K: "max_retries", V: event["max_retries"]},
 			{K: "retry_delay_ms", V: event["retry_delay_ms"]},
 		}})
+	case typ == "assistant":
+		if blocks := replyText(event); len(blocks) > 0 {
+			c.replies = append(c.replies, blocks)
+		}
+	case typ == "result" && c.envelope == nil:
+		c.envelope = event
 	}
 	if claudeEventProvesAcceptance(typ, subtype) {
 		label := "claude " + typ
 		if subtype != "" {
 			label += "/" + subtype
 		}
-		c.accepted = true
 		if c.evidence == "" {
 			c.evidence = label
 		}
@@ -164,50 +171,43 @@ func claudeEventProvesAcceptance(typ, subtype string) bool {
 // Poll is the heartbeat hook: while acceptance is unproven, look for
 // same-turn evidence in Claude's persisted session transcript.
 func (c *claude) Poll() []Event {
-	if c.accepted {
+	if c.evidence != "" {
 		return nil
 	}
 	if t := claudeTranscript(c.sessionID, c.startedAt); t != nil && t.accepted {
-		c.accepted = true
-		c.evidence = "claude session transcript"
-		return []Event{{Kind: KindAccepted, Evidence: "claude session transcript"}}
+		c.evidence = transcriptEvidence
+		return []Event{{Kind: KindAccepted, Evidence: transcriptEvidence}}
 	}
 	return nil
 }
 
-func (c *claude) Recovery() Evidence {
-	parsed := parseClaudeMessages(c.messages)
+func (c *claude) Recovery() Evidence { return c.recovery(c.parse()) }
+
+// recovery is what the stream and the session transcript prove, given the
+// envelope as parsed: acceptance, and the best output that survived.
+func (c *claude) recovery(parsed claudeParse) Evidence {
 	exclude := ""
-	if parsed.kind == "failed" {
+	if parsed.kind == envelopeFailed {
 		exclude = parsed.errorText
 	}
-	streamPartial := assistantText(c.messages, exclude)
 	transcript := claudeTranscript(c.sessionID, c.startedAt)
 
-	accepted, label := c.accepted, c.evidence
-	if !accepted && transcript != nil && transcript.accepted {
-		accepted, label = true, "claude session transcript"
+	ev := Evidence{Accepted: c.evidence != "", Label: c.evidence}
+	if !ev.Accepted && transcript != nil && transcript.accepted {
+		ev.Accepted, ev.Label = true, transcriptEvidence
 	}
-
-	var envelopePartial *string
+	var envelopePartial, transcriptPartial *string
 	switch parsed.kind {
-	case "ok":
+	case envelopeOK:
 		envelopePartial = job.Ptr(parsed.text)
-	case "unparseable":
-		envelopePartial = nil
-	default:
+	case envelopeFailed, envelopeBudget:
 		envelopePartial = job.Ptr(parsed.partial)
 	}
-	var transcriptPartial *string
 	if transcript != nil {
 		transcriptPartial = job.Ptr(transcript.partial)
 	}
-	ev := Evidence{
-		Accepted: accepted,
-		Label:    label,
-		Partial:  firstText(envelopePartial, job.Ptr(streamPartial), transcriptPartial),
-	}
-	if parsed.kind != "unparseable" {
+	ev.Partial = firstText(envelopePartial, job.Ptr(joinReplies(c.replies, exclude)), transcriptPartial)
+	if parsed.kind != envelopeMissing {
 		ev.Tokens = parsed.tokens
 		ev.CostUSD = parsed.costUSD
 	}
@@ -215,10 +215,10 @@ func (c *claude) Recovery() Evidence {
 }
 
 func (c *claude) Conclude(exit ExitInfo) Outcome {
-	parsed := parseClaudeMessages(c.messages)
-	if parsed.kind == "unparseable" {
-		// No envelope means no tokens or cost: Recovery reads them from it.
-		return c.Recovery().Outcome(job.StatusInfra, prose.ProcessExited("Claude", exit.Command, exit.Code,
+	parsed := c.parse()
+	if parsed.kind == envelopeMissing {
+		// No envelope means no tokens or cost: recovery reads them from it.
+		return c.recovery(parsed).Outcome(job.StatusInfra, prose.ProcessExited("Claude", exit.Command, exit.Code,
 			"but returned no parseable result envelope", stderrDetail(exit.StderrTail)))
 	}
 
@@ -229,7 +229,7 @@ func (c *claude) Conclude(exit ExitInfo) Outcome {
 	}
 
 	switch parsed.kind {
-	case "ok":
+	case envelopeOK:
 		return Outcome{
 			Status:      job.StatusOK,
 			Text:        parsed.text,
@@ -239,7 +239,7 @@ func (c *claude) Conclude(exit ExitInfo) Outcome {
 			Evidence:    c.evidence,
 			SessionID:   parsed.sessionID,
 		}
-	case "budget":
+	case envelopeBudget:
 		budget := 0.0
 		if c.opts.MaxBudgetUSD != nil {
 			budget = *c.opts.MaxBudgetUSD
@@ -256,8 +256,8 @@ func (c *claude) Conclude(exit ExitInfo) Outcome {
 			Evidence:    c.evidence,
 			SessionID:   parsed.sessionID,
 		}
-	default: // "failed"
-		out := c.Recovery().Outcome(job.StatusFailed, fmt.Sprintf("Claude reported a provider failure: %s", parsed.errorText))
+	default: // envelopeFailed
+		out := c.recovery(parsed).Outcome(job.StatusFailed, fmt.Sprintf("Claude reported a provider failure: %s", parsed.errorText))
 		out.Remedy = "Fix the cause it reported first."
 		out.SessionID = parsed.sessionID
 		return out
@@ -270,8 +270,18 @@ func (c *claude) ObservesConnectionErrors() bool { return false }
 
 // ---------- result envelope parsing ----------
 
+// envelopeKind is what the result envelope says about the turn.
+type envelopeKind int
+
+const (
+	envelopeMissing envelopeKind = iota // no result record arrived
+	envelopeOK
+	envelopeFailed
+	envelopeBudget // stopped at the --max-budget-usd cap
+)
+
 type claudeParse struct {
-	kind      string // ok | failed | budget | unparseable
+	kind      envelopeKind
 	sessionID string
 	costUSD   *float64
 	tokens    *job.Tokens
@@ -280,16 +290,12 @@ type claudeParse struct {
 	partial   string
 }
 
-func parseClaudeMessages(messages []map[string]any) claudeParse {
-	var envelope map[string]any
-	for _, m := range messages {
-		if str(m, "type") == "result" {
-			envelope = m
-			break
-		}
-	}
+// parse reads the result envelope, with the assistant text a non-ok ending
+// recovers from the stream.
+func (c *claude) parse() claudeParse {
+	envelope := c.envelope
 	if envelope == nil {
-		return claudeParse{kind: "unparseable"}
+		return claudeParse{kind: envelopeMissing}
 	}
 
 	out := claudeParse{sessionID: str(envelope, "session_id")}
@@ -309,13 +315,13 @@ func parseClaudeMessages(messages []map[string]any) claudeParse {
 
 	subtype := str(envelope, "subtype")
 	if subtype == "error_max_budget_usd" {
-		out.kind = "budget"
-		out.partial = assistantText(messages, "")
+		out.kind = envelopeBudget
+		out.partial = joinReplies(c.replies, "")
 		return out
 	}
 	isError, _ := envelope["is_error"].(bool)
 	if isError || subtype != "success" {
-		out.kind = "failed"
+		out.kind = envelopeFailed
 		if s := str(envelope, "result"); s != "" {
 			out.errorText = s
 		} else if errs, ok := envelope["errors"].([]any); ok && len(errs) > 0 {
@@ -329,43 +335,46 @@ func parseClaudeMessages(messages []map[string]any) claudeParse {
 		}
 		// Recover real partial work; exclude the trailing assistant block that
 		// just echoes the error itself.
-		out.partial = assistantText(messages, out.errorText)
+		out.partial = joinReplies(c.replies, out.errorText)
 		return out
 	}
-	out.kind = "ok"
+	out.kind = envelopeOK
 	out.text = str(envelope, "result")
 	return out
 }
 
-func assistantText(messages []map[string]any, excludeText string) string {
-	exclude := strings.TrimSpace(excludeText)
-	var parts []string
-	for _, m := range messages {
-		if str(m, "type") != "assistant" {
+// replyText is one assistant record's non-blank text blocks, in order.
+func replyText(event map[string]any) []string {
+	message, _ := event["message"].(map[string]any)
+	content, _ := message["content"].([]any)
+	var blocks []string
+	for _, b := range content {
+		block, ok := b.(map[string]any)
+		if !ok || str(block, "type") != "text" {
 			continue
 		}
-		message, ok := m["message"].(map[string]any)
-		if !ok {
-			continue
-		}
-		content, ok := message["content"].([]any)
-		if !ok {
-			continue
-		}
-		var blocks []string
-		for _, b := range content {
-			block, ok := b.(map[string]any)
-			if !ok || str(block, "type") != "text" {
-				continue
-			}
-			text := str(block, "text")
-			if strings.TrimSpace(text) == "" || strings.TrimSpace(text) == exclude {
-				continue
-			}
+		if text := str(block, "text"); strings.TrimSpace(text) != "" {
 			blocks = append(blocks, text)
 		}
-		if len(blocks) > 0 {
-			parts = append(parts, strings.Join(blocks, ""))
+	}
+	return blocks
+}
+
+// joinReplies is the assistant's text across its messages, leaving out any
+// block that only repeats exclude — the trailing echo of an error the
+// envelope already reports.
+func joinReplies(replies [][]string, exclude string) string {
+	exclude = strings.TrimSpace(exclude)
+	var parts []string
+	for _, blocks := range replies {
+		var kept []string
+		for _, text := range blocks {
+			if strings.TrimSpace(text) != exclude {
+				kept = append(kept, text)
+			}
+		}
+		if len(kept) > 0 {
+			parts = append(parts, strings.Join(kept, ""))
 		}
 	}
 	return strings.Join(parts, "\n\n")
@@ -458,7 +467,7 @@ func claudeTranscript(sessionID string, since time.Time) *transcriptResult {
 		}
 	}
 
-	var records []map[string]any
+	var replies [][]string
 	result := &transcriptResult{}
 	for raw := range strings.SplitSeq(text, "\n") {
 		if !strings.HasPrefix(strings.TrimSpace(raw), "{") {
@@ -477,9 +486,11 @@ func claudeTranscript(sessionID string, since time.Time) *transcriptResult {
 			continue
 		}
 		result.accepted = true
-		records = append(records, record)
+		if blocks := replyText(record); typ == "assistant" && len(blocks) > 0 {
+			replies = append(replies, blocks)
+		}
 	}
-	result.partial = assistantText(records, "")
+	result.partial = joinReplies(replies, "")
 	return result
 }
 
