@@ -464,6 +464,32 @@ func TestAnEarlierSchemasJobsLeaveTheirNamesWorking(t *testing.T) {
 		}
 	}
 
+	// Fan-outs an earlier engine wrote: a manifest whose roster is shaped as
+	// this engine's never is, a member record of the earlier meta schema, and
+	// one fan-out another engine is still supervising.
+	earlierFans := map[string]string{
+		"fan-r1":   `{"schemaVersion":1,"members":[{"name":"codex","provider":"codex"}],"supervisorPid":1}`,
+		"owed-fan": `{"schemaVersion":1,"members":[{"name":"codex","provider":"codex"}],"supervisorPid":1}`,
+		"live-fan": fmt.Sprintf(`{"schemaVersion":3,"members":[{"name":"codex"}],"caller":"session-a","runnerPid":%d}`, os.Getpid()),
+	}
+	for name, group := range earlierFans {
+		member := filepath.Join(store, name, "codex")
+		if err := os.MkdirAll(member, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(store, name, "group.json"), []byte(group), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		collected := `"2026-09-01T00:00:00.000Z"`
+		if name == "owed-fan" {
+			collected = "null"
+		}
+		meta := fmt.Sprintf(`{"schemaVersion":9,"status":"ok","provider":"codex","collectedAt":%s}`, collected)
+		if err := os.WriteFile(filepath.Join(member, "meta.json"), []byte(meta), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	r := runEnvoyIn(t, a, project, "run", "consult-r1", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5")
 	if r.code != 0 || jobLineOf(r.stdout) != filepath.Join(store, "consult-r1+2") {
 		t.Fatalf("reusing a name over an earlier engine's job = %d, job %q\n%s", r.code, jobLineOf(r.stdout), r.stderr)
@@ -497,11 +523,35 @@ func TestAnEarlierSchemasJobsLeaveTheirNamesWorking(t *testing.T) {
 		t.Fatalf("an earlier engine's turn whose runner is gone must not hold its name: %d\n%s", r.code, r.stderr)
 	}
 
+	// A fan-out's manifest has a stamp too. An earlier one still says whose
+	// it is, so its name resolves for a caller with an identity, and with its
+	// runner gone it holds nothing; one another engine is still supervising
+	// holds like that engine's live turn. Read as a job, it is refused by name.
+	if r := runEnvoyIn(t, a, project, "run", "fan-r1", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5"); r.code != 0 || jobLineOf(r.stdout) != filepath.Join(store, "fan-r1+2") {
+		t.Fatalf("reusing a name over an earlier engine's fan-out = %d, job %q\n%s", r.code, jobLineOf(r.stdout), r.stderr)
+	}
+	if r := runEnvoyIn(t, a.as("", ""), project, "run", "owed-fan", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5"); r.code != 0 {
+		t.Fatalf("an earlier engine's uncollected fan-out must not hold its name: %d\n%s", r.code, r.stderr)
+	}
+	if r := runEnvoyIn(t, a, project, "run", "live-fan", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5"); r.code != 3 {
+		t.Fatalf("another engine's live fan-out must hold its name: %d\n%s", r.code, r.stdout)
+	} else {
+		mustContain(t, "stderr", r.stderr, "is still running")
+	}
+	oldFan := runEnvoyIn(t, a, project, "collect", filepath.Join(store, "fan-r1"))
+	if oldFan.code != 3 {
+		t.Fatalf("an earlier schema's fan-out must be refused when read, got %d\n%s", oldFan.code, oldFan.stdout)
+	}
+	mustContain(t, "stderr", oldFan.stderr, "group.json is schema 1")
+
 	// The recovery index reads the same stamp: a collected earlier job owes
 	// nothing, a live one is skipped like any live job, and an uncollected one
 	// is listed for what it is — intact, and another version's — never as damage.
+	// A fan-out owes what its members' own stamps say.
 	pend := runEnvoyIn(t, a, project, "pending")
 	mustContain(t, "pending", pend.stdout, "[other-schema] "+filepath.Join(store, "review-r1")+"\n", "schema 9",
-		"[other-schema] "+filepath.Join(store, "dead-r1")+"\n", "[other-schema] "+filepath.Join(store, "locked-r1")+"\n")
-	mustNotContain(t, "pending", pend.stdout, filepath.Join(store, "consult-r1")+"\n", filepath.Join(store, "live-r1")+"\n", "corrupt", "damaged")
+		"[other-schema] "+filepath.Join(store, "dead-r1")+"\n", "[other-schema] "+filepath.Join(store, "locked-r1")+"\n",
+		"[other-schema] "+filepath.Join(store, "owed-fan")+"\n", "group.json is schema 1")
+	mustNotContain(t, "pending", pend.stdout, filepath.Join(store, "consult-r1")+"\n", filepath.Join(store, "live-r1")+"\n",
+		filepath.Join(store, "fan-r1")+"\n", filepath.Join(store, "live-fan")+"\n", "corrupt", "damaged")
 }

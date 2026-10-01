@@ -209,11 +209,11 @@ func (e *UnattributedError) Unwrap() error { return e.Err }
 // identity. A record that is there and cannot be read is an error, never "".
 func CallerOf(dir string) (string, error) {
 	if IsGroupDir(dir) {
-		g, err := ReadGroupFile(GroupWorkspace{Dir: dir}.GroupPath())
+		s, err := ReadGroupStamp(dir)
 		if err != nil {
 			return "", err
 		}
-		return Deref(g.Caller), nil
+		return Deref(s.Caller), nil
 	}
 	s, err := ReadStamp(dir)
 	if errors.Is(err, ErrNoRecord) {

@@ -53,6 +53,19 @@ func writeGroup(t *testing.T, dir string, runnerPid int, members ...string) {
 	}
 }
 
+// writeOtherGroup writes a manifest of a group schema this engine does not
+// read, whose roster entries are shaped as no schema of this engine's are.
+func writeOtherGroup(t *testing.T, dir string, runnerPid int) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	group := fmt.Sprintf(`{"schemaVersion":3,"members":[{"name":"codex"}],"runnerPid":%d}`, runnerPid)
+	if err := os.WriteFile(filepath.Join(dir, "group.json"), []byte(group), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A name is released by delivery and by nothing else: not by success, not by
 // the first member being done, and never by a record that is missing or
 // unreadable where one could still appear.
@@ -112,6 +125,19 @@ func TestNameHoldClassifiesWhatStillHoldsAName(t *testing.T) {
 			writeGroup(t, d, 0, "codex", "claude")
 			writeTurn(t, filepath.Join(d, "claude"), "ok", true)
 		}, prose.NameHold{Kind: prose.HoldUnrecorded, Member: "codex"}, true},
+		// Another version's fan-out holds like another version's turn: while
+		// the runner its stamp records may be alive, and never past it, since
+		// this engine can deliver nothing under the name.
+		{"another schema's fan-out, its runner alive", func(d string) {
+			writeOtherGroup(t, d, os.Getpid())
+		}, prose.NameHold{Kind: prose.HoldRunning}, true},
+		{"another schema's fan-out, its runner gone", func(d string) {
+			writeOtherGroup(t, d, gone)
+			writeTurn(t, filepath.Join(d, "codex"), "ok", false)
+		}, prose.NameHold{}, false},
+		{"another schema's fan-out recording no runner", func(d string) {
+			writeOtherGroup(t, d, 0)
+		}, prose.NameHold{}, false},
 		{"fan-out with an unreadable roster", func(d string) {
 			os.MkdirAll(d, 0o755)
 			os.WriteFile(filepath.Join(d, "group.json"), []byte("{"), 0o644)

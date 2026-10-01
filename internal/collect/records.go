@@ -86,7 +86,11 @@ func NameHold(dir string) (prose.NameHold, bool) {
 		return turnHold(dir)
 	}
 	fan, err := job.ReadFan(dir)
-	if err != nil {
+	var other *job.SchemaError
+	switch {
+	case errors.As(err, &other):
+		return otherFanHold(fan.Stamp)
+	case err != nil:
 		return prose.NameHold{Kind: prose.HoldUnreadable}, true
 	}
 	mayStillStart := proc.PidLiveness(fan.Group.RunnerPid) != proc.Gone
@@ -101,6 +105,19 @@ func NameHold(dir string) (prose.NameHold, bool) {
 			hold.Member = m.Name
 			return hold, true
 		}
+	}
+	return prose.NameHold{}, false
+}
+
+// otherFanHold is the hold another schema version's fan-out places on its
+// name: like another version's turn, it holds only while its own engine may
+// still be running it — the runner its stamp records, not provably gone. This
+// engine can deliver nothing under that name, so a hold past the runner would
+// strand it for good, and a manifest that records no runner gives this engine
+// nothing to wait on.
+func otherFanHold(stamp *job.GroupStamp) (prose.NameHold, bool) {
+	if stamp.RunnerPid > 0 && proc.PidLiveness(stamp.RunnerPid) != proc.Gone {
+		return prose.NameHold{Kind: prose.HoldRunning}, true
 	}
 	return prose.NameHold{}, false
 }

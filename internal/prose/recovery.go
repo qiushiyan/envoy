@@ -200,10 +200,10 @@ func PendingUnreadableNext(dir string) string {
 }
 
 // PendingOtherSchema is why an uncollected job written by another engine
-// version is listed: its record is intact, and this engine will not
-// reinterpret it.
-func PendingOtherSchema(version, reads int) string {
-	return fmt.Sprintf("its meta.json is schema %d, written by another envoy version; this one reads schema %d only and will not reinterpret it, so it cannot deliver the job", version, reads)
+// version is listed: its record — meta.json, or a fan-out's group.json — is
+// intact, and this engine will not reinterpret it.
+func PendingOtherSchema(record string, version, reads int) string {
+	return fmt.Sprintf("its %s is schema %d, written by another envoy version; this one reads schema %d only and will not reinterpret it, so it cannot deliver the job", record, version, reads)
 }
 
 // PendingOtherSchemaNext is the one action for another version's job: its
@@ -211,6 +211,12 @@ func PendingOtherSchema(version, reads int) string {
 func PendingOtherSchemaNext(dir string) string {
 	ws := job.Workspace{Dir: dir}
 	return fmt.Sprintf("read %s and %s directly, or collect it with the envoy version that wrote it", ws.ResultPath(), ws.MetaPath())
+}
+
+// PendingOtherSchemaFanNext is the same action for another version's
+// fan-out, whose results sit one level down, in its members' directories.
+func PendingOtherSchemaFanNext(dir string) string {
+	return fmt.Sprintf("read each member's result.md and meta.json under %s directly, or collect it with the envoy version that wrote it", dir)
 }
 
 // PendingUncollected is why a finished job needs attention.

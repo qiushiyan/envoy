@@ -182,11 +182,16 @@ type Stamp struct {
 }
 
 // SchemaError is a record another schema version wrote: intact, and refused
-// by name wherever its meaning is read, never reinterpreted.
-type SchemaError struct{ Version int }
+// by name wherever its meaning is read, never reinterpreted. Record names the
+// file (meta.json or group.json), Version what it carries, and Reads the one
+// version this engine reads for it.
+type SchemaError struct {
+	Record         string
+	Version, Reads int
+}
 
 func (e *SchemaError) Error() string {
-	return fmt.Sprintf("meta.json is schema %d and this engine reads schema %d only", e.Version, MetaSchemaVersion)
+	return fmt.Sprintf("%s is schema %d and this engine reads schema %d only", e.Record, e.Version, e.Reads)
 }
 
 // ReadRecord reads the turn record in dir once. Its stamp comes back from a
@@ -236,7 +241,7 @@ func readRecordFile(path string) (*Stamp, *Meta, error) {
 		return nil, nil, err
 	}
 	if stamp.SchemaVersion != MetaSchemaVersion {
-		return &stamp, nil, &SchemaError{Version: stamp.SchemaVersion}
+		return &stamp, nil, &SchemaError{Record: "meta.json", Version: stamp.SchemaVersion, Reads: MetaSchemaVersion}
 	}
 	var meta Meta
 	if err := json.Unmarshal(data, &meta); err != nil {

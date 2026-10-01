@@ -58,11 +58,11 @@ func TestGroupManifestIsARosterOnly(t *testing.T) {
 	if IsGroupDir(t.TempDir()) {
 		t.Fatal("a dir without group.json must not read as a fan-out")
 	}
-	got, err := ReadGroupFile(gw.GroupPath())
+	fan, err := ReadFan(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Members) != 2 || got.Members[1] != "claude-opus" {
+	if got := fan.Group; len(got.Members) != 2 || got.Members[1] != "claude-opus" {
 		t.Fatalf("members round trip = %+v", got.Members)
 	}
 	// The member's job dir is an ordinary one named after the member, so
@@ -73,8 +73,43 @@ func TestGroupManifestIsARosterOnly(t *testing.T) {
 	if err := os.WriteFile(gw.GroupPath(), []byte(`{"schemaVersion":1,"members":[]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadGroupFile(gw.GroupPath()); err == nil || !strings.Contains(err.Error(), "schema 1") {
+	if _, err := ReadFan(dir); err == nil || !strings.Contains(err.Error(), "group.json is schema 1") {
 		t.Fatalf("another schema must be refused by name, got %v", err)
+	}
+}
+
+// Another version's manifest is refused, but its stamp is not: who
+// dispatched it and the runner supervising it mean what they always have, so
+// naming reads them from any version. Its roster changed shape between
+// schemas and is never read; the members are the subdirectories that hold a
+// record, as the jobs in a store are.
+func TestAnotherSchemasFanOutKeepsItsStamp(t *testing.T) {
+	dir := t.TempDir()
+	gw := GroupWorkspace{Dir: dir}
+	manifest := `{"schemaVersion":1,"caller":"session-a","runnerPid":42,"members":[{"name":"codex","provider":"codex"}]}`
+	if err := os.WriteFile(gw.GroupPath(), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(gw.Member("codex").Dir, 0o755)
+	old := `{"schemaVersion":9,"status":"ok","provider":"codex","collectedAt":null}`
+	if err := os.WriteFile(gw.Member("codex").MetaPath(), []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(gw.Member("claude").Dir, 0o755) // no record: not a member anyone can see
+
+	if caller, err := CallerOf(dir); err != nil || caller != "session-a" {
+		t.Fatalf("CallerOf = %q, %v; want the stamp's caller", caller, err)
+	}
+	fan, err := ReadFan(dir)
+	var other *SchemaError
+	if !errors.As(err, &other) || other.Record != "group.json" || other.Version != 1 || other.Reads != GroupSchemaVersion {
+		t.Fatalf("ReadFan err = %v, want group.json's *SchemaError", err)
+	}
+	if fan == nil || fan.Group != nil || fan.Stamp.RunnerPid != 42 {
+		t.Fatalf("fan = %+v, want the stamp and no roster", fan)
+	}
+	if len(fan.Members) != 1 || fan.Members[0].Name != "codex" || fan.Members[0].Stamp.CollectedAt != nil {
+		t.Fatalf("members = %+v, want codex found by its record", fan.Members)
 	}
 }
 
