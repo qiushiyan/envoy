@@ -3,7 +3,6 @@ package envoy
 import (
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 
 	"github.com/qiushiyan/envoy/internal/collect"
@@ -106,10 +105,11 @@ func seatVoices(seat string, req RunRequest, invocationCwd, caller string) ([]vo
 		v.promptFile = promptFile
 		return []voice{v}, ""
 	}
-	ref, err := job.ResolveRef(strings.TrimPrefix(spec, "@"), invocationCwd, caller)
+	resolved, err := job.ResolveRef(strings.TrimPrefix(spec, "@"), invocationCwd, caller)
 	if err != nil {
 		return nil, fmt.Sprintf("--with %s: %s", spec, err)
 	}
+	ref := resolved.Dir
 	if job.IsGroupDir(ref) {
 		if len(req.With) > 1 {
 			return nil, prose.GroupRefMustStandAlone(ref, fanCandidates(ref))
@@ -338,18 +338,16 @@ func voiceBase(providerName, model string) string {
 	return providerName
 }
 
-// memberNameUnsafe is the member-name rule: lowercase, path-safe, and free of
-// leading or trailing separators, because the name is both a directory and the
-// label every group line uses for that member.
-var memberNameUnsafe = regexp.MustCompile(`[^a-z0-9._-]+`)
-
 // memberName allocates a member's address from its base — the provider plus the
 // model when one was named, or a preset name carried over from an earlier
 // round — against the addresses already taken. A repeat is numbered, and the
 // numbered form is checked against the taken set too: a base that happens to
 // spell a sibling's numbered name must not land on that sibling's directory.
+//
+// The name is both a directory and the label every group line uses for that
+// member, so it is a slug free of leading or trailing separators.
 func memberName(base string, taken map[string]bool) string {
-	base = strings.Trim(memberNameUnsafe.ReplaceAllString(strings.ToLower(base), "-"), "-")
+	base = strings.Trim(job.Slug(base), "-")
 	if base == "" {
 		base = "member"
 	}

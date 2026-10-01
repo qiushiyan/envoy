@@ -89,28 +89,28 @@ func ContextUsage(u *job.Usage) string {
 	for _, issue := range u.Issues {
 		var detail string
 		switch issue {
-		case "missing_terminal":
+		case job.IssueMissingTerminal:
 			detail = "no terminal record"
-		case "missing_window":
+		case job.IssueMissingWindow:
 			detail = "window unknown"
-		case "missing_context_sample":
+		case job.IssueMissingContextSample:
 			detail = "no context sample"
-		case "missing_model":
+		case job.IssueMissingModel:
 			detail = "model attribution missing"
-		case "model_mismatch":
+		case job.IssueModelMismatch:
 			detail = "unexpected model"
 			if u.UnexpectedModel != nil {
 				detail += fmt.Sprintf(" %q", *u.UnexpectedModel)
 			}
-		case "missing_message_id":
+		case job.IssueMissingMessageID:
 			detail = "response ID missing"
-		case "missing_input_usage":
+		case job.IssueMissingInputUsage:
 			detail = "response input usage missing or invalid"
-		case "missing_terminal_usage":
+		case job.IssueMissingTerminalUsage:
 			detail = "terminal usage missing or invalid"
-		case "terminal_usage_incomplete":
+		case job.IssueTerminalUsageIncomplete:
 			detail = "terminal usage incomplete"
-		case "terminal_usage_mismatch":
+		case job.IssueTerminalUsageMismatch:
 			detail = "terminal usage disagrees with observed responses"
 		default:
 			detail = "measurement evidence incomplete"

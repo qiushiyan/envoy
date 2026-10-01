@@ -124,6 +124,14 @@ func StateDir() string {
 
 var slugUnsafe = regexp.MustCompile(`[^a-z0-9._-]+`)
 
+// Slug spells s for a path segment: lowercase, every run of characters
+// outside a-z 0-9 . _ - collapsed to one '-'. Callers bound its length and
+// choose its fallback, since a project and a fan-out member want different
+// ones.
+func Slug(s string) string {
+	return slugUnsafe.ReplaceAllString(strings.ToLower(s), "-")
+}
+
 // ProjectSlug names a project's slice of the central job store: the anchor's
 // basename for a human, a short hash of its real path for uniqueness. The
 // anchor is the git root when cwd is inside a repo — a turn dispatched from a
@@ -138,7 +146,7 @@ func ProjectSlug(cwd string) string {
 	if real, err := filepath.EvalSymlinks(anchor); err == nil {
 		anchor = real
 	}
-	base := slugUnsafe.ReplaceAllString(strings.ToLower(filepath.Base(anchor)), "-")
+	base := Slug(filepath.Base(anchor))
 	if base == "" || base == "-" {
 		base = "root"
 	}

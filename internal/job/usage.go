@@ -33,8 +33,33 @@ type UsageTokens struct {
 	Output        *int64 `json:"output"`
 }
 
+// The record's finite vocabulary: a usage state, an attribution, and each
+// kind of evidence gap an issue can name. Writer and reader share these
+// spellings, so an issue prose does not know is a bug, never a typo.
+const (
+	UsageUnmeasured = "unmeasured"
+	UsageLive       = "live"
+	UsageSettled    = "settled"
+	UsageIncomplete = "incomplete"
+
+	AttributionUnknown    = "unknown"
+	AttributionComplete   = "complete"
+	AttributionIncomplete = "incomplete"
+
+	IssueMissingTerminal         = "missing_terminal"
+	IssueMissingWindow           = "missing_window"
+	IssueMissingContextSample    = "missing_context_sample"
+	IssueMissingModel            = "missing_model"
+	IssueModelMismatch           = "model_mismatch"
+	IssueMissingMessageID        = "missing_message_id"
+	IssueMissingInputUsage       = "missing_input_usage"
+	IssueMissingTerminalUsage    = "missing_terminal_usage"
+	IssueTerminalUsageIncomplete = "terminal_usage_incomplete"
+	IssueTerminalUsageMismatch   = "terminal_usage_mismatch"
+)
+
 func NewUsage() *Usage {
-	return &Usage{State: "unmeasured", Attribution: "unknown", Issues: []string{}}
+	return &Usage{State: UsageUnmeasured, Attribution: AttributionUnknown, Issues: []string{}}
 }
 
 // AddIssue retains each kind of missing evidence once. Callers use a finite
@@ -48,13 +73,13 @@ func (u *Usage) AddIssue(issue string) {
 func (u *Usage) RefreshState() {
 	switch {
 	case u.Final && len(u.Issues) > 0:
-		u.State = "incomplete"
+		u.State = UsageIncomplete
 	case u.Final:
-		u.State = "settled"
+		u.State = UsageSettled
 	case u.LatestContextTokens != nil:
-		u.State = "live"
+		u.State = UsageLive
 	default:
-		u.State = "unmeasured"
+		u.State = UsageUnmeasured
 	}
 }
 
@@ -65,6 +90,6 @@ func (u *Usage) End() {
 		return
 	}
 	u.Final = true
-	u.AddIssue("missing_terminal")
+	u.AddIssue(IssueMissingTerminal)
 	u.RefreshState()
 }

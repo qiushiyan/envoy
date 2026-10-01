@@ -36,14 +36,14 @@ func (c *claudeUsage) observe(event map[string]any) bool {
 			return false
 		}
 		c.model = str(event, "model")
-		if c.model != "" && u.Attribution == "unknown" {
-			u.Attribution = "complete"
+		if c.model != "" && u.Attribution == job.AttributionUnknown {
+			u.Attribution = job.AttributionComplete
 		}
 	case "assistant":
 		message, _ := event["message"].(map[string]any)
 		id := str(message, "id")
 		if id == "" {
-			u.AddIssue("missing_message_id")
+			u.AddIssue(job.IssueMissingMessageID)
 			break
 		}
 		if _, exists := c.seen[id]; exists {
@@ -52,21 +52,21 @@ func (c *claudeUsage) observe(event map[string]any) bool {
 		c.seen[id] = struct{}{}
 		model := str(message, "model")
 		if model == "" || c.model == "" {
-			u.Attribution = "incomplete"
-			u.AddIssue("missing_model")
+			u.Attribution = job.AttributionIncomplete
+			u.AddIssue(job.IssueMissingModel)
 			break
 		}
 		if model != c.model {
-			u.Attribution = "incomplete"
+			u.Attribution = job.AttributionIncomplete
 			u.UnexpectedModel = job.Ptr(model)
-			u.AddIssue("model_mismatch")
+			u.AddIssue(job.IssueModelMismatch)
 			break
 		}
 		u.Responses++
 		usage, _ := message["usage"].(map[string]any)
 		input, read, creation := usageInt(usage, "input_tokens"), usageInt(usage, "cache_read_input_tokens"), usageInt(usage, "cache_creation_input_tokens")
 		if input == nil || read == nil || creation == nil {
-			u.AddIssue("missing_input_usage")
+			u.AddIssue(job.IssueMissingInputUsage)
 			break
 		}
 		context := *input + *read + *creation
@@ -98,14 +98,14 @@ func (c *claudeUsage) settle(event map[string]any) {
 		}
 	}
 	if u.ContextWindowTokens == nil {
-		u.AddIssue("missing_window")
+		u.AddIssue(job.IssueMissingWindow)
 	}
 	if u.LatestContextTokens == nil {
-		u.AddIssue("missing_context_sample")
+		u.AddIssue(job.IssueMissingContextSample)
 	}
 	usage, ok := event["usage"].(map[string]any)
 	if !ok {
-		u.AddIssue("missing_terminal_usage")
+		u.AddIssue(job.IssueMissingTerminalUsage)
 		return
 	}
 	t := &job.UsageTokens{
@@ -115,26 +115,26 @@ func (c *claudeUsage) settle(event map[string]any) {
 	u.TerminalTokens = t
 	// These envelopes can omit completed work, including the real output.
 	if str(event, "subtype") == "error_max_budget_usd" {
-		u.AddIssue("terminal_usage_incomplete")
+		u.AddIssue(job.IssueTerminalUsageIncomplete)
 		return
 	}
 	if t.Input == nil || t.CacheRead == nil || t.CacheCreation == nil || t.Output == nil {
-		u.AddIssue("missing_terminal_usage")
+		u.AddIssue(job.IssueMissingTerminalUsage)
 		return
 	}
 	if str(event, "subtype") == "error_during_execution" && *t.Input == 0 && *t.CacheRead == 0 && *t.CacheCreation == 0 && *t.Output == 0 {
-		u.AddIssue("terminal_usage_incomplete")
+		u.AddIssue(job.IssueTerminalUsageIncomplete)
 		return
 	}
 	if (u.InputTokens != nil && *u.InputTokens != *t.Input) ||
 		(u.CacheReadInputTokens != nil && *u.CacheReadInputTokens != *t.CacheRead) ||
 		(u.CacheCreationInputTokens != nil && *u.CacheCreationInputTokens != *t.CacheCreation) {
-		u.AddIssue("terminal_usage_mismatch")
+		u.AddIssue(job.IssueTerminalUsageMismatch)
 		return
 	}
 	// A terminal total cannot repair attribution or prove missing responses.
-	if u.Attribution != "complete" || slices.Contains(u.Issues, "missing_input_usage") || slices.Contains(u.Issues, "missing_message_id") {
-		u.AddIssue("terminal_usage_incomplete")
+	if u.Attribution != job.AttributionComplete || slices.Contains(u.Issues, job.IssueMissingInputUsage) || slices.Contains(u.Issues, job.IssueMissingMessageID) {
+		u.AddIssue(job.IssueTerminalUsageIncomplete)
 		return
 	}
 	u.InputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens = t.Input, t.CacheRead, t.CacheCreation

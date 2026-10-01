@@ -53,10 +53,10 @@ func TestResolveRefNamesLandInTheCentralStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A reference reads the same name, and reaches a fan-out's member.
-	if ref, _ := ResolveRef("review-r1", repo, ""); ref != dir {
+	if ref, _ := resolveDir("review-r1", repo, ""); ref != dir {
 		t.Fatalf("ResolveRef = %q, want %q", ref, dir)
 	}
-	if ref, _ := ResolveRef("review-r1/codex", repo, ""); ref != filepath.Join(dir, "codex") {
+	if ref, _ := resolveDir("review-r1/codex", repo, ""); ref != filepath.Join(dir, "codex") {
 		t.Fatalf("member ref = %q", ref)
 	}
 	if _, err := ResolveName("review-r1/codex", repo); err == nil {
@@ -75,7 +75,7 @@ func TestResolveRefNamesLandInTheCentralStore(t *testing.T) {
 		t.Fatalf("subdir resolves %q, want %q", sub, dir)
 	}
 	// A path is a path.
-	if p, _ := ResolveRef("./jobs/x", repo, ""); !filepath.IsAbs(p) || filepath.Base(p) != "x" {
+	if p, _ := resolveDir("./jobs/x", repo, ""); !filepath.IsAbs(p) || filepath.Base(p) != "x" {
 		t.Fatalf("path ref = %q", p)
 	}
 	for _, bad := range []string{"", "-lead", "a b", "a/b/../c!"} {
@@ -212,15 +212,49 @@ func TestResolveRefFollowsTheLatestGeneration(t *testing.T) {
 		}
 	}
 	want := GenerationDir(base, "consult-r1", 2)
-	if ref, _ := ResolveRef("consult-r1", repo, ""); ref != want {
+	if ref, _ := resolveDir("consult-r1", repo, ""); ref != want {
 		t.Fatalf("ResolveRef(name) = %q, want %q", ref, want)
 	}
-	if ref, _ := ResolveRef("consult-r1/codex", repo, ""); ref != filepath.Join(want, "codex") {
+	if ref, _ := resolveDir("consult-r1/codex", repo, ""); ref != filepath.Join(want, "codex") {
 		t.Fatalf("ResolveRef(name/member) = %q, want the member under %q", ref, want)
 	}
 	// The first generation stays an identity, reachable by its path.
-	if ref, _ := ResolveRef(first, repo, ""); ref != first {
+	if ref, _ := resolveDir(first, repo, ""); ref != first {
 		t.Fatalf("ResolveRef(path) = %q, want %q", ref, first)
+	}
+}
+
+// A name falls back exactly when a caller with an identity owns no
+// generation of it and someone else's exists; the resolver reports that,
+// with the owner it read, so nothing downstream re-derives it.
+func TestResolveRefReportsAFallback(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	first, _ := ResolveName("consult-r1", repo)
+	if err := os.MkdirAll(first, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := &Meta{SchemaVersion: MetaSchemaVersion, Status: StatusOK, Provider: "codex", Caller: Ptr("session-a")}
+	if err := m.WriteFile(Workspace{Dir: first}.MetaPath()); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		arg, caller string
+		fellBack    bool
+		owner       string
+	}{
+		{"consult-r1", "session-a", false, "session-a"},
+		{"consult-r1", "session-b", true, "session-a"},
+		{"consult-r1/codex", "session-b", true, "session-a"},
+		{"consult-r1", "", false, ""},
+		{first, "session-b", false, ""},
+		{"never-dispatched", "session-b", false, ""},
+	}
+	for _, c := range cases {
+		ref, err := ResolveRef(c.arg, repo, c.caller)
+		if err != nil || ref.FellBack != c.fellBack || (c.fellBack && ref.Owner != c.owner) {
+			t.Errorf("ResolveRef(%q) for %q = %+v (%v), want fellBack=%v owner=%q", c.arg, c.caller, ref, err, c.fellBack, c.owner)
+		}
 	}
 }
 
@@ -303,4 +337,10 @@ func run(t *testing.T, dir string, name string, args ...string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%s %v: %v\n%s", name, args, err, out)
 	}
+}
+
+// resolveDir is ResolveRef's directory, for tests about where a name lands.
+func resolveDir(arg, cwd, caller string) (string, error) {
+	ref, err := ResolveRef(arg, cwd, caller)
+	return ref.Dir, err
 }

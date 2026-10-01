@@ -51,27 +51,48 @@ func ResolveName(arg, invocationCwd string) (string, error) {
 	return filepath.Join(DefaultBase(invocationCwd), arg), nil
 }
 
+// Ref is what a reference to an existing job resolved to: its directory and,
+// for a name, whether the name meant a job of the caller's own.
+type Ref struct {
+	Dir string
+	// Name is the name the reference spelled, "" for a path.
+	Name string
+	// FellBack says a caller with an identity dispatched nothing under Name,
+	// so it read the newest job of anyone's — work picked up on purpose, or a
+	// caller whose identity changed; the engine cannot tell which. Owner is
+	// that job's recorded caller, "" when it recorded none. A path never
+	// falls back.
+	FellBack bool
+	Owner    string
+}
+
 // ResolveRef turns a reference to an existing job into its directory: a
 // name as ResolveName reads it, resolved for this caller; a fan-out member as
 // name/member; or a path.
-func ResolveRef(arg, invocationCwd, caller string) (string, error) {
+func ResolveRef(arg, invocationCwd, caller string) (Ref, error) {
 	if arg == "" {
-		return "", errors.New("a job is required: its name in this project's store, or its directory path")
+		return Ref{}, errors.New("a job is required: its name in this project's store, or its directory path")
 	}
 	if IsPath(arg) {
-		return filepath.Abs(arg)
+		dir, err := filepath.Abs(arg)
+		return Ref{Dir: dir}, err
 	}
 	for _, segment := range strings.Split(arg, "/") {
 		if !namePattern.MatchString(segment) {
-			return "", fmt.Errorf("job %q: a name is one segment of letters, digits, '.', '_' or '-' (a fan-out member is name/member); use a path (starting with / or ./) for anything else", arg)
+			return Ref{}, fmt.Errorf("job %q: a name is one segment of letters, digits, '.', '_' or '-' (a fan-out member is name/member); use a path (starting with / or ./) for anything else", arg)
 		}
 	}
 	name, member, _ := strings.Cut(arg, "/")
 	addr, err := Resolve(DefaultBase(invocationCwd), name, caller)
 	if err != nil {
-		return "", err
+		return Ref{}, err
 	}
-	return filepath.Join(addr.Dir, filepath.FromSlash(member)), nil
+	return Ref{
+		Dir:      filepath.Join(addr.Dir, filepath.FromSlash(member)),
+		Name:     name,
+		FellBack: caller != "" && !addr.Own && addr.Newest > 0,
+		Owner:    addr.NewestOwner,
+	}, nil
 }
 
 // StoreUnreadableError reports a project store whose generations could not be
@@ -112,6 +133,11 @@ type Address struct {
 	// its own. The next dispatch is generation Newest+1 whoever sends it.
 	Newest    int
 	NewestDir string
+	// Own says Dir is the caller's own generation. NewestOwner is the caller
+	// the newest generation recorded — read only for a caller with an
+	// identity, and "" when that generation recorded none.
+	Own         bool
+	NewestOwner string
 }
 
 // Resolve reads what name addresses for caller ("" = no identity). Two things
@@ -128,6 +154,7 @@ func Resolve(base, name, caller string) (Address, error) {
 	}
 	newest, own := 0, 0
 	unattributed := map[int]error{}
+	owners := map[int]string{}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -142,7 +169,10 @@ func Resolve(base, name, caller string) (Address, error) {
 		owner, err := CallerOf(filepath.Join(base, e.Name()))
 		if err != nil {
 			unattributed[g] = err
-		} else if owner == caller && g > own {
+			continue
+		}
+		owners[g] = owner
+		if owner == caller && g > own {
 			own = g
 		}
 	}
@@ -151,9 +181,9 @@ func Resolve(base, name, caller string) (Address, error) {
 			return Address{}, &UnattributedError{Name: name, Dir: GenerationDir(base, name, g), Err: err}
 		}
 	}
-	addr := Address{Newest: newest, NewestDir: GenerationDir(base, name, newest)}
+	addr := Address{Newest: newest, NewestDir: GenerationDir(base, name, newest), Own: own > 0, NewestOwner: owners[newest]}
 	addr.Dir = addr.NewestDir
-	if own > 0 {
+	if addr.Own {
 		addr.Dir = GenerationDir(base, name, own)
 	}
 	return addr, nil

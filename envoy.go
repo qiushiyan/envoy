@@ -331,7 +331,7 @@ func Collect(req CollectRequest) int {
 	if req.Job == "" {
 		return usageError(stderr, "collect takes the job to print: the name it was run as, or its directory")
 	}
-	dir, err := job.ResolveRef(req.Job, invocationCwd, job.CallerFromEnv())
+	ref, err := job.ResolveRef(req.Job, invocationCwd, job.CallerFromEnv())
 	if msg, ok := unresolvable(err); ok {
 		fmt.Fprintf(stderr, "collect error: %s\n", msg)
 		return ExitInfra
@@ -339,30 +339,14 @@ func Collect(req CollectRequest) int {
 	if err != nil {
 		return usageError(stderr, "%s", err)
 	}
-	return collect.Collect(dir, fallbackNote(req.Job, dir), mode, stdout, stderr)
-}
-
-// fallbackNote says when a name did not resolve to a job of the caller's own.
-// A path names what it names; a caller with no identity has no jobs of its
-// own to fall back from; and a job whose record cannot say whose it is gets
-// no note, since collect reports that record itself.
-func fallbackNote(arg, dir string) string {
-	caller := job.CallerFromEnv()
-	if job.IsPath(arg) || caller == "" {
-		return ""
+	// A name that did not mean a job of the caller's own says so: the engine
+	// cannot tell work picked up on purpose from a caller whose identity
+	// changed, so it reports which happened and leaves the judgment.
+	note := ""
+	if ref.FellBack {
+		note = prose.NameFellBack(ref.Name, ref.Owner != "")
 	}
-	name, member, _ := strings.Cut(arg, "/")
-	if member != "" {
-		dir = filepath.Dir(dir)
-	}
-	owner, err := job.CallerOf(dir)
-	if err != nil || owner == caller {
-		return ""
-	}
-	if _, err := os.Stat(dir); err != nil {
-		return ""
-	}
-	return prose.NameFellBack(name, owner != "")
+	return collect.Collect(ref.Dir, note, mode, stdout, stderr)
 }
 
 // Pending prints the discovery-only recovery index for base ("" = the default

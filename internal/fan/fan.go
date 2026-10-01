@@ -125,12 +125,11 @@ func Run(opts Options) int {
 	}
 	wg.Wait()
 
+	printTerminalBlock(opts, outcomes)
 	codes := make([]int, len(outcomes))
-	statuses := make([]string, len(outcomes))
 	for i, o := range outcomes {
-		codes[i], statuses[i] = o.exitCode, o.status
+		codes[i] = o.exitCode
 	}
-	printTerminalBlock(opts, outcomes, statuses)
 	return job.ExitCodeForGroup(codes)
 }
 
@@ -185,7 +184,11 @@ func printDispatchBlock(opts Options, gw job.GroupWorkspace) {
 	fmt.Fprintf(w, "next: %s\n", prose.FanDispatchNext(gw.Dir))
 }
 
-func printTerminalBlock(opts Options, outcomes []outcome, statuses []string) {
+func printTerminalBlock(opts Options, outcomes []outcome) {
+	statuses := make([]string, len(outcomes))
+	for i, o := range outcomes {
+		statuses[i] = o.status
+	}
 	w := opts.Stdout
 	fmt.Fprintln(w, "")
 	fmt.Fprintf(w, "status: %s\n", prose.FanStatusLine(statuses))
