@@ -164,15 +164,11 @@ func recordHold(meta *job.Meta, err error) (prose.NameHold, bool) {
 
 // ---------- classification and recovery ----------
 
-// runningState classifies a status:"running" meta by process liveness.
-type runningState struct {
-	kind   string // "terminal" | "live" | "orphaned" | "abandoned" | "unknown"
-	detail string
-}
-
-func classifyRunning(meta *job.Meta) runningState {
+// classifyRunning reads a turn recorded as running by what its processes
+// show; a turn that is not running observes nothing.
+func classifyRunning(meta *job.Meta) prose.RunObservation {
 	if meta.Status != job.StatusRunning {
-		return runningState{kind: "terminal"}
+		return prose.RunObservation{}
 	}
 	runnerAlive := proc.PidLiveness(meta.RunnerPid)
 	pgid := 0
@@ -186,32 +182,19 @@ func classifyRunning(meta *job.Meta) runningState {
 	groupAlive := proc.GroupLiveness(pgid)
 	providerAlive := proc.PidLiveness(pid)
 
-	if runnerAlive == proc.Live {
-		return runningState{
-			kind:   "live",
-			detail: fmt.Sprintf("a process with recorded runner PID %d is alive", meta.RunnerPid),
-		}
-	}
-	if groupAlive == proc.Live || providerAlive == proc.Live {
+	switch {
+	case runnerAlive == proc.Live:
+		return prose.RunObservation{State: prose.RunLive, RunnerPid: meta.RunnerPid}
+	case groupAlive == proc.Live || providerAlive == proc.Live:
 		id := pgid
 		if id == 0 {
 			id = pid
 		}
-		return runningState{
-			kind:   "orphaned",
-			detail: fmt.Sprintf("the runner is gone, but a process in the recorded provider group %d is still alive", id),
-		}
+		return prose.RunObservation{State: prose.RunOrphaned, ProviderGroup: id}
+	case runnerAlive == proc.Gone && (groupAlive == proc.Gone || (meta.ProviderPgid == nil && providerAlive == proc.Gone)):
+		return prose.RunObservation{State: prose.RunAbandoned}
 	}
-	if runnerAlive == proc.Gone && (groupAlive == proc.Gone || (meta.ProviderPgid == nil && providerAlive == proc.Gone)) {
-		return runningState{
-			kind:   "abandoned",
-			detail: "the recorded runner and provider process group are no longer alive",
-		}
-	}
-	return runningState{
-		kind:   "unknown",
-		detail: "the job's process records are incomplete, so provider liveness cannot be established safely",
-	}
+	return prose.RunObservation{State: prose.RunUnknown}
 }
 
 // resumeCommand is the follow-up that continues this job's conversation, or
@@ -231,7 +214,7 @@ func resumeCommand(dir string, meta *job.Meta) string {
 // or repeat the dispatch.
 func recoveryAction(dir string, meta *job.Meta) string {
 	if meta.SessionLockConflict != nil {
-		return prose.LockedSession(*meta.SessionLockConflict, false)
+		return prose.LockedSession(meta.SessionLockConflict, false)
 	}
 	return prose.Recovery(meta, resumeCommand(dir, meta), prose.RedispatchCommand(dir, meta))
 }
@@ -239,14 +222,14 @@ func recoveryAction(dir string, meta *job.Meta) string {
 // recoveryForStale prescribes the next move for a job whose runner is gone.
 // A live orphan provider outranks the prompt state: acting alongside it would
 // put two turns in one tree.
-func recoveryForStale(dir string, meta *job.Meta, state runningState) string {
+func recoveryForStale(dir string, meta *job.Meta, state prose.RunObservation) string {
 	if meta.SessionLockConflict != nil {
-		return prose.LockedSession(*meta.SessionLockConflict, state.kind == "orphaned")
+		return prose.LockedSession(meta.SessionLockConflict, state.State == prose.RunOrphaned)
 	}
-	switch state.kind {
-	case "orphaned":
+	switch state.State {
+	case prose.RunOrphaned:
 		return prose.Orphaned()
-	case "abandoned":
+	case prose.RunAbandoned:
 		return recoveryAction(dir, meta)
 	default:
 		return prose.Unprovable()
@@ -255,18 +238,17 @@ func recoveryForStale(dir string, meta *job.Meta, state runningState) string {
 
 // reconcileAbandoned rewrites a provably abandoned running job as terminal
 // status "abandoned" so its evidence survives.
-func reconcileAbandoned(dir string, meta *job.Meta, state runningState) *job.Meta {
-	if state.kind != "abandoned" {
+func reconcileAbandoned(dir string, meta *job.Meta, state prose.RunObservation) *job.Meta {
+	if state.State != prose.RunAbandoned {
 		return meta
 	}
 	ws := job.Workspace{Dir: dir}
-	errText := fmt.Sprintf("This turn ended without publishing a result: %s.", state.detail)
 	meta.Status = job.StatusAbandoned
 	meta.ReconciledAt = job.Ptr(job.ISO(time.Now()))
 	meta.Usage.End()
-	meta.Error = job.Ptr(errText)
+	meta.Failure = &job.Failure{Cause: job.CauseAbandoned}
 	if _, err := os.Stat(ws.ResultPath()); os.IsNotExist(err) {
-		job.WriteFileAtomic(ws.ResultPath(), []byte(fmt.Sprintf("# Turn abandoned\n\n%s\n", errText)))
+		job.WriteFileAtomic(ws.ResultPath(), []byte(prose.FailedResult(meta, "")))
 	}
 	meta.WriteFile(ws.MetaPath())
 	return meta
@@ -435,7 +417,7 @@ func renderJob(dir string, meta *job.Meta, mode Mode, w io.Writer, showGit bool)
 
 	fmt.Fprintf(w, "job: %s\n", dir)
 	if meta.Status == job.StatusRunning {
-		fmt.Fprintf(w, "status: running (%s — %s; result.md is not final)\n", state.kind, state.detail)
+		fmt.Fprintf(w, "status: %s\n", prose.RunningStatus(state))
 	} else {
 		fmt.Fprintf(w, "status: %s\n", prose.StatusLine(meta.Status))
 	}
@@ -523,8 +505,8 @@ func renderJob(dir string, meta *job.Meta, mode Mode, w io.Writer, showGit bool)
 			fmt.Fprintf(w, "resume: %s\n", resume)
 		}
 	}
-	if meta.Error != nil {
-		fmt.Fprintf(w, "error: %s\n", *meta.Error)
+	if meta.Failure != nil {
+		fmt.Fprintf(w, "error: %s\n", prose.Failure(meta))
 	}
 	if meta.CollectedAt != nil {
 		fmt.Fprintf(w, "collected: %s\n", *meta.CollectedAt)
@@ -548,7 +530,7 @@ func renderJob(dir string, meta *job.Meta, mode Mode, w io.Writer, showGit bool)
 	}
 
 	if meta.Status == job.StatusRunning {
-		if state.kind == "live" {
+		if state.State == prose.RunLive {
 			fmt.Fprintf(w, "\nnext: %s\n", prose.RunningNext(dir))
 		} else {
 			fmt.Fprintf(w, "\nnext: %s\n", recoveryForStale(dir, meta, state))
@@ -723,12 +705,9 @@ func orDefault(v, fallback string) string {
 // ---------- pending discovery ----------
 
 // pendingItem is one job needing attention after a possibly missed
-// notification.
+// notification: its label, why it needs attention, and the one next action.
 type pendingItem struct {
-	kind   string // runningState kinds, plus "corrupt"
-	dir    string
-	detail string
-	meta   *job.Meta
+	label, dir, why, next string
 }
 
 func pendingJobs(dirs []string) []pendingItem {
@@ -750,29 +729,28 @@ func pendingJobs(dirs []string) []pendingItem {
 }
 
 // pendingTurn classifies one turn record, as read: still needing attention,
-// or not.
+// or not. Collection reconciles an abandoned record and renders its recovery
+// from the reconciled state, so the index only points there.
 func pendingTurn(dir string, meta *job.Meta, err error) (pendingItem, bool) {
-	if errors.Is(err, job.ErrNoRecord) {
+	switch {
+	case errors.Is(err, job.ErrNoRecord):
 		return pendingItem{}, false
-	}
-	if err != nil {
-		return pendingItem{
-			kind: "corrupt", dir: dir,
-			detail: fmt.Sprintf("meta.json could not be read: %s", err),
-		}, true
-	}
-	if meta.Status == job.StatusRunning {
+	case err != nil:
+		return pendingItem{label: "corrupt", dir: dir,
+			why: prose.PendingUnreadable("meta.json", err), next: prose.PendingUnreadableNext(dir)}, true
+	case meta.Status == job.StatusRunning:
 		state := classifyRunning(meta)
-		if state.kind == "live" {
+		if state.State == prose.RunLive {
 			return pendingItem{}, false
 		}
-		return pendingItem{kind: state.kind, dir: dir, detail: state.detail, meta: meta}, true
-	}
-	if meta.CollectedAt == nil {
-		return pendingItem{
-			kind: "terminal", dir: dir, meta: meta,
-			detail: fmt.Sprintf("terminal status %s has not been collected", meta.Status),
-		}, true
+		next := prose.CollectCommand(dir)
+		if state.State != prose.RunAbandoned {
+			next = recoveryForStale(dir, meta, state)
+		}
+		return pendingItem{label: string(state.State), dir: dir, why: prose.RunDetail(state), next: next}, true
+	case meta.CollectedAt == nil:
+		return pendingItem{label: "terminal:" + meta.Status, dir: dir,
+			why: prose.PendingUncollected(meta.Status), next: prose.CollectCommand(dir)}, true
 	}
 	return pendingItem{}, false
 }
@@ -784,10 +762,8 @@ func pendingTurn(dir string, meta *job.Meta, err error) (pendingItem, bool) {
 func pendingGroup(dir string) (pendingItem, bool) {
 	fan, err := job.ReadFan(dir)
 	if err != nil {
-		return pendingItem{
-			kind: "corrupt", dir: dir,
-			detail: fmt.Sprintf("group.json could not be read: %s", err),
-		}, true
+		return pendingItem{label: "corrupt", dir: dir,
+			why: prose.PendingUnreadable("group.json", err), next: prose.PendingUnreadableNext(dir)}, true
 	}
 	var reasons []string
 	for _, m := range fan.Members {
@@ -795,21 +771,18 @@ func pendingGroup(dir string) (pendingItem, bool) {
 		// case the member's own files cannot report; the roster is the only
 		// evidence it was meant to run, so the group carries it.
 		if errors.Is(m.Err, job.ErrNoRecord) {
-			reasons = append(reasons, fmt.Sprintf("%s: has no meta.json, so it never recorded a start", m.Name))
+			reasons = append(reasons, m.Name+": "+prose.PendingMemberNoRecord())
 			continue
 		}
 		if item, ok := pendingTurn(m.Dir, m.Meta, m.Err); ok {
-			reasons = append(reasons, fmt.Sprintf("%s: %s", m.Name, item.detail))
+			reasons = append(reasons, m.Name+": "+item.why)
 		}
 	}
 	if len(reasons) == 0 {
 		return pendingItem{}, false
 	}
-	return pendingItem{
-		kind: "group", dir: dir,
-		detail: fmt.Sprintf("%d of %d members still need attention — %s",
-			len(reasons), len(fan.Members), strings.Join(reasons, " · ")),
-	}, true
+	return pendingItem{label: "group", dir: dir,
+		why: prose.PendingMembers(reasons, len(fan.Members)), next: prose.CollectCommand(dir)}, true
 }
 
 // Pending prints the discovery-only recovery index: it skips provably live
@@ -829,28 +802,13 @@ func Pending(base string, baseWasDerived bool, w, errW io.Writer) int {
 	pending := pendingJobs(dirs)
 	fmt.Fprintf(w, "pending jobs: %d (under %s)\n", len(pending), base)
 	if len(pending) == 0 {
-		fmt.Fprintln(w, "next: no recovery action is needed")
+		fmt.Fprintf(w, "next: %s\n", prose.PendingNone())
 		return 0
 	}
 	for _, item := range pending {
-		head := item.kind
-		if item.kind == "terminal" && item.meta != nil {
-			head += ":" + item.meta.Status
-		}
-		fmt.Fprintf(w, "\n[%s] %s\n", head, item.dir)
-		fmt.Fprintf(w, "why: %s\n", item.detail)
-		ws := job.Workspace{Dir: item.dir}
-		switch item.kind {
-		case "terminal", "group", "abandoned":
-			// Collection reconciles an abandoned record and renders its
-			// recovery from the reconciled state; the index only points there.
-			fmt.Fprintf(w, "next: %s\n", prose.CollectCommand(item.dir))
-		case "corrupt":
-			fmt.Fprintf(w, "next: inspect %s, %s, %s, and the working tree; do not infer completion from the damaged metadata\n",
-				ws.ProgressLogPath(), ws.RawLogPath(), ws.StderrLogPath())
-		default:
-			fmt.Fprintf(w, "next: %s\n", recoveryForStale(item.dir, item.meta, runningState{kind: item.kind, detail: item.detail}))
-		}
+		fmt.Fprintf(w, "\n[%s] %s\n", item.label, item.dir)
+		fmt.Fprintf(w, "why: %s\n", item.why)
+		fmt.Fprintf(w, "next: %s\n", item.next)
 	}
 	return 0
 }

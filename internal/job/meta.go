@@ -73,14 +73,14 @@ type Meta struct {
 	// Caller is the dispatching session's identity as its harness exported
 	// it; absent when none was exported, and in older records. It scopes what
 	// a job name means to that caller and is never inherited by a continuation.
-	Caller              *string  `json:"caller,omitempty"`
-	SessionLockConflict *string  `json:"sessionLockConflict"`
-	StartedAt           string   `json:"startedAt"`
-	EndedAt             *string  `json:"endedAt"`
-	DurationMs          *int64   `json:"durationMs"`
-	TimeoutMin          float64  `json:"timeoutMin"`
-	DeadlineAt          *string  `json:"deadlineAt"`
-	ProviderArgv        []string `json:"providerArgv"`
+	Caller              *string       `json:"caller,omitempty"`
+	SessionLockConflict *LockConflict `json:"sessionLockConflict"`
+	StartedAt           string        `json:"startedAt"`
+	EndedAt             *string       `json:"endedAt"`
+	DurationMs          *int64        `json:"durationMs"`
+	TimeoutMin          float64       `json:"timeoutMin"`
+	DeadlineAt          *string       `json:"deadlineAt"`
+	ProviderArgv        []string      `json:"providerArgv"`
 	// CommandPrefix is the resolved executable and launcher arguments. The
 	// executed argv is CommandPrefix + ProviderArgv[1:]; ProviderArgv keeps
 	// its provider-native meaning. Absent in older records means unknown.
@@ -113,21 +113,21 @@ type Meta struct {
 	Tokens           *Tokens           `json:"tokens"`
 	Usage            *Usage            `json:"usage,omitempty"`
 	CostUSD          *float64          `json:"costUsd"`
-	Error            *string           `json:"error"`
-	// Remedy is the driver's cause-specific fix for a turn that did not
-	// deliver ("Raise the budget cap first."); nil when the cause needs none.
-	Remedy       *string `json:"remedy"`
-	ResultKind   string  `json:"resultKind"`
-	CollectedAt  *string `json:"collectedAt"`
-	ReconciledAt *string `json:"reconciledAt,omitempty"`
+	// Failure is why a turn that did not deliver ended; nil for an ok turn.
+	Failure      *Failure `json:"failure"`
+	ResultKind   string   `json:"resultKind"`
+	CollectedAt  *string  `json:"collectedAt"`
+	ReconciledAt *string  `json:"reconciledAt,omitempty"`
 }
 
 // MetaSchemaVersion is the only schema this engine reads or writes. Records
 // from another version are refused rather than reinterpreted: a job store
 // holds one engine's records at a time.
 // Optional additive observations (such as usage) retain this version; absence
-// means unavailable, and existing fields keep their semantics.
-const MetaSchemaVersion = 9
+// means unavailable, and existing fields keep their semantics. Schema 10
+// replaced the worded error, remedy and lock-conflict strings with the
+// failure and lock-conflict observations they were worded from.
+const MetaSchemaVersion = 10
 
 // UsesLauncher reports whether a non-bare command was recorded.
 // Absent and bare prefixes both leave nothing to report about a launcher.

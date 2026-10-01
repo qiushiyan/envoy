@@ -12,6 +12,7 @@ package runner
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -23,7 +24,6 @@ import (
 
 	"github.com/qiushiyan/envoy/internal/job"
 	"github.com/qiushiyan/envoy/internal/lock"
-	"github.com/qiushiyan/envoy/internal/prose"
 	"github.com/qiushiyan/envoy/internal/provider"
 	"github.com/qiushiyan/envoy/internal/text"
 )
@@ -82,7 +82,7 @@ type termination struct {
 	// requested, captured before any signal goes out. Tearing a turn down can
 	// itself shake loose more output, and reporting that back as what the cap
 	// found would describe envoy's own cleanup as provider work.
-	stream prose.CapStream
+	stream job.StreamSample
 }
 
 type exitResult struct {
@@ -241,7 +241,7 @@ func (r *run) execute(promptText string) Result {
 		r.done = true
 		r.finish(provider.Outcome{
 			Status:      job.StatusInfra,
-			ErrorText:   prose.SpawnFailed(prefix[0], err),
+			Failure:     &job.Failure{Cause: job.CauseSpawnFailed, Message: job.Ptr(err.Error())},
 			PromptState: job.PromptNotStarted,
 			Evidence:    "provider spawn error",
 		}, exitResult{})
@@ -343,6 +343,15 @@ func (r *run) result() Result {
 // at collect time from this id and the lock-conflict field together.
 func (r *run) setSession(id string) {
 	r.meta.SessionID = job.PtrIfNonEmpty(id)
+}
+
+// lockConflict is the record of a session lock this turn could not take: the
+// conflict the lock found, or the error that stopped it.
+func lockConflict(sessionID string, err error) *job.LockConflict {
+	if c, ok := errors.AsType[*lock.Conflict](err); ok {
+		return &c.LockConflict
+	}
+	return &job.LockConflict{SessionID: sessionID, Error: job.Ptr(err.Error())}
 }
 
 func (r *run) releaseLock() {
@@ -455,7 +464,7 @@ func (r *run) onSessionStarted(ev provider.Event, rest []provider.Event) (abort 
 		if err != nil {
 			// A non-conflict lock failure is treated the same way: never
 			// continue an unlocked session.
-			r.meta.SessionLockConflict = job.Ptr(err.Error())
+			r.meta.SessionLockConflict = lockConflict(ev.SessionID, err)
 			evidence := r.opts.Provider + " session started"
 			for _, e := range rest {
 				if e.Kind == provider.KindAccepted {

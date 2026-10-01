@@ -1,14 +1,12 @@
 package runner
 
 import (
-	"fmt"
 	"os"
 	"syscall"
 	"time"
 
 	"github.com/qiushiyan/envoy/internal/job"
 	"github.com/qiushiyan/envoy/internal/proc"
-	"github.com/qiushiyan/envoy/internal/prose"
 	"github.com/qiushiyan/envoy/internal/provider"
 )
 
@@ -179,9 +177,8 @@ func (r *run) onChildDone(exit exitResult) {
 	if r.meta.SessionLockConflict != nil {
 		ev := r.driver.Recovery()
 		r.finish(provider.Outcome{
-			Status: job.StatusInfra,
-			ErrorText: fmt.Sprintf("%s reported a session id that another turn already holds, so this turn was stopped.",
-				capitalize(r.opts.Provider)),
+			Status:      job.StatusInfra,
+			Failure:     &job.Failure{Cause: job.CauseSessionConflict},
 			Partial:     ev.Partial,
 			Tokens:      ev.Tokens,
 			PromptState: job.PromptAccepted,
@@ -196,25 +193,18 @@ func (r *run) onChildDone(exit exitResult) {
 	}
 
 	if exit.signal != nil && r.meta.ProviderTerminalAt == nil {
-		r.finish(r.driver.Recovery().Outcome(job.StatusInfra, fmt.Sprintf("%s was killed by signal %s, which envoy did not send.",
-			r.meta.CommandPrefix[0], *exit.signal)), exit)
+		r.finish(r.driver.Recovery().Outcome(job.StatusInfra, job.Failure{Cause: job.CauseForeignSignal}), exit)
 		return
 	}
 
-	command := ""
-	if r.meta.UsesLauncher() {
-		command = r.meta.CommandPrefix[0]
-	}
 	outcome := r.driver.Conclude(provider.ExitInfo{
-		Command:      command,
 		Code:         exit.code,
-		Signal:       exit.signal,
 		Terminated:   r.term != nil,
 		TerminalType: job.Deref(r.meta.ProviderTerminalEventType),
 		StderrTail:   r.stderrTail,
 	})
-	// The driver reported the cause and any cause-specific fix; the
-	// prescription itself is rendered from the records at collect time.
+	// The driver reported what it observed; the failure, its fix and the
+	// prescription are worded from the records.
 	r.finish(outcome, exit)
 }
 
@@ -222,11 +212,12 @@ func (r *run) onChildDone(exit exitResult) {
 // whatever acceptance evidence survives. Never redispatch merely because
 // output was quiet: that is the recovery invariant these messages encode.
 func (r *run) finishAfterStop(exit exitResult) {
-	status, stopped := job.StatusInterrupted, fmt.Sprintf("envoy stopped %s after receiving %s.", r.opts.Provider, r.term.signal)
+	status, failure := job.StatusInterrupted, job.Failure{Cause: job.CauseInterrupted}
 	if r.term.reason == stopTimeout {
-		status, stopped = job.StatusTimeout, prose.TimedOut(r.opts.TimeoutMin, r.opts.Provider, r.term.stream)
+		stream := r.term.stream
+		status, failure = job.StatusTimeout, job.Failure{Cause: job.CauseTimeout, Stream: &stream}
 	}
-	r.finish(r.driver.Recovery().Outcome(status, stopped), exit)
+	r.finish(r.driver.Recovery().Outcome(status, failure), exit)
 }
 
 // capStream reports what the run had observed of the provider's stream as of
@@ -238,27 +229,16 @@ func (r *run) finishAfterStop(exit exitResult) {
 // Bytes and events are separate observations because they answer different
 // questions: a provider can write to stdout or stderr without producing one
 // event envoy can parse, so "no events" never licenses "nothing arrived".
-func (r *run) capStream(asOf time.Time) prose.CapStream {
-	stream := prose.CapStream{
-		Events: r.meta.ProviderEventCount,
-		Bytes:  r.meta.ProviderOutputBytes,
-	}
-	if r.meta.LastProviderEventType != nil {
-		stream.LastEvent = *r.meta.LastProviderEventType
+func (r *run) capStream(asOf time.Time) job.StreamSample {
+	stream := job.StreamSample{
+		Events:    r.meta.ProviderEventCount,
+		Bytes:     r.meta.ProviderOutputBytes,
+		LastEvent: job.Deref(r.meta.LastProviderEventType),
 	}
 	if r.meta.LastProviderActivityAt != nil {
 		if t, err := time.Parse(time.RFC3339, *r.meta.LastProviderActivityAt); err == nil {
-			if quiet := asOf.Sub(t); quiet > 0 {
-				stream.Quiet = quiet
-			}
+			stream.QuietMs = max(asOf.Sub(t), 0).Milliseconds()
 		}
 	}
 	return stream
-}
-
-func capitalize(s string) string {
-	if s == "" {
-		return s
-	}
-	return string(s[0]-'a'+'A') + s[1:]
 }

@@ -29,17 +29,17 @@ func TestAcquireConflictRelease(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected conflict, got %v", err)
 	}
-	if !strings.Contains(conflict.Message, "already has a live turn") ||
-		!strings.Contains(conflict.Message, "/tmp/job1") {
-		t.Fatalf("conflict message = %q", conflict.Message)
+	if !strings.Contains(conflict.Error(), "already has a live turn") ||
+		!strings.Contains(conflict.Error(), "/tmp/job1") {
+		t.Fatalf("conflict message = %q", conflict.Error())
 	}
-	if strings.Contains(conflict.Message, "Automatic takeover is refused") {
+	if strings.Contains(conflict.Error(), "Automatic takeover is refused") {
 		t.Fatal("live owner must not be reported as a stale refusal")
 	}
 	// The caller is an agent that waits and collects; a terminal to tail is
 	// not a thing it has.
-	if strings.Contains(conflict.Message, "tail -f") || !strings.Contains(conflict.Message, "envoy collect '/tmp/job1'") {
-		t.Fatalf("a live conflict must point at the owning job's collect, not a watch command: %q", conflict.Message)
+	if strings.Contains(conflict.Error(), "tail -f") || !strings.Contains(conflict.Error(), "envoy collect '/tmp/job1'") {
+		t.Fatalf("a live conflict must point at the owning job's collect, not a watch command: %q", conflict.Error())
 	}
 
 	h.Release()
@@ -72,9 +72,9 @@ func TestStaleLockIsNeverReclaimed(t *testing.T) {
 	if !ok {
 		t.Fatalf("dead owner must be a conflict, got %v", err)
 	}
-	if !strings.Contains(conflict.Message, "Automatic takeover is refused") ||
-		!strings.Contains(conflict.Message, "envoy collect '/tmp/dead-job'") {
-		t.Fatalf("stale message must refuse takeover and point at the job: %q", conflict.Message)
+	if !strings.Contains(conflict.Error(), "Automatic takeover is refused") ||
+		!strings.Contains(conflict.Error(), "envoy collect '/tmp/dead-job'") {
+		t.Fatalf("stale message must refuse takeover and point at the job: %q", conflict.Error())
 	}
 	if _, err := os.Stat(p); err != nil {
 		t.Fatal("the stale lock must still exist — never auto-reclaimed")

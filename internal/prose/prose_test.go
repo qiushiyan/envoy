@@ -38,8 +38,8 @@ func TestContextUsage(t *testing.T) {
 // opposite follow-ups: one continues work, the other is addressed to a session
 // that shows none. The engine records the difference, so the envelope must say
 // it — without ever calling the turn hung, which the cap does not prove.
-func TestTimedOutCarriesTheStreamItObserved(t *testing.T) {
-	quiet := TimedOut(30, "codex", CapStream{Events: 2, LastEvent: "turn.started", Quiet: 29*time.Minute + 58*time.Second})
+func TestTimeoutCarriesTheStreamItObserved(t *testing.T) {
+	quiet := timedOut(30, "codex", job.StreamSample{Events: 2, LastEvent: "turn.started", QuietMs: (29*time.Minute + 58*time.Second).Milliseconds()})
 	for _, want := range []string{
 		"The 30-minute wall-clock cap ended this codex turn.",
 		"not evidence the provider hung",
@@ -50,12 +50,12 @@ func TestTimedOutCarriesTheStreamItObserved(t *testing.T) {
 		}
 	}
 
-	busy := TimedOut(60, "claude", CapStream{Events: 431, LastEvent: "assistant", Quiet: 3 * time.Second})
+	busy := timedOut(60, "claude", job.StreamSample{Events: 431, LastEvent: "assistant", QuietMs: (3 * time.Second).Milliseconds()})
 	if !strings.Contains(busy, "quiet for 3s, after 431 events (last: assistant)") {
 		t.Fatalf("a turn still streaming at the cap must say so: %q", busy)
 	}
 
-	silent := TimedOut(30, "codex", CapStream{})
+	silent := timedOut(30, "codex", job.StreamSample{})
 	if !strings.Contains(silent, "wrote nothing at all before the cap") {
 		t.Fatalf("a turn with no events must say so plainly: %q", silent)
 	}
@@ -66,7 +66,7 @@ func TestTimedOutCarriesTheStreamItObserved(t *testing.T) {
 	// Bytes are not events. A provider that writes a diagnostic and then never
 	// emits anything parseable did stream something, and "nothing at all"
 	// there is simply false.
-	noisy := TimedOut(30, "codex", CapStream{Bytes: 157})
+	noisy := timedOut(30, "codex", job.StreamSample{Bytes: 157})
 	if !strings.Contains(noisy, "wrote 157 bytes before the cap but no event envoy could parse") {
 		t.Fatalf("bytes without events must be reported as such: %q", noisy)
 	}
@@ -179,7 +179,7 @@ func TestRecoveryCoversEveryPromptState(t *testing.T) {
 	}
 
 	// A cause-specific fix rides along with the prescription.
-	if got := Recovery(&job.Meta{PromptState: job.PromptAccepted, Remedy: job.Ptr("Raise the budget cap first.")}, resume, redispatch); !strings.Contains(got, "Raise the budget cap first.") {
+	if got := Recovery(&job.Meta{PromptState: job.PromptAccepted, Failure: &job.Failure{Cause: job.CauseBudgetCap}}, resume, redispatch); !strings.Contains(got, "Raise the budget cap before continuing.") {
 		t.Fatalf("remedy dropped: %s", got)
 	}
 	// Without a session, the prescriptions stay honest about what is possible.

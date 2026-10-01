@@ -187,13 +187,13 @@ func TestLauncherFailureNeverFallsBack(t *testing.T) {
 				mustContain(t, "launcher diagnostic", col.stdout, "launcher: "+key+"=", name)
 				if missing {
 					mustContain(t, "recovery", col.stdout, "Fix "+key+" or make its executable available first.")
-					mustContain(t, "error", m["error"].(string), name)
+					mustContain(t, "error", failureText(t, out), name)
 					if m["promptState"] != "not_started" || m["providerPid"] != nil {
 						t.Fatal("spawn failure lost evidence")
 					}
 				} else {
-					mustContain(t, "error", m["error"].(string), "corrupt account selection")
-					mustContain(t, "error", m["error"].(string), fmt.Sprintf("Command %q exited with code 23", name))
+					mustContain(t, "error", failureText(t, out), "corrupt account selection")
+					mustContain(t, "error", failureText(t, out), fmt.Sprintf("Command %q exited with code 23", name))
 					if readFile(t, filepath.Join(out, "stderr.log")) != "launcher: corrupt account selection\n" {
 						t.Fatal("stderr changed")
 					}

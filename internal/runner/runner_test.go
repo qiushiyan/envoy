@@ -98,7 +98,7 @@ func TestUsageFinalizationWithoutTerminal(t *testing.T) {
 			for _, line := range records[:2] {
 				r.handleEvents(r.driver.Feed(line))
 			}
-			r.finish(provider.Outcome{Status: status, ErrorText: "test stop"}, exitResult{})
+			r.finish(provider.Outcome{Status: status, Failure: &job.Failure{Cause: job.CauseInterrupted}}, exitResult{})
 			u := diskUsage(t, r).Usage
 			if !u.Final || u.State != "incomplete" || *u.LatestContextTokens != 18889 || *u.InputTokens != 2 || u.OutputTokens != nil || !slices.Contains(u.Issues, "missing_terminal") {
 				t.Fatalf("final usage = %+v", u)
@@ -113,7 +113,7 @@ func TestUsageFinalizationWithoutTerminal(t *testing.T) {
 // arrives after the stream's own keeps the stream's evidence.
 func TestAnEndingThatProvesAcceptanceStampsItLikeTheStream(t *testing.T) {
 	r, _ := usageRun(t)
-	r.finish(provider.Outcome{Status: job.StatusFailed, ErrorText: "x",
+	r.finish(provider.Outcome{Status: job.StatusFailed, Failure: &job.Failure{Cause: job.CauseProviderVerdict},
 		PromptState: job.PromptAccepted, Evidence: "claude session transcript"}, exitResult{})
 	m := diskUsage(t, r)
 	if m.PromptState != job.PromptAccepted || m.PromptAcceptedAt == nil ||

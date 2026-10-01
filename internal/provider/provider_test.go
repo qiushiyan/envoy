@@ -151,8 +151,8 @@ func TestClaudeFailureExcludesErrorEcho(t *testing.T) {
 	if out.Status != job.StatusFailed {
 		t.Fatalf("status = %s", out.Status)
 	}
-	if !strings.Contains(out.ErrorText, "boom") {
-		t.Fatalf("error = %q", out.ErrorText)
+	if out.Failure.Cause != job.CauseProviderVerdict || job.Deref(out.Failure.Message) != "boom" {
+		t.Fatalf("failure = %+v", out.Failure)
 	}
 	if out.Partial == nil || *out.Partial != "real partial work" {
 		t.Fatalf("partial must keep real work and drop the error echo, got %v", out.Partial)
@@ -166,16 +166,13 @@ func TestClaudeBudgetStop(t *testing.T) {
 	c.Feed(`{"type":"result","subtype":"error_max_budget_usd","session_id":"s1","usage":{"input_tokens":1}}`)
 
 	out := c.Conclude(ExitInfo{Code: job.Ptr(1)})
-	if out.Status != job.StatusFailed || !strings.Contains(out.ErrorText, "--max-budget-usd 0.25 cap") {
+	if out.Status != job.StatusFailed || out.Failure.Cause != job.CauseBudgetCap {
 		t.Fatalf("budget outcome = %+v", out)
 	}
-	// The driver states the cause and the cause-specific fix; the recovery
-	// prescription itself is prose's, keyed off this prompt state.
+	// The driver states the cause; its wording, the cause-specific fix and
+	// the recovery prescription are prose's, keyed off the record.
 	if out.PromptState != job.PromptAccepted {
 		t.Fatalf("a budget stop happens after acceptance, got %q", out.PromptState)
-	}
-	if !strings.Contains(out.Remedy, "budget cap") {
-		t.Fatalf("budget remedy = %q", out.Remedy)
 	}
 }
 
@@ -232,7 +229,7 @@ func TestCodexTerminalEnvelopeWinsOverKill(t *testing.T) {
 	c.Feed(`{"type":"turn.completed","usage":{"input_tokens":1}}`)
 
 	// Killed during residual cleanup: no exit code, but the envelope landed.
-	out := c.Conclude(ExitInfo{Signal: job.Ptr("SIGKILL"), Terminated: true, TerminalType: "codex turn.completed"})
+	out := c.Conclude(ExitInfo{Terminated: true, TerminalType: "codex turn.completed"})
 	if out.Status != job.StatusOK || out.Text != "finished work" {
 		t.Fatalf("terminal envelope must win over the kill, got %+v", out)
 	}
@@ -245,7 +242,7 @@ func TestCodexFailureAndRecovery(t *testing.T) {
 	c.Feed(`{"type":"turn.failed","error":{"message":"model exploded"}}`)
 
 	out := c.Conclude(ExitInfo{Code: job.Ptr(1)})
-	if out.Status != job.StatusFailed || !strings.Contains(out.ErrorText, "model exploded") {
+	if out.Status != job.StatusFailed || job.Deref(out.Failure.Message) != "model exploded" {
 		t.Fatalf("outcome = %+v", out)
 	}
 	if out.PromptState != job.PromptAccepted {
@@ -278,8 +275,8 @@ func TestCodexNoResultUsesStderrTail(t *testing.T) {
 	if out.Status != job.StatusInfra {
 		t.Fatalf("status = %s", out.Status)
 	}
-	if !strings.Contains(out.ErrorText, "b | c | d") {
-		t.Fatalf("stderr detail must keep the last three non-empty lines: %q", out.ErrorText)
+	if got := out.Failure.StderrTail; out.Failure.Cause != job.CauseExitedWithoutResult || strings.Join(got, "|") != "b|c|d" {
+		t.Fatalf("stderr detail must keep the last three non-empty lines: %+v", out.Failure)
 	}
 	if out.PromptState != job.PromptUnknown {
 		t.Fatalf("prompt state = %s", out.PromptState)
@@ -325,7 +322,7 @@ func TestCodexTransientErrorIsDetailWithoutResult(t *testing.T) {
 	c.Feed(`{"type":"thread.started","thread_id":"tid-5"}`)
 	c.Feed(`{"type":"error","message":"Reconnecting... 5/5 (stream disconnected before completion)"}`)
 	out := c.Conclude(ExitInfo{Code: job.Ptr(1), StderrTail: "tail"})
-	if out.Status != job.StatusInfra || !strings.Contains(out.ErrorText, "stream disconnected") {
+	if out.Status != job.StatusInfra || !strings.Contains(job.Deref(out.Failure.LastErrorEvent), "stream disconnected") {
 		t.Fatalf("outcome = %+v", out)
 	}
 }
@@ -334,12 +331,12 @@ func TestCodexTransientErrorIsDetailWithoutResult(t *testing.T) {
 // evidence's word, and always records how that was proven — or that it wasn't.
 func TestEvidenceOutcomeTakesPromptStateFromAcceptance(t *testing.T) {
 	partial := "half an answer"
-	accepted := Evidence{Accepted: true, Label: "codex thread.started", Partial: &partial}.Outcome(job.StatusTimeout, "capped")
-	if accepted.Status != job.StatusTimeout || accepted.ErrorText != "capped" || accepted.Partial != &partial ||
+	accepted := Evidence{Accepted: true, Label: "codex thread.started", Partial: &partial}.Outcome(job.StatusTimeout, job.Failure{Cause: job.CauseTimeout})
+	if accepted.Status != job.StatusTimeout || accepted.Failure.Cause != job.CauseTimeout || accepted.Partial != &partial ||
 		accepted.PromptState != job.PromptAccepted || accepted.Evidence != "codex thread.started" {
 		t.Fatalf("accepted evidence outcome = %+v", accepted)
 	}
-	unproven := Evidence{}.Outcome(job.StatusInterrupted, "stopped")
+	unproven := Evidence{}.Outcome(job.StatusInterrupted, job.Failure{Cause: job.CauseInterrupted})
 	if unproven.PromptState != job.PromptUnknown || unproven.Evidence != "" {
 		t.Fatalf("unproven evidence outcome = %+v", unproven)
 	}

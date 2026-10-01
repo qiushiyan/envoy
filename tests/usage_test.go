@@ -72,7 +72,7 @@ func TestClaudeUsageLiveAndCollected(t *testing.T) {
 	}
 	meta := readMeta(t, outDir)
 	u := meta["usage"].(map[string]any)
-	if meta["schemaVersion"] != float64(9) || u["state"] != "settled" || u["final"] != true || u["responses"] != float64(3) || u["outputTokens"] != float64(338) || u["latestContextTokens"] != float64(19454) {
+	if meta["schemaVersion"] != float64(10) || u["state"] != "settled" || u["final"] != true || u["responses"] != float64(3) || u["outputTokens"] != float64(338) || u["latestContextTokens"] != float64(19454) {
 		t.Fatalf("settled usage = %v", meta)
 	}
 	tokens := meta["tokens"].(map[string]any)

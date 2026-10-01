@@ -178,9 +178,16 @@ keyed to `--allow-write` is a read-only sandbox by another name.
   fields plus the directory the record was read from, so the identical retry
   can repeat the dispatch it replaces — the same source conversation, the
   archived prompt, the spend cap — and the resume line can never disagree
-  with what dispatch would accept. The archive is what was sent: `prompt.md`
-  is written from the one read that feeds the provider's stdin, never from a
-  second read of the caller's file. A record is also what makes a directory
+  with what dispatch would accept. The same holds for why a turn did not
+  deliver: the record keeps the cause and the provider's own words
+  (`failure`), and a session lock it could not take as the lock file's
+  account of the holder (`sessionLockConflict`). Schema 9 stored the worded
+  error, the remedy and the lock refusal instead — the last with an
+  `envoy collect` command inside it, so a verb change would have left every
+  stored conflict prescribing a command that no longer existed; schema 10
+  replaced them with what they were worded from. The archive is what was
+  sent: `prompt.md` is written from the one read that feeds the provider's
+  stdin, never from a second read of the caller's file. A record is also what makes a directory
   a job — `meta.json` for a turn, `group.json` for a fan-out — so discovery
   keys on records and a reserved name released without one was never a job.
 - **A provider's transient error is an observation; only its verdict fails a
@@ -425,10 +432,11 @@ deduplication memory; snapshots have fixed structure and a finite issue
 vocabulary. It does not reparse stream history for each update. The existing
 `tokens` block retains its provider-reported meaning and finalization writer.
 
-Optional observations retain meta schema **9**: existing fields and
+Optional observations do not move the meta schema: existing fields and
 continuation eligibility keep their meaning, and readers treat absent usage
-as unavailable. Bumping the schema would refuse compatible jobs and force
-callers to change their schema pins. `TestUsageSchemaCompatibility` pins this
+as unavailable. Bumping the schema for an addition would refuse compatible
+jobs and force callers to change their schema pins; only a replaced field
+moves it, as schema 10's failure observations did. `TestUsageSchemaCompatibility` pins this
 boundary; the engine version identifies feature availability. The captured
 evidence behind the accounting lives in `EVIDENCE.md`, 2026-09-14.
 

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/qiushiyan/envoy/internal/job"
-	"github.com/qiushiyan/envoy/internal/prose"
 )
 
 // claude drives `claude -p --output-format stream-json --verbose`.
@@ -218,8 +217,8 @@ func (c *claude) Conclude(exit ExitInfo) Outcome {
 	parsed := c.parse()
 	if parsed.kind == envelopeMissing {
 		// No envelope means no tokens or cost: recovery reads them from it.
-		return c.recovery(parsed).Outcome(job.StatusInfra, prose.ProcessExited("Claude", exit.Command, exit.Code,
-			"but returned no parseable result envelope", stderrDetail(exit.StderrTail)))
+		return c.recovery(parsed).Outcome(job.StatusInfra,
+			job.Failure{Cause: job.CauseExitedWithoutEnvelope, StderrTail: stderrLines(exit.StderrTail)})
 	}
 
 	// The result envelope's session id wins: a resumed claude conversation is
@@ -240,15 +239,9 @@ func (c *claude) Conclude(exit ExitInfo) Outcome {
 			SessionID:   parsed.sessionID,
 		}
 	case envelopeBudget:
-		budget := 0.0
-		if c.opts.MaxBudgetUSD != nil {
-			budget = *c.opts.MaxBudgetUSD
-		}
 		return Outcome{
-			Status: job.StatusFailed,
-			ErrorText: fmt.Sprintf(
-				"Claude stopped at the --max-budget-usd %g cap after accepting the prompt.", budget),
-			Remedy:      "Raise the budget cap before continuing.",
+			Status:      job.StatusFailed,
+			Failure:     &job.Failure{Cause: job.CauseBudgetCap},
 			Partial:     job.Ptr(parsed.partial),
 			Tokens:      parsed.tokens,
 			CostUSD:     parsed.costUSD,
@@ -257,8 +250,8 @@ func (c *claude) Conclude(exit ExitInfo) Outcome {
 			SessionID:   parsed.sessionID,
 		}
 	default: // envelopeFailed
-		out := c.recovery(parsed).Outcome(job.StatusFailed, fmt.Sprintf("Claude reported a provider failure: %s", parsed.errorText))
-		out.Remedy = "Fix the cause it reported first."
+		out := c.recovery(parsed).Outcome(job.StatusFailed,
+			job.Failure{Cause: job.CauseProviderVerdict, Message: job.Ptr(parsed.errorText)})
 		out.SessionID = parsed.sessionID
 		return out
 	}

@@ -19,7 +19,7 @@ func writeTurn(t *testing.T, dir, status string, collected bool) {
 	if collected {
 		stamp = `"2026-09-21T00:00:00.000Z"`
 	}
-	meta := fmt.Sprintf(`{"schemaVersion":9,"status":%q,"provider":"codex","promptState":"accepted","timeoutMin":5,"collectedAt":%s}`, status, stamp)
+	meta := fmt.Sprintf(`{"schemaVersion":10,"status":%q,"provider":"codex","promptState":"accepted","timeoutMin":5,"collectedAt":%s}`, status, stamp)
 	if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte(meta), 0o644); err != nil {
 		t.Fatal(err)
 	}

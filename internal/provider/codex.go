@@ -2,12 +2,10 @@ package provider
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"strings"
 
 	"github.com/qiushiyan/envoy/internal/job"
-	"github.com/qiushiyan/envoy/internal/prose"
 )
 
 // codex drives `codex exec --json` and streams its JSONL events. The
@@ -183,17 +181,11 @@ func (c *codex) Recovery() Evidence {
 func (c *codex) Conclude(exit ExitInfo) Outcome {
 	ev := c.Recovery()
 	if c.failedText != nil {
-		out := ev.Outcome(job.StatusFailed, fmt.Sprintf("Codex reported a provider failure: %s", *c.failedText))
-		out.Remedy = "Fix the cause it reported first."
-		return out
+		return ev.Outcome(job.StatusFailed, job.Failure{Cause: job.CauseProviderVerdict, Message: c.failedText})
 	}
 	if ev.Partial == nil {
-		detail := stderrDetail(exit.StderrTail)
-		if c.lastErrorText != nil {
-			detail = fmt.Sprintf("last error event %q; stderr: %s", *c.lastErrorText, detail)
-		}
-		return ev.Outcome(job.StatusInfra, prose.ProcessExited("Codex", exit.Command, exit.Code,
-			"but returned no usable result", detail))
+		return ev.Outcome(job.StatusInfra, job.Failure{Cause: job.CauseExitedWithoutResult,
+			StderrTail: stderrLines(exit.StderrTail), LastErrorEvent: c.lastErrorText})
 	}
 	// The terminal envelope wins: if the hard cap fired only while the CLI or
 	// a residual descendant was draining, an observed turn.completed is still
@@ -207,7 +199,7 @@ func (c *codex) Conclude(exit ExitInfo) Outcome {
 			Evidence:    ev.Label,
 		}
 	}
-	return ev.Outcome(job.StatusFailed, prose.ProcessExited("Codex", exit.Command, exit.Code, "after producing a response", ""))
+	return ev.Outcome(job.StatusFailed, job.Failure{Cause: job.CauseExitedAfterResponse})
 }
 
 func (c *codex) ObservesConnectionErrors() bool { return true }

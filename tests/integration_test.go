@@ -142,6 +142,13 @@ func readFile(t *testing.T, path string) string {
 	return string(data)
 }
 
+// failureText is what a turn that did not deliver says about why: the
+// result.md envoy wrote from its record, which a collect's error line repeats.
+func failureText(t *testing.T, outDir string) string {
+	t.Helper()
+	return readFile(t, filepath.Join(outDir, "result.md"))
+}
+
 func mustContain(t *testing.T, name, s string, subs ...string) {
 	t.Helper()
 	for _, sub := range subs {
@@ -360,15 +367,25 @@ func TestCodexTimeoutRecordsAcceptance(t *testing.T) {
 	if meta["status"] != "timeout" || meta["promptState"] != "accepted" {
 		t.Fatalf("meta = status %v prompt %v", meta["status"], meta["promptState"])
 	}
-	mustContain(t, "error", meta["error"].(string),
+	mustContain(t, "error", failureText(t, outDir),
 		"wall-clock cap ended this codex turn",
 		"not evidence the provider hung")
+	// The record holds the observation the sentence is worded from, never the
+	// sentence: a stored job reads in whatever vocabulary collects it.
+	failure, _ := meta["failure"].(map[string]any)
+	stream, _ := failure["stream"].(map[string]any)
+	if failure["cause"] != "timeout" || stream["events"] != float64(1) || stream["lastEvent"] != "thread.started" {
+		t.Fatalf("failure record = %v", meta["failure"])
+	}
+	if _, worded := meta["error"]; worded {
+		t.Fatal("meta.json must not carry a worded error")
+	}
 	// This scenario is the shape two real timeouts took: the provider announced
 	// its thread and then streamed nothing until the cap. The envelope must
 	// carry that observation, because the caller cannot otherwise tell it from
 	// a turn that worked right up to the deadline — and the follow-up each one
 	// deserves is different.
-	mustContain(t, "error", meta["error"].(string),
+	mustContain(t, "error", failureText(t, outDir),
 		"the stream had been quiet for", "after 1 event (last: thread.started)")
 	// The prescription is rendered from the records at collect time: the
 	// prompt was accepted, so the one move offered is to continue the session.
@@ -394,7 +411,7 @@ func TestCodexTimeoutReportsTheStreamAsOfTheCap(t *testing.T) {
 		t.Fatalf("exit = %d, want 4\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
 	meta := readMeta(t, outDir)
-	mustContain(t, "error", meta["error"].(string), "after 1 event (last: thread.started)")
+	mustContain(t, "error", failureText(t, outDir), "after 1 event (last: thread.started)")
 	// The teardown event still belongs in the record — it happened — it just
 	// may not be dressed up as the state the cap found.
 	if got := meta["providerEventCount"].(float64); got != 2 {
@@ -420,12 +437,11 @@ func TestCodexTimeoutBeforeAnyOutputReportsAnEmptyStream(t *testing.T) {
 	if res.code != 4 {
 		t.Fatalf("exit = %d, want 4\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
-	meta := readMeta(t, outDir)
-	mustContain(t, "error", meta["error"].(string),
+	mustContain(t, "error", failureText(t, outDir),
 		"wall-clock cap ended this codex turn",
 		"The provider wrote nothing at all before the cap — no output on either stream, and no events.")
-	if strings.Contains(meta["error"].(string), "quiet for") {
-		t.Fatalf("no output means no quiet interval to report: %v", meta["error"])
+	if strings.Contains(failureText(t, outDir), "quiet for") {
+		t.Fatalf("no output means no quiet interval to report: %v", failureText(t, outDir))
 	}
 }
 
@@ -442,7 +458,7 @@ func TestCodexTimeoutSeparatesBytesFromEvents(t *testing.T) {
 	if res.code != 4 {
 		t.Fatalf("exit = %d, want 4\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
-	errText := readMeta(t, outDir)["error"].(string)
+	errText := failureText(t, outDir)
 	mustContain(t, "error", errText, "bytes before the cap but no event envoy could parse")
 	for _, forbidden := range []string{"nothing at all", "no work of its own"} {
 		if strings.Contains(errText, forbidden) {
@@ -627,7 +643,7 @@ func TestInterruptRecordsPartialAndResume(t *testing.T) {
 	if meta["status"] != "interrupted" || meta["interruptionSignal"] != "SIGINT" {
 		t.Fatalf("meta = status %v signal %v", meta["status"], meta["interruptionSignal"])
 	}
-	mustContain(t, "error", meta["error"].(string), "stopped codex after receiving SIGINT")
+	mustContain(t, "error", failureText(t, outDir), "stopped codex after receiving SIGINT")
 	col := runEnvoy(t, e, "collect", outDir)
 	mustContain(t, "collect next", col.stdout,
 		"envoy run <new-job-name>", "--with @'"+outDir+"'", "--timeout-min 5")
@@ -803,7 +819,7 @@ func TestCollectReconcilesAbandonedJob(t *testing.T) {
 	os.MkdirAll(outDir, 0o755)
 	os.WriteFile(filepath.Join(outDir, "prompt.md"), []byte("x"), 0o644)
 	meta := map[string]any{
-		"schemaVersion": 9, "status": "running", "provider": "codex",
+		"schemaVersion": 10, "status": "running", "provider": "codex",
 		"promptState": "accepted", "sessionId": "dead-session",
 		"runnerPid": 4194304, "providerPid": 4194304, "providerPgid": 4194304,
 		"timeoutMin": 180.0, "resultKind": "none",
@@ -846,7 +862,7 @@ func TestExitBeforeStdinDoesNotCrash(t *testing.T) {
 	if meta["status"] != "infra" || meta["childExitCode"] != float64(23) {
 		t.Fatalf("meta = status %v exit %v", meta["status"], meta["childExitCode"])
 	}
-	mustContain(t, "error", meta["error"].(string), "fake provider exited before reading its prompt")
+	mustContain(t, "error", failureText(t, outDir), "fake provider exited before reading its prompt")
 }
 
 // A bare name is an address in the invoking project's central store: the
@@ -1136,7 +1152,7 @@ func TestCodexNonzeroExitAfterResponse(t *testing.T) {
 	if meta["status"] != "failed" || meta["resultKind"] != "partial" || meta["promptState"] != "accepted" {
 		t.Fatalf("meta = status %v kind %v prompt %v", meta["status"], meta["resultKind"], meta["promptState"])
 	}
-	mustContain(t, "error", meta["error"].(string), "Codex exited with code 7 after producing a response")
+	mustContain(t, "error", failureText(t, outDir), "Codex exited with code 7 after producing a response")
 	mustContain(t, "result.md", readFile(t, filepath.Join(outDir, "result.md")), "fake provider result")
 }
 
@@ -1798,8 +1814,8 @@ func TestConflictedMemberIsNotSetResumable(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "group.json"), []byte(group), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	okMeta := `{"schemaVersion":9,"status":"ok","provider":"codex","sessionId":"sess-ok","promptState":"accepted","timeoutMin":5,"collectedAt":null}`
-	conflictMeta := `{"schemaVersion":9,"status":"failed","provider":"claude","model":"opus","sessionId":"sess-conflict","sessionLockConflict":"session sess-conflict already has a live turn","promptState":"unknown","timeoutMin":5,"collectedAt":null}`
+	okMeta := `{"schemaVersion":10,"status":"ok","provider":"codex","sessionId":"sess-ok","promptState":"accepted","timeoutMin":5,"collectedAt":null}`
+	conflictMeta := `{"schemaVersion":10,"status":"failed","provider":"claude","model":"opus","sessionId":"sess-conflict","sessionLockConflict":{"sessionId":"sess-conflict","holder":{"pid":1,"startedAt":"2026-07-28T00:00:00.000Z","dir":"/tmp/other-job"},"holderLive":true},"promptState":"unknown","timeoutMin":5,"collectedAt":null}`
 	os.WriteFile(filepath.Join(codexDir, "meta.json"), []byte(okMeta), 0o644)
 	os.WriteFile(filepath.Join(opusDir, "meta.json"), []byte(conflictMeta), 0o644)
 	os.WriteFile(filepath.Join(codexDir, "result.md"), []byte("codex answer"), 0o644)
@@ -1828,7 +1844,7 @@ func TestCollectDoesNotStampAnOkTurnWithoutItsResult(t *testing.T) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		meta := `{"schemaVersion":9,"status":"ok","provider":"codex","sessionId":"sess-1","promptState":"accepted","timeoutMin":5,"collectedAt":null}`
+		meta := `{"schemaVersion":10,"status":"ok","provider":"codex","sessionId":"sess-1","promptState":"accepted","timeoutMin":5,"collectedAt":null}`
 		if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte(meta), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -1871,7 +1887,7 @@ func TestFanCollectFlagsUndeliveredOkResult(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "group.json"), []byte(group), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	okMeta := `{"schemaVersion":9,"status":"ok","provider":"%s","sessionId":"sess-%s","promptState":"accepted","timeoutMin":5,"collectedAt":null}`
+	okMeta := `{"schemaVersion":10,"status":"ok","provider":"%s","sessionId":"sess-%s","promptState":"accepted","timeoutMin":5,"collectedAt":null}`
 	os.WriteFile(filepath.Join(codexDir, "meta.json"), []byte(fmt.Sprintf(okMeta, "codex", "a")), 0o644)
 	os.WriteFile(filepath.Join(opusDir, "meta.json"), []byte(fmt.Sprintf(okMeta, "claude", "b")), 0o644)
 	// codex delivered; claude-opus reports ok but its payload is gone.

@@ -10,7 +10,6 @@ package lock
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,7 +17,7 @@ import (
 
 	"github.com/qiushiyan/envoy/internal/job"
 	"github.com/qiushiyan/envoy/internal/proc"
-	"github.com/qiushiyan/envoy/internal/text"
+	"github.com/qiushiyan/envoy/internal/prose"
 )
 
 type payload struct {
@@ -29,14 +28,13 @@ type payload struct {
 }
 
 // Conflict reports that a session lock is held — by a provably live owner or
-// by one that cannot be proven dead (never auto-reclaimed either way). The
-// message is agent-facing prose and carries the distinction.
+// by one that cannot be proven dead (never auto-reclaimed either way). It
+// carries the observation; internal/prose words it.
 type Conflict struct {
-	SessionID string
-	Message   string
+	job.LockConflict
 }
 
-func (c *Conflict) Error() string { return c.Message }
+func (c *Conflict) Error() string { return prose.SessionLock(&c.LockConflict) }
 
 var unsafeChars = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
@@ -90,26 +88,14 @@ func Acquire(sessionID, outDir, runnerInstanceID string) (*Handle, error) {
 			held = &parsed
 		}
 	}
-	// Only a provably live owner is waited on; every other probe answer falls
-	// to the refusal below, which reclaims nothing either.
-	if held != nil && proc.PidLiveness(held.Pid) == proc.Live {
-		return nil, &Conflict{
-			SessionID: sessionID,
-			Message: fmt.Sprintf(
-				"session %s already has a live turn (pid %d, started %s, job %s). One turn per session: wait for that process to exit, then collect its job: envoy collect %s",
-				sessionID, held.Pid, held.StartedAt, held.OutDir, text.ShellQuote(held.OutDir)),
-		}
+	conflict := &Conflict{job.LockConflict{SessionID: sessionID, LockPath: p}}
+	if held != nil {
+		conflict.Holder = &job.LockHolder{Pid: held.Pid, StartedAt: held.StartedAt, Dir: held.OutDir}
+		// Only a provably live owner is waited on; every other probe answer is
+		// refused as well, and reclaims nothing either.
+		conflict.HolderLive = proc.PidLiveness(held.Pid) == proc.Live
 	}
-	inspect := ""
-	if held != nil && held.OutDir != "" {
-		inspect = fmt.Sprintf("Run envoy collect %s and inspect its provider state. ", text.ShellQuote(held.OutDir))
-	}
-	return nil, &Conflict{
-		SessionID: sessionID,
-		Message: fmt.Sprintf(
-			"session %s has an existing lock whose runner is not provably live (%s). Automatic takeover is refused because its provider may still be running. %sOnly after the provider is gone and its work is accounted for, remove the stale lock and retry.",
-			sessionID, p, inspect),
-	}
+	return nil, conflict
 }
 
 // Release removes the lock unless another runner acquired it after manual

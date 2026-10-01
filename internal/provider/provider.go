@@ -75,12 +75,12 @@ type Evidence struct {
 }
 
 // Outcome is the ending this evidence supports for a turn that did not
-// deliver: the prompt state acceptance proves, and whatever output, tokens
-// and cost survived.
-func (e Evidence) Outcome(status, errorText string) Outcome {
+// deliver: why, the prompt state acceptance proves, and whatever output,
+// tokens and cost survived.
+func (e Evidence) Outcome(status string, failure job.Failure) Outcome {
 	out := Outcome{
 		Status:      status,
-		ErrorText:   errorText,
+		Failure:     &failure,
 		Partial:     e.Partial,
 		Tokens:      e.Tokens,
 		CostUSD:     e.CostUSD,
@@ -95,9 +95,7 @@ func (e Evidence) Outcome(status, errorText string) Outcome {
 
 // ExitInfo describes how the launched process ended.
 type ExitInfo struct {
-	Command      string // executable when it differs from the bare provider invocation
 	Code         *int
-	Signal       *string
 	Terminated   bool   // a stop (timeout/interrupt) was requested this turn
 	TerminalType string // observed provider terminal label, "" if none
 	StderrTail   string // last ~2000 chars of command stderr
@@ -105,18 +103,17 @@ type ExitInfo struct {
 
 // Outcome is how a turn ended, as the runner publishes it: a driver's
 // conclusion after a normal process end, or one the runner assembles for an
-// ending the driver did not see through. It reports what was observed — the
-// cause, and any cause-specific fix the caller must apply first — and never
-// the recovery prescription itself: that follows from the prompt state and is
-// worded once in internal/prose.
+// ending the driver did not see through. It reports observations only — the
+// failure's cause and the provider's own words — and never a sentence: the
+// failure, any cause-specific remedy and the recovery prescription are all
+// worded in internal/prose, from the record.
 type Outcome struct {
-	Status    string // terminal status; a driver concludes StatusOK, StatusFailed or StatusInfra
-	Text      string // final text (ok only)
-	ErrorText string // provider verdict or observed command exit
-	Remedy    string // cause-specific fix, e.g. "Raise the budget cap first."; "" when none
-	Partial   *string
-	Tokens    *job.Tokens
-	CostUSD   *float64
+	Status  string       // terminal status; a driver concludes StatusOK, StatusFailed or StatusInfra
+	Text    string       // final text (ok only)
+	Failure *job.Failure // why a turn that did not deliver ended; nil for ok
+	Partial *string
+	Tokens  *job.Tokens
+	CostUSD *float64
 	// PromptState is what this ending proves about the prompt, and Evidence
 	// how. Only acceptance and not_started add to the record: unknown proves
 	// nothing, and nothing takes acceptance back.
@@ -194,21 +191,18 @@ func ValidateEffort(providerName, effort string) error {
 // and its validation cannot drift apart.
 func EffortList(providerName string) []string { return efforts[providerName] }
 
-// stderrDetail condenses a stderr tail into the last three non-empty lines.
-func stderrDetail(tail string) string {
+// stderrLines condenses a stderr tail to its last three non-empty lines.
+func stderrLines(tail string) []string {
 	var lines []string
 	for l := range strings.SplitSeq(strings.TrimSpace(tail), "\n") {
 		if strings.TrimSpace(l) != "" {
 			lines = append(lines, l)
 		}
 	}
-	if len(lines) == 0 {
-		return "(no stderr detail)"
-	}
 	if len(lines) > 3 {
 		lines = lines[len(lines)-3:]
 	}
-	return strings.Join(lines, " | ")
+	return lines
 }
 
 // firstText returns the first candidate with non-empty content, as a pointer,

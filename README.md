@@ -118,8 +118,8 @@ failure guidance names its environment variable before any follow-up.
 `meta.json.commandPrefix` records the resolved executable and prefix arguments,
 including `["codex"]` / `["claude"]` for defaults. The executed argv is
 `commandPrefix + providerArgv[1:]`; `providerArgv` retains its provider-native
-meaning. This optional observation retains schema 9: an absent field in an
-older record means unavailable, and other schema versions remain refused.
+meaning. It is an optional observation within the meta schema: an absent field
+in an older record means unavailable, and other schema versions remain refused.
 
 ## Design invariants
 

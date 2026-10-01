@@ -18,7 +18,7 @@ func TestReserveRacingForADeliveredName(t *testing.T) {
 	if err := os.Mkdir(first, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	meta := `{"schemaVersion":9,"status":"ok","provider":"codex","promptState":"accepted","timeoutMin":5,"collectedAt":"2026-09-21T00:00:00.000Z"}`
+	meta := `{"schemaVersion":10,"status":"ok","provider":"codex","promptState":"accepted","timeoutMin":5,"collectedAt":"2026-09-21T00:00:00.000Z"}`
 	if err := os.WriteFile(filepath.Join(first, "meta.json"), []byte(meta), 0o644); err != nil {
 		t.Fatal(err)
 	}

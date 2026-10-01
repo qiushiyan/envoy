@@ -9,16 +9,18 @@ import (
 )
 
 func TestUsageSchemaCompatibility(t *testing.T) {
-	if MetaSchemaVersion != 9 {
-		t.Fatal("additive usage must preserve schema 9 continuation compatibility")
+	// Usage is optional within a schema: schema 10 replaced the worded failure
+	// fields, and an additive observation like usage bumps nothing.
+	if MetaSchemaVersion != 10 {
+		t.Fatal("additive usage must not move the schema; only a replaced field does")
 	}
 	p := filepath.Join(t.TempDir(), "meta.json")
-	if err := os.WriteFile(p, []byte(`{"schemaVersion":9,"status":"ok","provider":"claude"}`), 0o644); err != nil {
+	if err := os.WriteFile(p, []byte(`{"schemaVersion":10,"status":"ok","provider":"claude"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	m, err := ReadMetaFile(p)
 	if err != nil || m.Usage != nil {
-		t.Fatalf("older schema-9 record must read without usage: %v", err)
+		t.Fatalf("a record without usage must read: %v", err)
 	}
 	m.Usage = NewUsage()
 	if err := m.WriteFile(p); err != nil {
@@ -30,7 +32,7 @@ func TestUsageSchemaCompatibility(t *testing.T) {
 		SchemaVersion int    `json:"schemaVersion"`
 		Status        string `json:"status"`
 	}
-	if err := json.Unmarshal(data, &older); err != nil || older.SchemaVersion != 9 || older.Status != "ok" {
+	if err := json.Unmarshal(data, &older); err != nil || older.SchemaVersion != MetaSchemaVersion || older.Status != "ok" {
 		t.Fatalf("existing fields changed: %v", err)
 	}
 	m, err = ReadMetaFile(p)

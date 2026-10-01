@@ -99,54 +99,48 @@ func (r *run) finish(out provider.Outcome, exit exitResult) {
 		r.markPromptAccepted(out.Evidence)
 	}
 	endedAt := time.Now()
-	collectAction := prose.CollectThisJob(r.ws.Dir)
-
-	hasPartial := out.Partial != nil && strings.TrimSpace(*out.Partial) != ""
-	resultKind := job.ResultNone
-	var resultBody string
-	if out.Status == job.StatusOK {
-		resultKind = job.ResultFinal
-		resultBody = out.Text
-	} else {
-		resultBody = fmt.Sprintf("# Turn %s\n\n%s\n", out.Status, out.ErrorText)
-		if hasPartial {
-			resultKind = job.ResultPartial
-			resultBody += fmt.Sprintf("\n## Partial output recovered before the failure\n\n%s\n", *out.Partial)
-		}
+	m := r.meta
+	m.Status = out.Status
+	m.EndedAt = job.Ptr(job.ISO(endedAt))
+	m.DurationMs = job.Ptr(endedAt.Sub(r.startedAt).Milliseconds())
+	m.Tokens = out.Tokens
+	m.Usage = r.driver.Usage()
+	m.Usage.End()
+	m.CostUSD = out.CostUSD
+	m.Failure = out.Failure
+	if out.PromptState == job.PromptNotStarted {
+		m.PromptState = out.PromptState
+		m.PromptStateEvidence = job.PtrIfNonEmpty(out.Evidence)
 	}
+	m.ChildExitCode = exit.code
+	m.ChildExitSignal = exit.signal
+	m.CollectedAt = nil
+
+	// A non-ok turn's result.md is worded from the record just completed, so
+	// it says exactly what a later collect will.
+	resultBody := out.Text
+	m.ResultKind = job.ResultFinal
+	if out.Status != job.StatusOK {
+		partial := ""
+		if out.Partial != nil && strings.TrimSpace(*out.Partial) != "" {
+			partial = *out.Partial
+		}
+		m.ResultKind = job.ResultNone
+		if partial != "" {
+			m.ResultKind = job.ResultPartial
+		}
+		resultBody = prose.FailedResult(m, partial)
+	}
+	// The payload lands before the record that declares the turn terminal.
 	if err := job.WriteFileAtomic(r.ws.ResultPath(), []byte(resultBody)); err != nil {
 		fmt.Fprintf(r.opts.Stderr, "result write warning: %s\n", err)
 	}
-
-	r.writeMeta(func(m *job.Meta) {
-		m.Status = out.Status
-		m.EndedAt = job.Ptr(job.ISO(endedAt))
-		m.DurationMs = job.Ptr(endedAt.Sub(r.startedAt).Milliseconds())
-		m.Tokens = out.Tokens
-		m.Usage = r.driver.Usage()
-		m.Usage.End()
-		m.CostUSD = out.CostUSD
-		if out.Status == job.StatusOK {
-			m.Error = nil
-			m.Remedy = nil
-		} else {
-			m.Error = job.PtrIfNonEmpty(out.ErrorText)
-			m.Remedy = job.PtrIfNonEmpty(out.Remedy)
-		}
-		if out.PromptState == job.PromptNotStarted {
-			m.PromptState = out.PromptState
-			m.PromptStateEvidence = job.PtrIfNonEmpty(out.Evidence)
-		}
-		m.ResultKind = resultKind
-		m.ChildExitCode = exit.code
-		m.ChildExitSignal = exit.signal
-		m.CollectedAt = nil
-	})
+	r.writeMeta(nil)
 	r.progress.Append("terminal",
 		job.KV{K: "status", V: out.Status},
 		job.KV{K: "elapsed", V: elapsed(r.startedAt)},
-		job.KV{K: "result", V: resultKind},
-		job.KV{K: "prompt", V: r.meta.PromptState},
+		job.KV{K: "result", V: m.ResultKind},
+		job.KV{K: "prompt", V: m.PromptState},
 	)
 	r.releaseLock()
 
@@ -160,7 +154,7 @@ func (r *run) finish(out provider.Outcome, exit exitResult) {
 		session = "(none)"
 	}
 	fmt.Fprintf(w, "session: %s\n", session)
-	fmt.Fprintf(w, "next: %s\n", collectAction)
+	fmt.Fprintf(w, "next: %s\n", prose.CollectThisJob(r.ws.Dir))
 
 	r.exitCode = job.ExitCodeFor(out.Status)
 }
