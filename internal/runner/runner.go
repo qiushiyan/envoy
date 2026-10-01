@@ -57,6 +57,9 @@ type Options struct {
 	PromptFile string
 	Cwd        string
 	Baseline   string // "" = HEAD for write turns, else unset
+	// AllowWrite is the caller's write intent: recorded, and it anchors the
+	// baseline at HEAD. No provider is told — the engine restricts no session.
+	AllowWrite bool
 	OutDir     string // the job directory, already reserved by the caller
 	// ResumedFrom is the job dir whose conversation this turn continues, ""
 	// for a fresh conversation. Recorded so a faithful re-dispatch can name
@@ -146,7 +149,6 @@ func deadlineFrom(startedAt time.Time, timeoutMin float64) time.Time {
 // turn that ran and published a terminal status.
 type Result struct {
 	ExitCode int
-	OutDir   string
 	Status   string
 }
 
@@ -177,7 +179,7 @@ func Run(opts Options) Result {
 	if err != nil {
 		r.releaseLock()
 		fmt.Fprintf(opts.Stderr, "usage error: %s\n", err)
-		return Result{ExitCode: job.ExitUsage, OutDir: outDir}
+		return Result{ExitCode: job.ExitUsage}
 	}
 	r.driver = driver
 
@@ -185,7 +187,7 @@ func Run(opts Options) Result {
 	if err != nil {
 		r.releaseLock()
 		fmt.Fprintf(opts.Stderr, "envoy: cannot read prompt file: %s\n", err)
-		return Result{ExitCode: job.ExitInfra, OutDir: outDir}
+		return Result{ExitCode: job.ExitInfra}
 	}
 
 	// A known session id (claude, or any continuation) locks before any job
@@ -196,9 +198,9 @@ func Run(opts Options) Result {
 		if err != nil {
 			fmt.Fprintf(opts.Stderr, "lock error: %s\n", err)
 			if _, ok := err.(*lock.Conflict); ok {
-				return Result{ExitCode: job.ExitUsage, OutDir: outDir}
+				return Result{ExitCode: job.ExitUsage}
 			}
-			return Result{ExitCode: job.ExitInfra, OutDir: outDir}
+			return Result{ExitCode: job.ExitInfra}
 		}
 		r.sessionLock = handle
 	}
@@ -206,7 +208,7 @@ func Run(opts Options) Result {
 	if err := r.ws.Prepare(promptText); err != nil {
 		r.releaseLock()
 		fmt.Fprintf(opts.Stderr, "envoy: cannot prepare job dir: %s\n", err)
-		return Result{ExitCode: job.ExitInfra, OutDir: outDir}
+		return Result{ExitCode: job.ExitInfra}
 	}
 	return r.execute(string(promptText))
 }
@@ -241,13 +243,13 @@ func (r *run) execute(promptText string) Result {
 	prefix := r.meta.CommandPrefix
 	child, err := spawn(prefix[0], slices.Concat(prefix[1:], r.argv), r.opts.Cwd, r.driver.ExtraEnv())
 	if err != nil {
-		r.finish(finishArgs{
-			status:              job.StatusInfra,
-			errorText:           prose.SpawnFailed(prefix[0], err),
-			promptState:         job.PromptNotStarted,
-			promptStateEvidence: job.Ptr("provider spawn error"),
-			hasEvidence:         true,
-		})
+		r.finish(provider.Outcome{
+			Status:              job.StatusInfra,
+			ErrorText:           prose.SpawnFailed(prefix[0], err),
+			PromptState:         job.PromptNotStarted,
+			PromptStateEvidence: job.Ptr("provider spawn error"),
+			HasEvidence:         true,
+		}, exitResult{})
 		return r.result()
 	}
 	r.child = child
@@ -337,28 +339,15 @@ func (r *run) execute(promptText string) Result {
 // result reports the turn as its caller sees it, reading the same in-memory
 // meta that was published to disk.
 func (r *run) result() Result {
-	return Result{ExitCode: r.exitCode, OutDir: r.ws.Dir, Status: r.meta.Status}
+	return Result{ExitCode: r.exitCode, Status: r.meta.Status}
 }
 
 // ---------- session state ----------
-
-func (r *run) session() string {
-	if r.meta.SessionID == nil {
-		return ""
-	}
-	return *r.meta.SessionID
-}
-
-func (r *run) conflicted() bool { return r.meta.SessionLockConflict != nil }
 
 // setSession records the session id. Whether it may be continued is decided
 // at collect time from this id and the lock-conflict field together.
 func (r *run) setSession(id string) {
 	r.meta.SessionID = job.PtrIfNonEmpty(id)
-}
-
-func (r *run) markLockConflict(msg string) {
-	r.meta.SessionLockConflict = job.Ptr(msg)
 }
 
 func (r *run) releaseLock() {
@@ -396,8 +385,6 @@ func (r *run) drainLines(final bool) {
 		r.handleEvents(r.driver.Feed(line))
 	}
 }
-
-func (r *run) flushLineBuf() { r.drainLines(true) }
 
 func (r *run) onStderr(chunk []byte) {
 	if r.stderrFile != nil {
@@ -473,7 +460,7 @@ func (r *run) onSessionStarted(ev provider.Event, rest []provider.Event) (abort 
 		if err != nil {
 			// A non-conflict lock failure is treated the same way: never
 			// continue an unlocked session.
-			r.markLockConflict(err.Error())
+			r.meta.SessionLockConflict = job.Ptr(err.Error())
 			evidence := r.opts.Provider + " session started"
 			for _, e := range rest {
 				if e.Kind == provider.KindAccepted {
@@ -505,7 +492,7 @@ func (r *run) markPromptAccepted(evidence string) {
 		m.PromptStateEvidence = job.Ptr(evidence)
 		m.PromptAcceptedAt = job.Ptr(acceptedAt)
 	})
-	session := r.session()
+	session := job.Deref(r.meta.SessionID)
 	if session == "" {
 		session = "pending"
 	}

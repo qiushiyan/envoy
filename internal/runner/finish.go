@@ -15,7 +15,7 @@ import (
 
 func (r *run) initMeta() {
 	baseline := r.opts.Baseline
-	if baseline == "" && r.opts.Turn.AllowWrite {
+	if baseline == "" && r.opts.AllowWrite {
 		// The review anchor: a write turn defaults to HEAD so collect can
 		// always diff the delegate's work.
 		baseline = gitx.Head(r.opts.Cwd)
@@ -35,7 +35,7 @@ func (r *run) initMeta() {
 		Model:            job.PtrIfNonEmpty(r.opts.Turn.Model),
 		Effort:           job.PtrIfNonEmpty(r.opts.Turn.Effort),
 		Cwd:              r.opts.Cwd,
-		AllowWrite:       r.opts.Turn.AllowWrite,
+		AllowWrite:       r.opts.AllowWrite,
 		GitBaseline:      job.PtrIfNonEmpty(baseline),
 		MaxBudgetUSD:     r.opts.Turn.MaxBudgetUSD,
 		ResumedFrom:      job.PtrIfNonEmpty(r.opts.ResumedFrom),
@@ -84,23 +84,11 @@ func (r *run) printStartupBlock() {
 	fmt.Fprintf(w, "next: %s\n", prose.DispatchNext(r.ws.Dir))
 }
 
-type finishArgs struct {
-	status              string
-	text                string // final text, ok only
-	errorText           string
-	remedy              string // the driver's cause-specific fix, "" when none
-	partial             *string
-	tokens              *job.Tokens
-	costUSD             *float64
-	promptState         string // "" = keep current
-	promptStateEvidence *string
-	hasEvidence         bool
-	exit                exitResult
-}
-
-// finish publishes terminal state: result.md, final meta, the terminal
-// coordinate block, and the exit code. Idempotent; first caller wins.
-func (r *run) finish(f finishArgs) {
+// finish publishes how the turn ended — a driver's conclusion, or one the
+// runner assembled for an ending the driver did not see through — as terminal
+// state: result.md, final meta, the terminal coordinate block, and the exit
+// code. Idempotent; first caller wins.
+func (r *run) finish(out provider.Outcome, exit exitResult) {
 	if r.finished {
 		return
 	}
@@ -110,20 +98,23 @@ func (r *run) finish(f finishArgs) {
 			t.Stop()
 		}
 	}
+	if out.SessionID != "" {
+		r.setSession(out.SessionID)
+	}
 	endedAt := time.Now()
 	collectAction := prose.CollectThisJob(r.ws.Dir)
 
-	hasPartial := f.partial != nil && strings.TrimSpace(*f.partial) != ""
+	hasPartial := out.Partial != nil && strings.TrimSpace(*out.Partial) != ""
 	resultKind := job.ResultNone
 	var resultBody string
-	if f.status == job.StatusOK {
+	if out.Status == job.StatusOK {
 		resultKind = job.ResultFinal
-		resultBody = f.text
+		resultBody = out.Text
 	} else {
-		resultBody = fmt.Sprintf("# Turn %s\n\n%s\n", f.status, f.errorText)
+		resultBody = fmt.Sprintf("# Turn %s\n\n%s\n", out.Status, out.ErrorText)
 		if hasPartial {
 			resultKind = job.ResultPartial
-			resultBody += fmt.Sprintf("\n## Partial output recovered before the failure\n\n%s\n", *f.partial)
+			resultBody += fmt.Sprintf("\n## Partial output recovered before the failure\n\n%s\n", *out.Partial)
 		}
 	}
 	if err := job.WriteFileAtomic(r.ws.ResultPath(), []byte(resultBody)); err != nil {
@@ -131,33 +122,33 @@ func (r *run) finish(f finishArgs) {
 	}
 
 	r.writeMeta(func(m *job.Meta) {
-		m.Status = f.status
+		m.Status = out.Status
 		m.EndedAt = job.Ptr(job.ISO(endedAt))
 		m.DurationMs = job.Ptr(endedAt.Sub(r.startedAt).Milliseconds())
-		m.Tokens = f.tokens
+		m.Tokens = out.Tokens
 		m.Usage = r.driver.Usage()
 		m.Usage.End()
-		m.CostUSD = f.costUSD
-		if f.status == job.StatusOK {
+		m.CostUSD = out.CostUSD
+		if out.Status == job.StatusOK {
 			m.Error = nil
 			m.Remedy = nil
 		} else {
-			m.Error = job.PtrIfNonEmpty(f.errorText)
-			m.Remedy = job.PtrIfNonEmpty(f.remedy)
+			m.Error = job.PtrIfNonEmpty(out.ErrorText)
+			m.Remedy = job.PtrIfNonEmpty(out.Remedy)
 		}
-		if f.promptState != "" {
-			m.PromptState = f.promptState
+		if out.PromptState != "" {
+			m.PromptState = out.PromptState
 		}
-		if f.hasEvidence {
-			m.PromptStateEvidence = f.promptStateEvidence
+		if out.HasEvidence {
+			m.PromptStateEvidence = out.PromptStateEvidence
 		}
 		m.ResultKind = resultKind
-		m.ChildExitCode = f.exit.code
-		m.ChildExitSignal = f.exit.signal
+		m.ChildExitCode = exit.code
+		m.ChildExitSignal = exit.signal
 		m.CollectedAt = nil
 	})
 	r.progress.Append("terminal",
-		job.KV{K: "status", V: f.status},
+		job.KV{K: "status", V: out.Status},
 		job.KV{K: "elapsed", V: elapsed(r.startedAt)},
 		job.KV{K: "result", V: resultKind},
 		job.KV{K: "prompt", V: r.meta.PromptState},
@@ -166,17 +157,17 @@ func (r *run) finish(f finishArgs) {
 
 	w := r.opts.Stdout
 	fmt.Fprintln(w, "")
-	fmt.Fprintf(w, "status: %s\n", prose.StatusLine(f.status))
+	fmt.Fprintf(w, "status: %s\n", prose.StatusLine(out.Status))
 	fmt.Fprintf(w, "result: %s\n", r.ws.ResultPath())
 	fmt.Fprintf(w, "meta: %s\n", r.ws.MetaPath())
-	session := r.session()
+	session := job.Deref(r.meta.SessionID)
 	if session == "" {
 		session = "(none)"
 	}
 	fmt.Fprintf(w, "session: %s\n", session)
 	fmt.Fprintf(w, "next: %s\n", collectAction)
 
-	r.exitCode = job.ExitCodeFor(f.status)
+	r.exitCode = job.ExitCodeFor(out.Status)
 }
 
 func elapsed(since time.Time) string {

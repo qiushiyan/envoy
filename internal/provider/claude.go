@@ -219,20 +219,10 @@ func (c *claude) Recovery() (Evidence, []Event) {
 func (c *claude) Conclude(exit ExitInfo) Outcome {
 	parsed := parseClaudeMessages(c.messages)
 	if parsed.kind == "unparseable" {
+		// No envelope means no tokens or cost: Recovery reads them from it.
 		observed, _ := c.Recovery()
-		out := Outcome{
-			Status: job.StatusInfra,
-			ErrorText: prose.ProcessExited("Claude", exit.Command, exit.Code,
-				"but returned no parseable result envelope", stderrDetail(exit.StderrTail)),
-			Partial:             observed.Partial,
-			PromptState:         job.PromptUnknown,
-			PromptStateEvidence: job.PtrIfNonEmpty(observed.Label),
-			HasEvidence:         true,
-		}
-		if observed.Accepted {
-			out.PromptState = job.PromptAccepted
-		}
-		return out
+		return observed.Outcome(job.StatusInfra, prose.ProcessExited("Claude", exit.Command, exit.Code,
+			"but returned no parseable result envelope", stderrDetail(exit.StderrTail)))
 	}
 
 	// The result envelope's session id wins: a resumed claude conversation is

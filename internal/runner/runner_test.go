@@ -83,7 +83,7 @@ func TestUsageIsPersistedDuringTheTurn(t *testing.T) {
 		t.Fatalf("terminal envelope not persisted before process exit: %+v", m.Usage)
 	}
 	out := r.driver.Conclude(provider.ExitInfo{Code: job.Ptr(0)})
-	r.finish(finishArgs{status: out.Status, text: out.Text, tokens: out.Tokens})
+	r.finish(out, exitResult{})
 	m = diskUsage(t, r)
 	if m.Status != job.StatusOK || m.Usage.State != "settled" || *m.Tokens.Output != 338 {
 		t.Fatalf("finish changed settled usage or tokens writer: %+v", m)
@@ -97,7 +97,7 @@ func TestUsageFinalizationWithoutTerminal(t *testing.T) {
 			for _, line := range records[:2] {
 				r.handleEvents(r.driver.Feed(line))
 			}
-			r.finish(finishArgs{status: status, errorText: "test stop"})
+			r.finish(provider.Outcome{Status: status, ErrorText: "test stop"}, exitResult{})
 			u := diskUsage(t, r).Usage
 			if !u.Final || u.State != "incomplete" || *u.LatestContextTokens != 18889 || *u.InputTokens != 2 || u.OutputTokens != nil || !slices.Contains(u.Issues, "missing_terminal") {
 				t.Fatalf("final usage = %+v", u)

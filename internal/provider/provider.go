@@ -15,13 +15,12 @@ import (
 )
 
 // Options is the provider-facing slice of a turn request: exactly the fields
-// a driver reads. Runner-only concerns (prompt file, cwd, baseline, label)
-// deliberately do not ride through this seam.
+// a driver reads. Runner-only concerns (prompt file, cwd, baseline, write
+// intent) deliberately do not ride through this seam.
 type Options struct {
-	Model        string // "" = the provider's own configured default
-	Effort       string // "" = the provider's own configured default
-	Resume       string // session id to continue, "" = fresh session
-	AllowWrite   bool
+	Model        string   // "" = the provider's own configured default
+	Effort       string   // "" = the provider's own configured default
+	Resume       string   // session id to continue, "" = fresh session
 	MaxBudgetUSD *float64 // claude only
 }
 
@@ -75,6 +74,26 @@ type Evidence struct {
 	CostUSD  *float64
 }
 
+// Outcome is the ending this evidence supports for a turn the provider never
+// concluded itself: the prompt state acceptance proves, and whatever output,
+// tokens and cost survived.
+func (e Evidence) Outcome(status, errorText string) Outcome {
+	out := Outcome{
+		Status:              status,
+		ErrorText:           errorText,
+		Partial:             e.Partial,
+		Tokens:              e.Tokens,
+		CostUSD:             e.CostUSD,
+		PromptState:         job.PromptUnknown,
+		PromptStateEvidence: job.PtrIfNonEmpty(e.Label),
+		HasEvidence:         true,
+	}
+	if e.Accepted {
+		out.PromptState = job.PromptAccepted
+	}
+	return out
+}
+
 // ExitInfo describes how the launched process ended.
 type ExitInfo struct {
 	Command      string // executable when it differs from the bare provider invocation
@@ -85,12 +104,14 @@ type ExitInfo struct {
 	StderrTail   string // last ~2000 chars of command stderr
 }
 
-// Outcome is a driver's normal-path conclusion after process end. A driver
-// reports what it observed — the cause, and any cause-specific fix the caller
-// must apply first — and never the recovery prescription itself: that follows
-// from the prompt state and is worded once in internal/prose.
+// Outcome is how a turn ended, as the runner publishes it: a driver's
+// conclusion after a normal process end, or one the runner assembles for an
+// ending the driver did not see through. It reports what was observed — the
+// cause, and any cause-specific fix the caller must apply first — and never
+// the recovery prescription itself: that follows from the prompt state and is
+// worded once in internal/prose.
 type Outcome struct {
-	Status              string // job.StatusOK / StatusFailed / StatusInfra
+	Status              string // terminal status; a driver concludes StatusOK, StatusFailed or StatusInfra
 	Text                string // final text (ok only)
 	ErrorText           string // provider verdict or observed command exit
 	Remedy              string // cause-specific fix, e.g. "Raise the budget cap first."; "" when none

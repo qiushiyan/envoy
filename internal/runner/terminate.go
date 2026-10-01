@@ -124,13 +124,6 @@ func (r *run) maybeStreamsClosed() {
 	r.onChildDone(r.childExit)
 }
 
-func (r *run) providerTerminalType() string {
-	if r.meta.ProviderTerminalEventType == nil {
-		return ""
-	}
-	return *r.meta.ProviderTerminalEventType
-}
-
 // onChildDone classifies the ended turn and finishes. Branch order matters:
 // lock conflict, then requested termination, then unexpected signal, then the
 // provider's own conclusion.
@@ -144,21 +137,20 @@ func (r *run) onChildDone(exit exitResult) {
 			t.Stop()
 		}
 	}
-	r.flushLineBuf()
+	r.drainLines(true)
 
-	if r.conflicted() {
+	if r.meta.SessionLockConflict != nil {
 		ev, _ := r.driver.Recovery()
-		r.finish(finishArgs{
-			status: job.StatusInfra,
-			errorText: fmt.Sprintf("%s reported a session id that another turn already holds, so this turn was stopped.",
+		r.finish(provider.Outcome{
+			Status: job.StatusInfra,
+			ErrorText: fmt.Sprintf("%s reported a session id that another turn already holds, so this turn was stopped.",
 				capitalize(r.opts.Provider)),
-			partial:             ev.Partial,
-			tokens:              ev.Tokens,
-			promptState:         job.PromptAccepted,
-			promptStateEvidence: r.meta.PromptStateEvidence,
-			hasEvidence:         true,
-			exit:                exit,
-		})
+			Partial:             ev.Partial,
+			Tokens:              ev.Tokens,
+			PromptState:         job.PromptAccepted,
+			PromptStateEvidence: r.meta.PromptStateEvidence,
+			HasEvidence:         true,
+		}, exit)
 		return
 	}
 
@@ -170,22 +162,8 @@ func (r *run) onChildDone(exit exitResult) {
 	if exit.signal != nil && r.meta.ProviderTerminalAt == nil {
 		ev, evs := r.driver.Recovery()
 		r.handleEvents(evs)
-		promptState := job.PromptUnknown
-		if ev.Accepted {
-			promptState = job.PromptAccepted
-		}
-		r.finish(finishArgs{
-			status: job.StatusInfra,
-			errorText: fmt.Sprintf("%s was killed by signal %s, which envoy did not send.",
-				r.meta.CommandPrefix[0], *exit.signal),
-			partial:             ev.Partial,
-			tokens:              ev.Tokens,
-			costUSD:             ev.CostUSD,
-			promptState:         promptState,
-			promptStateEvidence: job.PtrIfNonEmpty(ev.Label),
-			hasEvidence:         true,
-			exit:                exit,
-		})
+		r.finish(ev.Outcome(job.StatusInfra, fmt.Sprintf("%s was killed by signal %s, which envoy did not send.",
+			r.meta.CommandPrefix[0], *exit.signal)), exit)
 		return
 	}
 
@@ -198,27 +176,12 @@ func (r *run) onChildDone(exit exitResult) {
 		Code:         exit.code,
 		Signal:       exit.signal,
 		Terminated:   r.term != nil,
-		TerminalType: r.providerTerminalType(),
+		TerminalType: job.Deref(r.meta.ProviderTerminalEventType),
 		StderrTail:   r.stderrTail,
 	})
-	if outcome.SessionID != "" {
-		r.setSession(outcome.SessionID)
-	}
 	// The driver reported the cause and any cause-specific fix; the
 	// prescription itself is rendered from the records at collect time.
-	r.finish(finishArgs{
-		status:              outcome.Status,
-		text:                outcome.Text,
-		errorText:           outcome.ErrorText,
-		remedy:              outcome.Remedy,
-		partial:             outcome.Partial,
-		tokens:              outcome.Tokens,
-		costUSD:             outcome.CostUSD,
-		promptState:         outcome.PromptState,
-		promptStateEvidence: outcome.PromptStateEvidence,
-		hasEvidence:         outcome.HasEvidence,
-		exit:                exit,
-	})
+	r.finish(outcome, exit)
 }
 
 // finishAfterStop publishes a requested stop (timeout or interruption) with
@@ -243,23 +206,7 @@ func (r *run) finishAfterStop(exit exitResult) {
 	if r.term.kind == "timeout" {
 		status = job.StatusTimeout
 	}
-	promptState := job.PromptUnknown
-	var evidence *string
-	if ev.Accepted {
-		promptState = job.PromptAccepted
-		evidence = job.PtrIfNonEmpty(ev.Label)
-	}
-	r.finish(finishArgs{
-		status:              status,
-		errorText:           stopped,
-		partial:             ev.Partial,
-		tokens:              ev.Tokens,
-		costUSD:             ev.CostUSD,
-		promptState:         promptState,
-		promptStateEvidence: evidence,
-		hasEvidence:         true,
-		exit:                exit,
-	})
+	r.finish(ev.Outcome(status, stopped), exit)
 }
 
 // capStream reports what the run had observed of the provider's stream as of

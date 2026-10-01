@@ -44,7 +44,7 @@ func TestClaudeArgv(t *testing.T) {
 	budget := 0.5
 	full := newClaude(Options{
 		Model: "opus", Effort: "xhigh",
-		Resume: "abc", AllowWrite: true, MaxBudgetUSD: &budget,
+		Resume: "abc", MaxBudgetUSD: &budget,
 	}, time.Now())
 	argv = full.Argv()
 	want = []string{
@@ -314,5 +314,21 @@ func TestCodexTransientErrorIsDetailWithoutResult(t *testing.T) {
 	out := c.Conclude(ExitInfo{Code: job.Ptr(1), StderrTail: "tail"})
 	if out.Status != job.StatusInfra || !strings.Contains(out.ErrorText, "stream disconnected") {
 		t.Fatalf("outcome = %+v", out)
+	}
+}
+
+// An ending the provider never concluded may claim acceptance only on the
+// evidence's word, and always records how that was proven — or that it wasn't.
+func TestEvidenceOutcomeTakesPromptStateFromAcceptance(t *testing.T) {
+	partial := "half an answer"
+	accepted := Evidence{Accepted: true, Label: "codex thread.started", Partial: &partial}.Outcome(job.StatusTimeout, "capped")
+	if accepted.Status != job.StatusTimeout || accepted.ErrorText != "capped" || accepted.Partial != &partial ||
+		accepted.PromptState != job.PromptAccepted || !accepted.HasEvidence ||
+		accepted.PromptStateEvidence == nil || *accepted.PromptStateEvidence != "codex thread.started" {
+		t.Fatalf("accepted evidence outcome = %+v", accepted)
+	}
+	unproven := Evidence{}.Outcome(job.StatusInterrupted, "stopped")
+	if unproven.PromptState != job.PromptUnknown || !unproven.HasEvidence || unproven.PromptStateEvidence != nil {
+		t.Fatalf("unproven evidence outcome = %+v", unproven)
 	}
 }
