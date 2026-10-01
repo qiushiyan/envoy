@@ -350,6 +350,70 @@ func TestClaudeTranscriptRecoveryOnTimeout(t *testing.T) {
 		"partial work from the Claude transcript")
 }
 
+// A second interrupt is the caller saying "stop waiting": the tree is killed
+// now rather than after the SIGKILL grace, a grandchild that ignores every
+// polite signal included, and the turn keeps the interrupt that started it.
+func TestASecondInterruptKillsTheTreeNow(t *testing.T) {
+	pidFile, readyFile := filepath.Join(t.TempDir(), "grandchild.pid"), filepath.Join(t.TempDir(), "ready")
+	e := newEnv(t).
+		set("ENVOY_FAKE_SCENARIO", "hang-with-stubborn-grandchild-only").
+		set("ENVOY_FAKE_GRANDCHILD_PID_FILE", pidFile).
+		set("ENVOY_FAKE_GRANDCHILD_READY_FILE", readyFile).
+		// A grace far past the test's own wait: only the second interrupt
+		// can end this stop in time.
+		set("ENVOY_SIGKILL_AFTER_MS", "120000")
+	outDir := filepath.Join(t.TempDir(), "job")
+	cmd := exec.Command(binPath, runArgs(writePrompt(t, t.TempDir()), outDir, "--with", "codex", "--timeout-min", "5")...)
+	cmd.Env = e.build()
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	t.Cleanup(func() {
+		var pid int
+		if data, err := os.ReadFile(pidFile); err == nil {
+			fmt.Sscanf(string(data), "%d", &pid)
+		}
+		if pid > 0 {
+			syscall.Kill(pid, syscall.SIGKILL)
+		}
+		cmd.Process.Kill()
+	})
+	waitUntil := func(what string, ok func() bool) {
+		deadline := time.Now().Add(10 * time.Second)
+		for !ok() {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s never happened", what)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	waitUntil("grandchild ready", func() bool { _, err := os.Stat(readyFile); return err == nil })
+	cmd.Process.Signal(syscall.SIGINT)
+	waitUntil("the stop", func() bool {
+		data, _ := os.ReadFile(filepath.Join(outDir, "progress.log"))
+		return strings.Contains(string(data), "state=stopping")
+	})
+	cmd.Process.Signal(syscall.SIGINT)
+
+	select {
+	case err := <-done:
+		if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 5 {
+			t.Fatalf("exit %v, want 5", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("a second interrupt must not wait out the SIGKILL grace")
+	}
+	var grandchild int
+	fmt.Sscanf(readFile(t, pidFile), "%d", &grandchild)
+	waitUntil(fmt.Sprintf("grandchild %d killed", grandchild), func() bool { return syscall.Kill(grandchild, 0) == syscall.ESRCH })
+	meta := readMeta(t, outDir)
+	if meta["status"] != "interrupted" || meta["interruptionSignal"] != "SIGINT" {
+		t.Fatalf("meta = status %v signal %v", meta["status"], meta["interruptionSignal"])
+	}
+}
+
 func TestInterruptRecordsPartialAndResume(t *testing.T) {
 	e := newEnv(t).
 		set("ENVOY_FAKE_SCENARIO", "delayed-success").

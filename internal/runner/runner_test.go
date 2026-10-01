@@ -134,10 +134,10 @@ func TestAnEndingThatProvesAcceptanceStampsItLikeTheStream(t *testing.T) {
 }
 
 // A stop escalates once: residual cleanup and a repeated cap ride the stop
-// already under way instead of pushing its SIGKILL later, and only a second
-// interrupt — an explicit "stop waiting" — skips straight to the kill. The
-// stop keeps the reason it started with.
-func TestAStopEscalatesOnceAndASecondInterruptSkipsTheWait(t *testing.T) {
+// already under way instead of pushing its SIGKILL later, and an interrupt
+// arriving during it leaves the stop the reason it started with. What that
+// interrupt does to the tree is TestASecondInterruptKillsTheTreeNow's.
+func TestAStopEscalatesOnceAndKeepsItsReason(t *testing.T) {
 	r, _ := usageRun(t)
 	r.requestTermination(stopTimeout, nil)
 	if r.escalation != terminating || r.escalationTimer == nil {
@@ -150,12 +150,6 @@ func TestAStopEscalatesOnceAndASecondInterruptSkipsTheWait(t *testing.T) {
 		t.Fatal("a stop already under way keeps the SIGKILL deadline it set")
 	}
 	r.requestTermination(stopInterrupted, syscall.SIGINT)
-	if r.escalation != killing || r.escalationTimer == pendingKill {
-		t.Fatalf("a second interrupt must kill now: escalation %v", r.escalation)
-	}
-	if pendingKill.Stop() {
-		t.Fatal("the superseded SIGKILL step must be stopped, not left to fire")
-	}
 	r.escalationTimer.Stop()
 	if r.term.reason != stopTimeout || diskUsage(t, r).InterruptionSignal != nil {
 		t.Fatalf("the stop keeps the reason it started with: %+v", r.term)

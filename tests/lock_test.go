@@ -63,7 +63,10 @@ func TestCodexFreshSessionLockCollision(t *testing.T) {
 		"# Turn infra", "another turn already holds")
 	// The session may belong to the other turn, so no continuation of it is
 	// offered; the next move is to collect the job that holds it.
+	// The record keeps the lock file's account of its holder, so the refusal
+	// still names the job to collect whenever this one is read.
 	col := runEnvoy(t, e, "collect", outDir)
-	mustContain(t, "collect stdout", col.stdout, "session: fake-session-id", "next: Another turn holds this session id")
+	mustContain(t, "collect stdout", col.stdout, "session: fake-session-id", "next: Another turn holds this session id",
+		"already has a live turn", "then collect its job: envoy collect '/tmp/live-job'")
 	mustNotContain(t, "collect stdout", col.stdout, "resume: envoy run")
 }

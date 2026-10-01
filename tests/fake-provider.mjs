@@ -128,7 +128,8 @@ function emitCodexResult() {
 function startGrandchild({ ignoreSigterm = false } = {}) {
   const readyFile = process.env.ENVOY_FAKE_GRANDCHILD_READY_FILE;
   const grandchildProgram = [
-    ignoreSigterm ? "process.on('SIGTERM', () => {});" : '',
+    // A stubborn grandchild ignores every polite stop: only SIGKILL ends it.
+    ignoreSigterm ? "process.on('SIGTERM', () => {}); process.on('SIGINT', () => {});" : '',
     readyFile ? `require('node:fs').writeFileSync(${JSON.stringify(readyFile)}, 'ready\\n');` : '',
     'setInterval(() => {}, 60_000);',
   ].join(' ');
