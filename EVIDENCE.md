@@ -1,15 +1,36 @@
 # Evidence log — what usage taught, and what it cost
 
 Engine-relevant history, distilled from the predecessor and continued here.
-[DESIGN.md](DESIGN.md) holds the design these lessons produced; this file holds
-the receipts. Read it when a change would revisit a settled question — the
-entry usually says what it already cost to learn.
+The design docs (`docs/README.md` routes to them) hold the positions these
+lessons produced; this file holds the receipts. Read it when a change would
+revisit a settled question — the entry usually says what it already cost to
+learn.
 
 One incident or one mining pass per entry: what the logs showed, what it cost,
 and the lesson that survived. A few lines each. An entry that has grown into a
 session report has drifted off this altitude and belongs back at it — the
 detail lives in the job store and the transcripts, which is where a later pass
-will look anyway.
+will look anyway. Every number carries the window it was counted over and what
+exactly was counted. A lesson that became a durable rule is stated in the
+owning `docs/` doc, and the entry points at it.
+
+Entries say what was true when they were written. The 2026-09-12 entry retired
+the earlier surface — the `fan`, `turn`, `steer` and `jobs` verbs, flags such
+as `--resume-from`, `--with-from` and `--coordinate-file`, and the stamped job
+directories with their random-suffix reservation — for `envoy run <job> --with
+<voice>`, and 2026-09-21 gave a reused name generations instead of a refusal.
+`internal/steer` is `internal/prose`, and an entry citing `DESIGN.md` means the
+design that `docs/` now holds. Several entries end on a "compare next pass"
+line: the open questions a mining pass checks first.
+
+Mining the store: jobs live under `~/.local/state/envoy/jobs/<project>/`, and a
+fan-out's `group.json` sits in its job directory with each member's
+`meta.json` one level deeper, so glob both depths. Field truth is
+`internal/job`; records of meta schema 9 and earlier carry a worded `error`
+string where later ones carry the `failure` object. The transcripts' evidence
+is the command shapes — flags chosen, dispatches chained, collect piped
+through anything, coordinates recovered by hand — and the narration around
+each workaround.
 
 - **2026-07-03 — engine born** from the `/pair-coding` screen-scraping
   postmortem: headless turns, files as return values.
