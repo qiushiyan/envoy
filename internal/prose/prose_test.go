@@ -284,7 +284,7 @@ func TestContinueVocabulary(t *testing.T) {
 	// the eligible members only, and the blocked one named as an observation.
 	members := []FanMemberCandidate{
 		{Name: "codex", Dir: "/jobs/fan/codex"},
-		{Name: "claude-opus", Dir: "/jobs/fan/claude-opus", Blocked: true, Kind: BlockerRunning},
+		{Name: "claude-opus", Dir: "/jobs/fan/claude-opus", Kind: BlockerRunning},
 	}
 	mixed := GroupRefMustStandAlone("/jobs/fan", members)
 	for _, want := range []string{"names a fan-out", "stands alone", "--with @'/jobs/fan/codex'  (codex)", "member claude-opus is still running"} {

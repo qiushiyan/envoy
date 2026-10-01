@@ -40,18 +40,12 @@ func jobDirs(base string) ([]string, error) {
 	}
 	var dirs []string
 	for _, e := range entries {
-		dir := filepath.Join(base, e.Name())
-		if job.IsGroupDir(dir) || hasFile(job.Workspace{Dir: dir}.MetaPath()) {
+		if dir := filepath.Join(base, e.Name()); job.HasRecord(dir) {
 			dirs = append(dirs, dir)
 		}
 	}
 	sort.Strings(dirs)
 	return dirs, nil
-}
-
-func hasFile(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 // ---------- continuing a finished job ----------
@@ -77,16 +71,20 @@ func continuationBlocker(meta *job.Meta) (prose.ResumeBlockerKind, bool) {
 }
 
 // Inspect reads dir as a single turn and reports whether its conversation
-// can be continued, returning the record a continuation inherits its
-// settings from — whose session is then always set. The error is non-nil only
-// when dir holds no readable turn at all; a real turn that cannot continue
-// reports a blocker instead.
+// can be continued; see Continuable.
 func Inspect(dir string) (*job.Meta, prose.ResumeBlockerKind, error) {
-	metaPath := job.Workspace{Dir: dir}.MetaPath()
-	if _, err := os.Stat(metaPath); err != nil {
-		return nil, "", fmt.Errorf("no job found there (no meta.json)")
+	return Continuable(job.ReadMeta(dir))
+}
+
+// Continuable judges a turn record as read — the record and its read error —
+// returning the record a continuation inherits its settings from, whose
+// session is then always set. The error is non-nil only when there is no
+// readable turn at all; a real turn that cannot continue reports a blocker
+// instead.
+func Continuable(meta *job.Meta, err error) (*job.Meta, prose.ResumeBlockerKind, error) {
+	if errors.Is(err, job.ErrNoRecord) {
+		return nil, "", errors.New("no job found there (no meta.json)")
 	}
-	meta, err := job.ReadMetaFile(metaPath)
 	if err != nil {
 		return nil, "", err
 	}
@@ -122,22 +120,20 @@ func NameHold(dir string) (prose.NameHold, bool) {
 	if !job.IsGroupDir(dir) {
 		return turnHold(dir)
 	}
-	gw := job.GroupWorkspace{Dir: dir}
-	group, err := job.ReadGroupFile(gw.GroupPath())
+	fan, err := job.ReadFan(dir)
 	if err != nil {
 		return prose.NameHold{Kind: prose.HoldUnreadable}, true
 	}
-	mayStillStart := proc.PidLiveness(group.RunnerPid) != proc.Gone
-	for _, name := range group.Members {
-		memberDir := gw.Member(name).Dir
-		if !hasFile(job.Workspace{Dir: memberDir}.MetaPath()) {
+	mayStillStart := proc.PidLiveness(fan.Group.RunnerPid) != proc.Gone
+	for _, m := range fan.Members {
+		if errors.Is(m.Err, job.ErrNoRecord) {
 			if mayStillStart {
-				return prose.NameHold{Kind: prose.HoldUnrecorded, Member: name}, true
+				return prose.NameHold{Kind: prose.HoldUnrecorded, Member: m.Name}, true
 			}
 			continue
 		}
-		if hold, held := turnHold(memberDir); held {
-			hold.Member = name
+		if hold, held := recordHold(m.Meta, m.Err); held {
+			hold.Member = m.Name
 			return hold, true
 		}
 	}
@@ -145,12 +141,16 @@ func NameHold(dir string) (prose.NameHold, bool) {
 }
 
 func turnHold(dir string) (prose.NameHold, bool) {
-	metaPath := job.Workspace{Dir: dir}.MetaPath()
-	if !hasFile(metaPath) {
+	meta, err := job.ReadMeta(dir)
+	if errors.Is(err, job.ErrNoRecord) {
 		entries, err := os.ReadDir(dir)
 		return prose.NameHold{Kind: prose.HoldUnrecorded, Empty: err == nil && len(entries) == 0}, true
 	}
-	meta, err := job.ReadMetaFile(metaPath)
+	return recordHold(meta, err)
+}
+
+// recordHold is the hold a turn record — as read — places on its name.
+func recordHold(meta *job.Meta, err error) (prose.NameHold, bool) {
 	switch {
 	case err != nil:
 		return prose.NameHold{Kind: prose.HoldUnreadable}, true
@@ -326,11 +326,13 @@ func Collect(dir, note string, mode Mode, w, errW io.Writer) int {
 	if job.IsGroupDir(dir) {
 		return collectGroup(dir, note, mode, w, errW)
 	}
-	var body bytes.Buffer
-	r := renderJob(dir, mode, &body, errW, true)
-	if r.code != 0 {
-		return r.code
+	meta, err := job.ReadMeta(dir)
+	if err != nil {
+		reportUnreadable(dir, err, errW)
+		return job.ExitUsage
 	}
+	var body bytes.Buffer
+	r := renderJob(dir, meta, mode, &body, true)
 	if !deliver(w, errW, withNote(body.Bytes(), note, mode, errW)) {
 		return job.ExitInfra
 	}
@@ -371,6 +373,21 @@ func deliver(w, errW io.Writer, body []byte) bool {
 	return true
 }
 
+// reportUnreadable says on the error stream why a turn's record could not be
+// read, and where the evidence of what it did still is.
+func reportUnreadable(dir string, err error, errW io.Writer) {
+	ws := job.Workspace{Dir: dir}
+	if errors.Is(err, job.ErrNoRecord) {
+		fmt.Fprintf(errW,
+			"collect error: %s not found — inspect %s, %s, %s, and the working tree before deciding whether to retry\n",
+			ws.MetaPath(), ws.ProgressLogPath(), ws.RawLogPath(), ws.StderrLogPath())
+		return
+	}
+	fmt.Fprintf(errW,
+		"collect error: %s could not be read (%s). Inspect %s, %s, %s, and the working tree; do not assume the job finished or retry it blindly.\n",
+		ws.MetaPath(), err, ws.ProgressLogPath(), ws.RawLogPath(), ws.StderrLogPath())
+}
+
 // rendered is what one turn's block decided while it was being written: the
 // record it described, whether an ok payload failed to reach the block, and
 // whether delivering the block completes the collection.
@@ -378,7 +395,6 @@ type rendered struct {
 	meta        *job.Meta
 	undelivered bool // ok status, but result.md could not be read
 	stamp       bool // deliverable complete: stamp once the block is written
-	code        int
 }
 
 // renderJob writes one turn's block into w and reports what a fan-out needs
@@ -386,21 +402,8 @@ type rendered struct {
 // reader of meta.json. showGit is false for a member of a fan-out, where the
 // reviewed range belongs to the whole fan-out and is printed once above the
 // members rather than per member.
-func renderJob(dir string, mode Mode, w io.Writer, errW io.Writer, showGit bool) rendered {
+func renderJob(dir string, meta *job.Meta, mode Mode, w io.Writer, showGit bool) rendered {
 	ws := job.Workspace{Dir: dir}
-	if _, err := os.Stat(ws.MetaPath()); err != nil {
-		fmt.Fprintf(errW,
-			"collect error: %s not found — inspect %s, %s, %s, and the working tree before deciding whether to retry\n",
-			ws.MetaPath(), ws.ProgressLogPath(), ws.RawLogPath(), ws.StderrLogPath())
-		return rendered{code: job.ExitUsage}
-	}
-	meta, err := job.ReadMetaFile(ws.MetaPath())
-	if err != nil {
-		fmt.Fprintf(errW,
-			"collect error: %s could not be read (%s). Inspect %s, %s, %s, and the working tree; do not assume the job finished or retry it blindly.\n",
-			ws.MetaPath(), err, ws.ProgressLogPath(), ws.RawLogPath(), ws.StderrLogPath())
-		return rendered{code: job.ExitUsage}
-	}
 	state := classifyRunning(meta)
 	meta = reconcileAbandoned(dir, meta, state)
 	state = classifyRunning(meta)
@@ -591,62 +594,61 @@ func stampCollected(dir string, meta *job.Meta) {
 // it would be worse than no aggregate at all. Nothing is stamped until the
 // whole block has reached the caller.
 func collectGroup(dir, note string, mode Mode, w, errW io.Writer) int {
-	gw := job.GroupWorkspace{Dir: dir}
-	group, err := job.ReadGroupFile(gw.GroupPath())
+	fan, err := job.ReadFan(dir)
 	if err != nil {
 		fmt.Fprintf(errW,
 			"collect error: %s could not be read (%s). Each member's job dir under %s is self-contained — collect one directly to see its result.\n",
-			gw.GroupPath(), err, dir)
+			job.GroupWorkspace{Dir: dir}.GroupPath(), err, dir)
 		return job.ExitUsage
 	}
+	group := fan.Group
 
 	var sections bytes.Buffer
-	statuses := make([]string, 0, len(group.Members))
-	labels := make([]string, 0, len(group.Members))
+	statuses := make([]string, 0, len(fan.Members))
+	labels := make([]string, 0, len(fan.Members))
 	var undelivered []string
 	type stampable struct {
 		dir  string
 		meta *job.Meta
 	}
 	var stamps []stampable
-	resumable := len(group.Members) > 0
-	for _, name := range group.Members {
-		memberDir := gw.Member(name).Dir
-		fmt.Fprintf(&sections, "\n=== member %s ===\n", name)
+	resumable := len(fan.Members) > 0
+	for _, m := range fan.Members {
+		fmt.Fprintf(&sections, "\n=== member %s ===\n", m.Name)
 		// A member with no record is the roster's observation, not the
 		// member's: it gets its own section here, worded to what the directory
 		// shows, rather than the single-turn error a turn with no record earns.
-		if !hasFile(job.Workspace{Dir: memberDir}.MetaPath()) {
-			fmt.Fprintf(&sections, "status: %s\nnext: %s\n", prose.FanMemberNoRecord(), prose.FanMemberNoRecordNext(memberDir))
+		if errors.Is(m.Err, job.ErrNoRecord) {
+			fmt.Fprintf(&sections, "status: %s\nnext: %s\n", prose.FanMemberNoRecord(), prose.FanMemberNoRecordNext(m.Dir))
 			statuses = append(statuses, "")
-			labels = append(labels, name+" no status")
+			labels = append(labels, m.Name+" no status")
 			resumable = false
 			continue
 		}
-		r := renderJob(memberDir, mode, &sections, errW, false)
 		status := ""
-		if r.code != 0 {
-			// meta.json exists but could not be read; renderJob has already
-			// said so on stderr.
+		if m.Err != nil {
+			reportUnreadable(m.Dir, m.Err, errW)
 			fmt.Fprintf(&sections, "status: %s\n", prose.FanUndispatched())
-		} else {
-			status = r.meta.Status
-		}
-		if r.undelivered {
-			undelivered = append(undelivered, name)
-		}
-		if r.stamp {
-			stamps = append(stamps, stampable{memberDir, r.meta})
-		}
-		if _, blocked := continuationBlocker(r.meta); blocked {
 			resumable = false
+		} else {
+			r := renderJob(m.Dir, m.Meta, mode, &sections, false)
+			status = r.meta.Status
+			if r.undelivered {
+				undelivered = append(undelivered, m.Name)
+			}
+			if r.stamp {
+				stamps = append(stamps, stampable{m.Dir, r.meta})
+			}
+			if _, blocked := continuationBlocker(r.meta); blocked {
+				resumable = false
+			}
 		}
 		statuses = append(statuses, status)
 		label := status
 		if label == "" {
 			label = "no status"
 		}
-		labels = append(labels, name+" "+label)
+		labels = append(labels, m.Name+" "+label)
 	}
 
 	// The group's closing aggregates delivery alongside status: a member that
@@ -732,26 +734,27 @@ type pendingItem struct {
 func pendingJobs(dirs []string) []pendingItem {
 	var pending []pendingItem
 	for _, dir := range dirs {
+		var item pendingItem
+		var ok bool
 		if job.IsGroupDir(dir) {
-			if item, ok := pendingGroup(dir); ok {
-				pending = append(pending, item)
-			}
-			continue
+			item, ok = pendingGroup(dir)
+		} else {
+			meta, err := job.ReadMeta(dir)
+			item, ok = pendingTurn(dir, meta, err)
 		}
-		if item, ok := pendingJob(dir); ok {
+		if ok {
 			pending = append(pending, item)
 		}
 	}
 	return pending
 }
 
-// pendingJob classifies one turn: still needing attention, or not.
-func pendingJob(dir string) (pendingItem, bool) {
-	metaPath := job.Workspace{Dir: dir}.MetaPath()
-	if _, err := os.Stat(metaPath); err != nil {
+// pendingTurn classifies one turn record, as read: still needing attention,
+// or not.
+func pendingTurn(dir string, meta *job.Meta, err error) (pendingItem, bool) {
+	if errors.Is(err, job.ErrNoRecord) {
 		return pendingItem{}, false
 	}
-	meta, err := job.ReadMetaFile(metaPath)
 	if err != nil {
 		return pendingItem{
 			kind: "corrupt", dir: dir,
@@ -779,8 +782,7 @@ func pendingJob(dir string) (pendingItem, bool) {
 // why; the prescription for each of them is per member, and printing it is
 // collect's job, not the index's.
 func pendingGroup(dir string) (pendingItem, bool) {
-	gw := job.GroupWorkspace{Dir: dir}
-	group, err := job.ReadGroupFile(gw.GroupPath())
+	fan, err := job.ReadFan(dir)
 	if err != nil {
 		return pendingItem{
 			kind: "corrupt", dir: dir,
@@ -788,17 +790,16 @@ func pendingGroup(dir string) (pendingItem, bool) {
 		}, true
 	}
 	var reasons []string
-	for _, name := range group.Members {
-		memberDir := gw.Member(name).Dir
+	for _, m := range fan.Members {
 		// A member the roster names but that never wrote a record is the one
 		// case the member's own files cannot report; the roster is the only
 		// evidence it was meant to run, so the group carries it.
-		if !hasFile(job.Workspace{Dir: memberDir}.MetaPath()) {
-			reasons = append(reasons, fmt.Sprintf("%s: has no meta.json, so it never recorded a start", name))
+		if errors.Is(m.Err, job.ErrNoRecord) {
+			reasons = append(reasons, fmt.Sprintf("%s: has no meta.json, so it never recorded a start", m.Name))
 			continue
 		}
-		if item, ok := pendingJob(memberDir); ok {
-			reasons = append(reasons, fmt.Sprintf("%s: %s", name, item.detail))
+		if item, ok := pendingTurn(m.Dir, m.Meta, m.Err); ok {
+			reasons = append(reasons, fmt.Sprintf("%s: %s", m.Name, item.detail))
 		}
 	}
 	if len(reasons) == 0 {
@@ -807,7 +808,7 @@ func pendingGroup(dir string) (pendingItem, bool) {
 	return pendingItem{
 		kind: "group", dir: dir,
 		detail: fmt.Sprintf("%d of %d members still need attention — %s",
-			len(reasons), len(group.Members), strings.Join(reasons, " · ")),
+			len(reasons), len(fan.Members), strings.Join(reasons, " · ")),
 	}, true
 }
 

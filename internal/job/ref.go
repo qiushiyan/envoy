@@ -178,7 +178,6 @@ func (e *UnattributedError) Unwrap() error { return e.Err }
 // record from before callers were recorded, a job run with no harness
 // identity. A record that is there and cannot be read is an error, never "".
 func CallerOf(dir string) (string, error) {
-	path := Workspace{Dir: dir}.MetaPath()
 	if IsGroupDir(dir) {
 		g, err := ReadGroupFile(GroupWorkspace{Dir: dir}.GroupPath())
 		if err != nil {
@@ -186,10 +185,10 @@ func CallerOf(dir string) (string, error) {
 		}
 		return Deref(g.Caller), nil
 	}
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+	m, err := ReadMeta(dir)
+	if errors.Is(err, ErrNoRecord) {
 		return "", nil
 	}
-	m, err := ReadMetaFile(path)
 	if err != nil {
 		return "", err
 	}

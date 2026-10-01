@@ -2,7 +2,9 @@ package job
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -132,6 +134,53 @@ func (g GroupWorkspace) Member(name string) Workspace {
 // turn. The presence of group.json is the discriminator, and it is written
 // before any member starts.
 func IsGroupDir(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, "group.json"))
+	_, err := os.Stat(GroupWorkspace{Dir: dir}.GroupPath())
 	return err == nil
+}
+
+// HasRecord reports whether dir holds the record that makes it a job:
+// group.json for a fan-out, meta.json for a turn.
+func HasRecord(dir string) bool {
+	if IsGroupDir(dir) {
+		return true
+	}
+	_, err := os.Stat(Workspace{Dir: dir}.MetaPath())
+	return err == nil
+}
+
+// Fan is a fan-out read whole: its manifest and every member the roster
+// names, each member's record read once. The roster is the only evidence a
+// member was meant to run, so a member that never wrote a record is still
+// here, carrying ErrNoRecord.
+type Fan struct {
+	Group   *Group
+	Members []Member
+}
+
+// Member is one roster entry and its record: Meta when it reads, Err when it
+// does not.
+type Member struct {
+	Name string
+	Dir  string
+	Meta *Meta
+	Err  error
+}
+
+// ReadFan reads the fan-out in dir, ErrNoRecord when it holds no group.json.
+func ReadFan(dir string) (*Fan, error) {
+	gw := GroupWorkspace{Dir: dir}
+	group, err := ReadGroupFile(gw.GroupPath())
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, ErrNoRecord
+	}
+	if err != nil {
+		return nil, err
+	}
+	fan := &Fan{Group: group, Members: make([]Member, len(group.Members))}
+	for i, name := range group.Members {
+		m := Member{Name: name, Dir: gw.Member(name).Dir}
+		m.Meta, m.Err = ReadMeta(m.Dir)
+		fan.Members[i] = m
+	}
+	return fan, nil
 }

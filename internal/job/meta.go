@@ -2,7 +2,9 @@ package job
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 )
 
@@ -149,6 +151,21 @@ func (m *Meta) WriteFile(path string) error {
 		return err
 	}
 	return WriteFileAtomic(path, data)
+}
+
+// ErrNoRecord reports a directory without the record that makes it a job: a
+// reservation before its first write, or a path that never was one. It is
+// absence, not damage — a record that is there and will not read comes back
+// as its own error, never as this one.
+var ErrNoRecord = errors.New("no record")
+
+// ReadMeta reads the turn record in dir, ErrNoRecord when it has none.
+func ReadMeta(dir string) (*Meta, error) {
+	meta, err := ReadMetaFile(Workspace{Dir: dir}.MetaPath())
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, ErrNoRecord
+	}
+	return meta, err
 }
 
 // ReadMetaFile parses a meta.json this engine wrote.

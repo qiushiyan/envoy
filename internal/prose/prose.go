@@ -525,12 +525,13 @@ func ContinueNoTurn(dir string, cause error) string {
 // FanMemberCandidate is one member of a fan-out named beside other voices:
 // the coordinate the caller can name instead of the group, with the
 // eligibility observation still structured so rendering happens here, once.
+// Kind is "" for a member that can continue; Detail carries the read error
+// of an unreadable record.
 type FanMemberCandidate struct {
-	Name    string
-	Dir     string
-	Blocked bool
-	Kind    ResumeBlockerKind
-	Detail  string
+	Name   string
+	Dir    string
+	Kind   ResumeBlockerKind
+	Detail string
 }
 
 // GroupRefMustStandAlone refuses @<fan-out> mixed with other voices: a
@@ -540,7 +541,7 @@ type FanMemberCandidate struct {
 func GroupRefMustStandAlone(dir string, members []FanMemberCandidate) string {
 	var offered, blocked []string
 	for _, m := range members {
-		if m.Blocked {
+		if m.Kind != "" {
 			blocked = append(blocked, "  "+FanResumeBlockerLine(m.Name, m.Kind, m.Detail))
 			continue
 		}

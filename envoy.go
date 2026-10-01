@@ -181,11 +181,11 @@ func Run(req RunRequest) int {
 		opts.OutDir = dir
 		opts.Stdout, opts.Stderr = stdout, stderr
 		code := runner.Run(opts).ExitCode
-		releaseIfUnstarted(dir, job.Workspace{Dir: dir}.MetaPath())
+		releaseIfUnstarted(dir)
 		return code
 	}
 	code := fan.Run(fan.Options{Turns: turns, OutDir: dir, Stdout: stdout, Stderr: stderr})
-	releaseIfUnstarted(dir, job.GroupWorkspace{Dir: dir}.GroupPath())
+	releaseIfUnstarted(dir)
 	return code
 }
 
@@ -277,11 +277,10 @@ func promptReadable(path string) error {
 // refusal after reservation (a held session, an unreadable prompt) leaves no
 // record, and an occupied name with nothing to collect would be invisible.
 // Once a record exists the directory is evidence and stays.
-func releaseIfUnstarted(dir, recordPath string) {
-	if _, err := os.Stat(recordPath); err == nil {
-		return
+func releaseIfUnstarted(dir string) {
+	if !job.HasRecord(dir) {
+		os.RemoveAll(dir)
 	}
-	os.RemoveAll(dir)
 }
 
 // voice is one turn of the roster before the shared settings are applied:
@@ -477,33 +476,57 @@ func splitSeat(seat string) (spec, promptFile, errText string) {
 	return spec, promptFile, ""
 }
 
+// fanMember is one member of a fan-out judged by the one eligibility
+// definition: the candidate prose words, and the record a continuation of it
+// inherits from — nil when the candidate is blocked.
+type fanMember struct {
+	prose.FanMemberCandidate
+	meta *job.Meta
+}
+
+// inspectFan reads a fan-out's members in roster order, each through
+// collect.Continuable, so every surface that offers or dispatches a member
+// agrees on which ones can continue.
+func inspectFan(dir string) ([]fanMember, error) {
+	fan, err := job.ReadFan(dir)
+	if err != nil {
+		return nil, err
+	}
+	members := make([]fanMember, len(fan.Members))
+	for i, m := range fan.Members {
+		c := prose.FanMemberCandidate{Name: m.Name, Dir: m.Dir}
+		meta, blocker, err := collect.Continuable(m.Meta, m.Err)
+		switch {
+		case err != nil:
+			c.Kind, c.Detail = prose.BlockerUnreadableMeta, err.Error()
+		case blocker != "":
+			c.Kind = blocker
+		}
+		members[i] = fanMember{c, meta}
+	}
+	return members, nil
+}
+
 // fanMembers expands a fan-out reference into its members as continued
 // voices, each keeping the name it had and each sent promptFile — the round's
 // one NEW prompt. The set is whole or refused: any member that cannot continue
 // refuses the round rather than being silently left out of it.
 func fanMembers(dir, promptFile string) ([]voice, string) {
-	gw := job.GroupWorkspace{Dir: dir}
-	group, err := job.ReadGroupFile(gw.GroupPath())
+	members, err := inspectFan(dir)
 	if err != nil {
 		return nil, prose.FanContinueUnreadableManifest(dir, err)
 	}
-	if len(group.Members) == 0 {
+	if len(members) == 0 {
 		return nil, prose.FanContinueEmptyManifest(dir)
 	}
 	var voices []voice
 	var reasons []string
-	for _, name := range group.Members {
-		memberDir := gw.Member(name).Dir
-		meta, blocker, err := collect.Inspect(memberDir)
-		switch {
-		case err != nil:
-			reasons = append(reasons, prose.FanResumeBlockerLine(name, prose.BlockerUnreadableMeta, err.Error()))
-			continue
-		case blocker != "":
-			reasons = append(reasons, prose.FanResumeBlockerLine(name, blocker, ""))
+	for _, m := range members {
+		if m.Kind != "" {
+			reasons = append(reasons, prose.FanResumeBlockerLine(m.Name, m.Kind, m.Detail))
 			continue
 		}
-		v := continuedVoice(memberDir, meta, name)
+		v := continuedVoice(m.Dir, m.meta, m.Name)
 		v.promptFile = promptFile
 		voices = append(voices, v)
 	}
@@ -513,26 +536,16 @@ func fanMembers(dir, promptFile string) ([]voice, string) {
 	return voices, ""
 }
 
-// fanCandidates lists a fan-out's members in roster order, each through the
-// one eligibility definition, so a refusal never offers a member dispatch
-// would refuse.
+// fanCandidates lists a fan-out's members in roster order, so a refusal never
+// offers a member dispatch would refuse.
 func fanCandidates(dir string) []prose.FanMemberCandidate {
-	gw := job.GroupWorkspace{Dir: dir}
-	group, err := job.ReadGroupFile(gw.GroupPath())
+	members, err := inspectFan(dir)
 	if err != nil {
 		return nil
 	}
-	var candidates []prose.FanMemberCandidate
-	for _, name := range group.Members {
-		c := prose.FanMemberCandidate{Name: name, Dir: gw.Member(name).Dir}
-		_, blocker, err := collect.Inspect(c.Dir)
-		switch {
-		case err != nil:
-			c.Blocked, c.Kind, c.Detail = true, prose.BlockerUnreadableMeta, err.Error()
-		case blocker != "":
-			c.Blocked, c.Kind = true, blocker
-		}
-		candidates = append(candidates, c)
+	candidates := make([]prose.FanMemberCandidate, len(members))
+	for i, m := range members {
+		candidates[i] = m.FanMemberCandidate
 	}
 	return candidates
 }

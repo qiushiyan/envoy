@@ -1,6 +1,7 @@
 package job
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,5 +75,56 @@ func TestGroupManifestIsARosterOnly(t *testing.T) {
 	}
 	if _, err := ReadGroupFile(gw.GroupPath()); err == nil || !strings.Contains(err.Error(), "schema 1") {
 		t.Fatalf("another schema must be refused by name, got %v", err)
+	}
+}
+
+// A reader must tell absence from damage: a directory with no record is not a
+// job yet, while a record that is there and will not read is evidence nobody
+// may read past. ReadFan carries each member with its own read result, so the
+// roster's word that a member was meant to run survives a missing record.
+func TestReadersSeparateAbsenceFromDamage(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := ReadMeta(dir); !errors.Is(err, ErrNoRecord) {
+		t.Fatalf("no meta.json must read as ErrNoRecord, got %v", err)
+	}
+	if _, err := ReadFan(dir); !errors.Is(err, ErrNoRecord) {
+		t.Fatalf("no group.json must read as ErrNoRecord, got %v", err)
+	}
+	if HasRecord(dir) {
+		t.Fatal("an empty directory holds no record")
+	}
+
+	gw := GroupWorkspace{Dir: dir}
+	group := &Group{SchemaVersion: GroupSchemaVersion, Members: []string{"codex", "claude", "broken"}}
+	if err := group.WriteFile(gw.GroupPath()); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(gw.Member("codex").Dir, 0o755)
+	ok := &Meta{SchemaVersion: MetaSchemaVersion, Status: StatusOK, Provider: "codex"}
+	if err := ok.WriteFile(gw.Member("codex").MetaPath()); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(gw.Member("broken").Dir, 0o755)
+	if err := os.WriteFile(gw.Member("broken").MetaPath(), []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !HasRecord(dir) {
+		t.Fatal("a fan-out with group.json holds a record")
+	}
+	fan, err := ReadFan(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fan.Members) != 3 {
+		t.Fatalf("every roster member is carried, got %+v", fan.Members)
+	}
+	if m := fan.Members[0]; m.Err != nil || m.Meta.Status != StatusOK || m.Dir != gw.Member("codex").Dir {
+		t.Fatalf("readable member = %+v", m)
+	}
+	if m := fan.Members[1]; !errors.Is(m.Err, ErrNoRecord) || m.Meta != nil {
+		t.Fatalf("recordless member = %+v", m)
+	}
+	if m := fan.Members[2]; m.Err == nil || errors.Is(m.Err, ErrNoRecord) {
+		t.Fatalf("an unreadable record is damage, not absence: %+v", m)
 	}
 }
