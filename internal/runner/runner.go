@@ -23,6 +23,7 @@ import (
 
 	"github.com/qiushiyan/envoy/internal/job"
 	"github.com/qiushiyan/envoy/internal/lock"
+	"github.com/qiushiyan/envoy/internal/proc"
 	"github.com/qiushiyan/envoy/internal/prose"
 	"github.com/qiushiyan/envoy/internal/provider"
 	"github.com/qiushiyan/envoy/internal/text"
@@ -320,7 +321,7 @@ func (r *run) execute(promptText string) Result {
 		case res := <-r.waitCh:
 			r.onExit(res)
 		case sig := <-r.sigCh:
-			r.requestTermination("interrupted", sigName(sig))
+			r.requestTermination("interrupted", proc.SignalName(sig))
 		case <-heartbeatC:
 			r.heartbeat()
 		case <-timeoutC:
@@ -353,7 +354,7 @@ func (r *run) conflicted() bool { return r.meta.SessionLockConflict != nil }
 // setSession records the session id. Whether it may be continued is decided
 // at collect time from this id and the lock-conflict field together.
 func (r *run) setSession(id string) {
-	r.meta.SessionID = ptrIfNonEmpty(id)
+	r.meta.SessionID = job.PtrIfNonEmpty(id)
 }
 
 func (r *run) markLockConflict(msg string) {

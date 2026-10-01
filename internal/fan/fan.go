@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/qiushiyan/envoy/internal/job"
+	"github.com/qiushiyan/envoy/internal/proc"
 	"github.com/qiushiyan/envoy/internal/prose"
 	"github.com/qiushiyan/envoy/internal/runner"
 	"github.com/qiushiyan/envoy/internal/text"
@@ -81,9 +82,9 @@ func Run(opts Options) int {
 		StartedAt:     job.ISO(startedAt),
 		Cwd:           shared.Cwd,
 		TimeoutMin:    shared.TimeoutMin,
-		GitBaseline:   ptrIfNonEmpty(shared.Baseline),
+		GitBaseline:   job.PtrIfNonEmpty(shared.Baseline),
 		Members:       names,
-		Caller:        ptrIfNonEmpty(shared.Caller),
+		Caller:        job.PtrIfNonEmpty(shared.Caller),
 		RunnerPid:     os.Getpid(),
 	}
 	// The manifest is the record that makes the directory a fan-out: discovery
@@ -109,7 +110,7 @@ func Run(opts Options) int {
 	go func() {
 		select {
 		case sig := <-sigCh:
-			fmt.Fprintf(opts.Stdout, "\n%s\n", prose.FanStopping(sigName(sig), len(opts.Turns)))
+			fmt.Fprintf(opts.Stdout, "\n%s\n", prose.FanStopping(proc.SignalName(sig), len(opts.Turns)))
 		case <-done:
 		}
 	}()
@@ -174,7 +175,7 @@ func printDispatchBlock(opts Options, gw job.GroupWorkspace) {
 	// which conversation it continues.
 	for _, t := range opts.Turns {
 		fmt.Fprintf(w, "member %s: model %s · effort %s · dir %s",
-			t.Name, display(t.Options.Turn.Model), display(t.Options.Turn.Effort), gw.Member(t.Name).Dir)
+			t.Name, prose.Setting(t.Options.Turn.Model), prose.Setting(t.Options.Turn.Effort), gw.Member(t.Name).Dir)
 		if t.Options.ResumedFrom != "" {
 			fmt.Fprintf(w, " · continues %s", t.Options.ResumedFrom)
 		}
@@ -261,32 +262,4 @@ func (p *prefixWriter) flush() {
 		fmt.Fprintf(p.w, "[%s] %s\n", p.prefix, p.buf)
 		p.buf = nil
 	}
-}
-
-func display(v string) string {
-	if v == "" {
-		return "(provider default)"
-	}
-	return v
-}
-
-func ptrIfNonEmpty(v string) *string {
-	if v == "" {
-		return nil
-	}
-	return &v
-}
-
-func sigName(sig os.Signal) string {
-	if s, ok := sig.(syscall.Signal); ok {
-		switch s {
-		case syscall.SIGINT:
-			return "SIGINT"
-		case syscall.SIGTERM:
-			return "SIGTERM"
-		case syscall.SIGHUP:
-			return "SIGHUP"
-		}
-	}
-	return sig.String()
 }

@@ -6,6 +6,7 @@ package proc
 
 import (
 	"errors"
+	"os"
 	"syscall"
 )
 
@@ -51,4 +52,27 @@ func GroupLiveness(pgid int) Liveness {
 // as alive and any probe failure other than ESRCH is treated as gone.
 func Alive(pid int) bool {
 	return PidLiveness(pid) == Live
+}
+
+var signalNames = map[syscall.Signal]string{
+	syscall.SIGHUP:  "SIGHUP",
+	syscall.SIGINT:  "SIGINT",
+	syscall.SIGQUIT: "SIGQUIT",
+	syscall.SIGABRT: "SIGABRT",
+	syscall.SIGKILL: "SIGKILL",
+	syscall.SIGBUS:  "SIGBUS",
+	syscall.SIGSEGV: "SIGSEGV",
+	syscall.SIGPIPE: "SIGPIPE",
+	syscall.SIGTERM: "SIGTERM",
+}
+
+// SignalName spells a signal the way records and prose name it (SIGTERM),
+// falling back to the platform's description for one without a fixed name.
+func SignalName(sig os.Signal) string {
+	if s, ok := sig.(syscall.Signal); ok {
+		if name, ok := signalNames[s]; ok {
+			return name
+		}
+	}
+	return sig.String()
 }

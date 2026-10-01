@@ -124,10 +124,10 @@ func Inspect(dir string) (*Source, prose.ResumeBlockerKind, error) {
 	}
 	return &Source{
 		Provider:   meta.Provider,
-		Model:      deref(meta.Model),
-		Effort:     deref(meta.Effort),
+		Model:      job.Deref(meta.Model),
+		Effort:     job.Deref(meta.Effort),
 		Cwd:        meta.Cwd,
-		Baseline:   deref(meta.GitBaseline),
+		Baseline:   job.Deref(meta.GitBaseline),
 		Session:    *meta.SessionID,
 		AllowWrite: meta.AllowWrite,
 	}, "", nil
@@ -306,13 +306,6 @@ func reconcileAbandoned(dir string, meta *job.Meta, state runningState) *job.Met
 	return meta
 }
 
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
-
 func groupThousands(n int64) string {
 	s := fmt.Sprintf("%d", n)
 	if len(s) <= 3 {
@@ -477,12 +470,6 @@ func renderJob(dir string, mode Mode, w io.Writer, errW io.Writer, showGit bool)
 	} else {
 		fmt.Fprintf(w, "status: %s\n", prose.StatusLine(meta.Status))
 	}
-	display := func(v *string) string {
-		if v == nil {
-			return "(provider default)"
-		}
-		return *v
-	}
 	// The model column shows the request; when the provider announced what it
 	// actually resolved, show that observation too.
 	//
@@ -495,18 +482,10 @@ func renderJob(dir string, mode Mode, w io.Writer, errW io.Writer, showGit bool)
 	// most ordinary claude dispatch there is. The whole line therefore belongs
 	// to the diagnostic tier, and the observation stays where it is provable:
 	// meta.json's providerReportedModel, and --status-only.
-	modelDisplay := display(meta.Model)
-	if meta.ProviderReportedModel != nil {
-		reported := *meta.ProviderReportedModel
-		switch {
-		case meta.Model == nil:
-			modelDisplay = fmt.Sprintf("(provider default, ran %s)", reported)
-		case *meta.Model != reported:
-			modelDisplay = fmt.Sprintf("%s (ran %s)", *meta.Model, reported)
-		}
-	}
 	if diagnostic {
-		fmt.Fprintf(w, "provider: %s · model %s · effort %s\n", meta.Provider, modelDisplay, display(meta.Effort))
+		fmt.Fprintf(w, "provider: %s · model %s · effort %s\n", meta.Provider,
+			prose.ModelSetting(job.Deref(meta.Model), job.Deref(meta.ProviderReportedModel)),
+			prose.Setting(job.Deref(meta.Effort)))
 		if line := prose.Launcher(meta); line != "" {
 			fmt.Fprintln(w, line)
 		}

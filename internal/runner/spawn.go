@@ -125,7 +125,7 @@ func (c *childProcess) wait() exitResult {
 		return exitResult{}
 	}
 	if ws, ok := state.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-		name := sigName(ws.Signal())
+		name := proc.SignalName(ws.Signal())
 		return exitResult{signal: &name}
 	}
 	code := state.ExitCode()
@@ -150,25 +150,4 @@ func (r *run) groupAlive() bool {
 		return false
 	}
 	return proc.GroupLiveness(r.child.pid) == proc.Live
-}
-
-var sigNames = map[syscall.Signal]string{
-	syscall.SIGHUP:  "SIGHUP",
-	syscall.SIGINT:  "SIGINT",
-	syscall.SIGQUIT: "SIGQUIT",
-	syscall.SIGABRT: "SIGABRT",
-	syscall.SIGKILL: "SIGKILL",
-	syscall.SIGBUS:  "SIGBUS",
-	syscall.SIGSEGV: "SIGSEGV",
-	syscall.SIGPIPE: "SIGPIPE",
-	syscall.SIGTERM: "SIGTERM",
-}
-
-func sigName(sig os.Signal) string {
-	if s, ok := sig.(syscall.Signal); ok {
-		if name, ok := sigNames[s]; ok {
-			return name
-		}
-	}
-	return sig.String()
 }

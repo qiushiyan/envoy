@@ -32,14 +32,14 @@ func (r *run) initMeta() {
 		Usage:            r.driver.Usage(),
 		Status:           job.StatusRunning,
 		Provider:         r.opts.Provider,
-		Model:            ptrIfNonEmpty(r.opts.Turn.Model),
-		Effort:           ptrIfNonEmpty(r.opts.Turn.Effort),
+		Model:            job.PtrIfNonEmpty(r.opts.Turn.Model),
+		Effort:           job.PtrIfNonEmpty(r.opts.Turn.Effort),
 		Cwd:              r.opts.Cwd,
 		AllowWrite:       r.opts.Turn.AllowWrite,
-		GitBaseline:      ptrIfNonEmpty(baseline),
+		GitBaseline:      job.PtrIfNonEmpty(baseline),
 		MaxBudgetUSD:     r.opts.Turn.MaxBudgetUSD,
-		ResumedFrom:      ptrIfNonEmpty(r.opts.ResumedFrom),
-		Caller:           ptrIfNonEmpty(r.opts.Caller),
+		ResumedFrom:      job.PtrIfNonEmpty(r.opts.ResumedFrom),
+		Caller:           job.PtrIfNonEmpty(r.opts.Caller),
 		StartedAt:        job.ISO(r.startedAt),
 		TimeoutMin:       r.opts.TimeoutMin,
 		DeadlineAt:       deadlineAt,
@@ -69,15 +69,9 @@ func (r *run) writeMeta(mutate func(*job.Meta)) {
 // a coordinate it has to read back.
 func (r *run) printStartupBlock() {
 	w := r.opts.Stdout
-	display := func(v string) string {
-		if v == "" {
-			return "(provider default)"
-		}
-		return v
-	}
 	fmt.Fprintf(w, "job: %s\n", r.ws.Dir)
 	fmt.Fprintf(w, "provider: %s · model %s · effort %s · hard cap %s\n",
-		r.opts.Provider, display(r.opts.Turn.Model), display(r.opts.Turn.Effort), text.HardCap(r.opts.TimeoutMin))
+		r.opts.Provider, prose.Setting(r.opts.Turn.Model), prose.Setting(r.opts.Turn.Effort), text.HardCap(r.opts.TimeoutMin))
 	if line := prose.Launcher(r.meta); line != "" {
 		fmt.Fprintln(w, line)
 	}
@@ -148,8 +142,8 @@ func (r *run) finish(f finishArgs) {
 			m.Error = nil
 			m.Remedy = nil
 		} else {
-			m.Error = ptrIfNonEmpty(f.errorText)
-			m.Remedy = ptrIfNonEmpty(f.remedy)
+			m.Error = job.PtrIfNonEmpty(f.errorText)
+			m.Remedy = job.PtrIfNonEmpty(f.remedy)
 		}
 		if f.promptState != "" {
 			m.PromptState = f.promptState

@@ -226,7 +226,7 @@ func (c *claude) Conclude(exit ExitInfo) Outcome {
 				"but returned no parseable result envelope", stderrDetail(exit.StderrTail)),
 			Partial:             observed.Partial,
 			PromptState:         job.PromptUnknown,
-			PromptStateEvidence: labelPtr(observed.Label),
+			PromptStateEvidence: job.PtrIfNonEmpty(observed.Label),
 			HasEvidence:         true,
 		}
 		if observed.Accepted {
@@ -277,7 +277,7 @@ func (c *claude) Conclude(exit ExitInfo) Outcome {
 			Tokens:              parsed.tokens,
 			CostUSD:             parsed.costUSD,
 			PromptState:         job.PromptUnknown,
-			PromptStateEvidence: labelPtr(observed.Label),
+			PromptStateEvidence: job.PtrIfNonEmpty(observed.Label),
 			HasEvidence:         true,
 			SessionID:           parsed.sessionID,
 		}
@@ -524,11 +524,4 @@ func numOr(m map[string]any, key string, fallback int64) int64 {
 		return int64(f)
 	}
 	return fallback
-}
-
-func labelPtr(label string) *string {
-	if label == "" {
-		return nil
-	}
-	return job.Ptr(label)
 }

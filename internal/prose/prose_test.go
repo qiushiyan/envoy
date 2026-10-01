@@ -127,6 +127,23 @@ func TestRedispatchRepeatsTheDispatch(t *testing.T) {
 	}
 }
 
+// A reported model is shown only beside a request it does not spell, and an
+// omitted request always reads as the provider's own default.
+func TestModelSettingShowsTheReportOnlyWhenItDiffers(t *testing.T) {
+	cases := []struct{ requested, reported, want string }{
+		{"", "", "(provider default)"},
+		{"opus", "", "opus"},
+		{"opus", "opus", "opus"},
+		{"", "claude-opus-5", "(provider default, ran claude-opus-5)"},
+		{"opus", "claude-opus-5", "opus (ran claude-opus-5)"},
+	}
+	for _, c := range cases {
+		if got := ModelSetting(c.requested, c.reported); got != c.want {
+			t.Errorf("ModelSetting(%q, %q) = %q, want %q", c.requested, c.reported, got, c.want)
+		}
+	}
+}
+
 // Every prompt state has to yield a prescription, and only "accepted" and
 // "unknown" may offer the resume path: prescribing resume after a provider
 // that never started sends the caller down a session that does not exist.

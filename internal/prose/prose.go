@@ -61,7 +61,7 @@ func Voice(provider, model, effort string) string {
 // The new dispatch reads its own environment, including the launcher prefix;
 // CommandPrefix is an observation, not a setting this command replays.
 func RedispatchCommand(dir string, m *job.Meta) string {
-	voice := Voice(m.Provider, deref(m.Model), deref(m.Effort))
+	voice := Voice(m.Provider, job.Deref(m.Model), job.Deref(m.Effort))
 	if m.ResumedFrom != nil {
 		voice = "@" + text.ShellQuote(*m.ResumedFrom)
 	}
@@ -81,13 +81,6 @@ func RedispatchCommand(dir string, m *job.Meta) string {
 	}
 	parts = append(parts, fmt.Sprintf("--timeout-min %g", m.TimeoutMin))
 	return strings.Join(parts, " ")
-}
-
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
 }
 
 // CollectCommand prints one job as a single block; it is the caller's read
@@ -266,7 +259,7 @@ func eventCount(n int64) string {
 // duplicates work that may already have changed the tree.
 func Recovery(m *job.Meta, resumeCmd, redispatchCmd string) string {
 	fix := ""
-	if remedy := deref(m.Remedy); remedy != "" {
+	if remedy := job.Deref(m.Remedy); remedy != "" {
 		fix = " " + strings.TrimSpace(remedy)
 	}
 	retryFailure := "the provider CLI itself is the problem to report."
@@ -415,6 +408,31 @@ func Launcher(m *job.Meta) string {
 		return ""
 	}
 	return fmt.Sprintf("launcher: %s=%s", launcherEnv(m.Provider), text.ShellQuote(strings.Join(m.CommandPrefix, " ")))
+}
+
+// Setting renders a model or effort as the turn was dispatched with it. An
+// omitted one is the provider's own configuration, reported as such — never a
+// guess at what that configuration resolves to.
+func Setting(v string) string {
+	if v == "" {
+		return "(provider default)"
+	}
+	return v
+}
+
+// ModelSetting renders the requested model with the one the provider reported
+// running, when that report spells something the request did not. A
+// difference is the provider's own alias resolution as often as anything
+// else, so this shows both and concludes nothing.
+func ModelSetting(requested, reported string) string {
+	switch {
+	case reported == "" || reported == requested:
+		return Setting(requested)
+	case requested == "":
+		return fmt.Sprintf("(provider default, ran %s)", reported)
+	default:
+		return fmt.Sprintf("%s (ran %s)", requested, reported)
+	}
 }
 
 // ProcessExited distinguishes an observed command exit from a provider verdict.

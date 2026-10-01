@@ -184,7 +184,7 @@ func CallerOf(dir string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return deref(g.Caller), nil
+		return Deref(g.Caller), nil
 	}
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return "", nil
@@ -193,14 +193,7 @@ func CallerOf(dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return deref(m.Caller), nil
-}
-
-func deref(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
+	return Deref(m.Caller), nil
 }
 
 // CallerEnvKeys are the variables a harness exports its session identity in,

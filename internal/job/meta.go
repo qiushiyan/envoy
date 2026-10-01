@@ -169,3 +169,19 @@ func ReadMetaFile(path string) (*Meta, error) {
 
 // Ptr is a convenience for the schema's many nullable fields.
 func Ptr[T any](v T) *T { return &v }
+
+// PtrIfNonEmpty records an optional string field: "" is unset, so it is nil.
+func PtrIfNonEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// Deref reads an optional string field, "" when it is unset.
+func Deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}

@@ -182,7 +182,7 @@ func (r *run) onChildDone(exit exitResult) {
 			tokens:              ev.Tokens,
 			costUSD:             ev.CostUSD,
 			promptState:         promptState,
-			promptStateEvidence: ptrIfNonEmpty(ev.Label),
+			promptStateEvidence: job.PtrIfNonEmpty(ev.Label),
 			hasEvidence:         true,
 			exit:                exit,
 		})
@@ -247,7 +247,7 @@ func (r *run) finishAfterStop(exit exitResult) {
 	var evidence *string
 	if ev.Accepted {
 		promptState = job.PromptAccepted
-		evidence = ptrIfNonEmpty(ev.Label)
+		evidence = job.PtrIfNonEmpty(ev.Label)
 	}
 	r.finish(finishArgs{
 		status:              status,
@@ -294,11 +294,4 @@ func capitalize(s string) string {
 		return s
 	}
 	return string(s[0]-'a'+'A') + s[1:]
-}
-
-func ptrIfNonEmpty(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return job.Ptr(s)
 }
