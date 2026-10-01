@@ -47,10 +47,20 @@ return a result, and each value licenses one action:
 - **`unknown`** → absence of output is not proof of no work; read the logs and
   the tree first.
 
-Every failure path in the engine routes to one of these, and recovery prose
-prescribes nothing else (`prose.Recovery`). Re-sending a prompt the provider
-already accepted duplicates work that may already have changed the tree — the
-expensive mistake this rule exists to prevent.
+Re-sending a prompt the provider already accepted duplicates work that may
+already have changed the tree — the expensive mistake this rule exists to
+prevent. What the session and the process show outranks prompt state, because
+acting on it beside them would put two turns on one conversation or one tree
+(`recoveryAction`, `recoveryForStale` in `internal/collect`):
+
+- **A held session.** A turn refused for a lock conflict is sent to the job
+  that owns the session, whatever its prompt state.
+- **A runner gone while its turn is recorded running.** A provider still alive
+  as an orphan is waited for or stopped first, and process state that cannot
+  be read is inspected, not acted on. Only a provably abandoned turn is
+  reconciled and recovered by its prompt state.
+
+Every other failure path routes to one of the prompt states (`prose.Recovery`).
 
 ## Session locks
 
