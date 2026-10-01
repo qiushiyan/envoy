@@ -473,4 +473,11 @@ func TestAnEarlierSchemasJobsLeaveTheirNamesWorking(t *testing.T) {
 	if r := runEnvoyIn(t, a.as("", ""), project, "run", "review-r1", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5"); r.code != 0 {
 		t.Fatalf("an earlier schema's uncollected job must not hold its name: %d\n%s", r.code, r.stderr)
 	}
+
+	// The recovery index reads the same stamp: a collected earlier job owes
+	// nothing, and an uncollected one is listed for what it is — intact, and
+	// another version's — never as damage.
+	pend := runEnvoyIn(t, a, project, "pending")
+	mustContain(t, "pending", pend.stdout, "[other-schema] "+filepath.Join(store, "review-r1")+"\n", "schema 9")
+	mustNotContain(t, "pending", pend.stdout, filepath.Join(store, "consult-r1")+"\n", "corrupt", "damaged")
 }

@@ -189,7 +189,9 @@ keyed to `--allow-write` is a read-only sandbox by another name.
   out of naming, though: a name reads only a record's stamp — `caller`,
   `status`, `collectedAt`, whose meaning no schema change has altered — so
   a bump never leaves a store's reused names unresolvable, and a record of
-  another version holds no name, since this engine cannot deliver it. The
+  another version holds no name, since this engine cannot deliver it.
+  `pending` reads the same stamp: a collected one owes nothing, and an
+  uncollected one is listed as another version's, never as damage. The
   archive is what was sent: `prompt.md` is written from the one read that feeds the provider's
   stdin, never from a second read of the caller's file. A record is also what makes a directory
   a job — `meta.json` for a turn, `group.json` for a fan-out — so discovery

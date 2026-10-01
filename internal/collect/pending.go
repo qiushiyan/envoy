@@ -69,6 +69,15 @@ func pendingTurn(dir string, meta *job.Meta, err error) (pendingItem, bool) {
 	case errors.Is(err, job.ErrNoRecord):
 		return pendingItem{}, false
 	case err != nil:
+		// Another engine version's record is not damage. Its stamp says
+		// whether anything is still owed; this engine reads no further.
+		if stamp, serr := job.ReadStamp(dir); serr == nil && stamp.SchemaVersion != job.MetaSchemaVersion {
+			if stamp.Status != job.StatusRunning && stamp.CollectedAt != nil {
+				return pendingItem{}, false
+			}
+			return pendingItem{label: "other-schema", dir: dir,
+				why: prose.PendingOtherSchema(stamp.SchemaVersion, job.MetaSchemaVersion), next: prose.PendingOtherSchemaNext(dir)}, true
+		}
 		return pendingItem{label: "corrupt", dir: dir,
 			why: prose.PendingUnreadable("meta.json", err), next: prose.PendingUnreadableNext(dir)}, true
 	case meta.Status == job.StatusRunning:
