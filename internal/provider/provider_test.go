@@ -252,9 +252,22 @@ func TestCodexFailureAndRecovery(t *testing.T) {
 		t.Fatalf("thread.started must mean accepted, got %s", out.PromptState)
 	}
 
-	ev, _ := c.Recovery()
+	ev := c.Recovery()
 	if !ev.Accepted || ev.Label != "codex thread.started" {
 		t.Fatalf("recovery = %+v", ev)
+	}
+}
+
+// A verdict over a turn that left output proves acceptance by that output,
+// and says so: an accepted prompt state never stands without its evidence.
+func TestCodexFailureWithOutputButNoThreadNamesItsEvidence(t *testing.T) {
+	ws := job.Workspace{Dir: t.TempDir()}
+	c := newCodex(Options{}, ws)
+	c.Feed(`{"type":"item.completed","item":{"type":"agent_message","text":"half"}}`)
+	c.Feed(`{"type":"turn.failed","error":{"message":"model exploded"}}`)
+	out := c.Conclude(ExitInfo{Code: job.Ptr(1)})
+	if out.PromptState != job.PromptAccepted || out.Evidence != "codex recovered output" || out.Partial == nil || *out.Partial != "half" {
+		t.Fatalf("outcome = %+v", out)
 	}
 }
 
@@ -323,12 +336,11 @@ func TestEvidenceOutcomeTakesPromptStateFromAcceptance(t *testing.T) {
 	partial := "half an answer"
 	accepted := Evidence{Accepted: true, Label: "codex thread.started", Partial: &partial}.Outcome(job.StatusTimeout, "capped")
 	if accepted.Status != job.StatusTimeout || accepted.ErrorText != "capped" || accepted.Partial != &partial ||
-		accepted.PromptState != job.PromptAccepted || !accepted.HasEvidence ||
-		accepted.PromptStateEvidence == nil || *accepted.PromptStateEvidence != "codex thread.started" {
+		accepted.PromptState != job.PromptAccepted || accepted.Evidence != "codex thread.started" {
 		t.Fatalf("accepted evidence outcome = %+v", accepted)
 	}
 	unproven := Evidence{}.Outcome(job.StatusInterrupted, "stopped")
-	if unproven.PromptState != job.PromptUnknown || !unproven.HasEvidence || unproven.PromptStateEvidence != nil {
+	if unproven.PromptState != job.PromptUnknown || unproven.Evidence != "" {
 		t.Fatalf("unproven evidence outcome = %+v", unproven)
 	}
 }

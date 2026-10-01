@@ -244,11 +244,10 @@ func (r *run) execute(promptText string) Result {
 	child, err := spawn(prefix[0], slices.Concat(prefix[1:], r.argv), r.opts.Cwd, r.driver.ExtraEnv())
 	if err != nil {
 		r.finish(provider.Outcome{
-			Status:              job.StatusInfra,
-			ErrorText:           prose.SpawnFailed(prefix[0], err),
-			PromptState:         job.PromptNotStarted,
-			PromptStateEvidence: job.Ptr("provider spawn error"),
-			HasEvidence:         true,
+			Status:      job.StatusInfra,
+			ErrorText:   prose.SpawnFailed(prefix[0], err),
+			PromptState: job.PromptNotStarted,
+			Evidence:    "provider spawn error",
 		}, exitResult{})
 		return r.result()
 	}

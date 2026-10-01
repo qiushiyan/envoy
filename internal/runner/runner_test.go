@@ -105,3 +105,29 @@ func TestUsageFinalizationWithoutTerminal(t *testing.T) {
 		})
 	}
 }
+
+// Acceptance proved only at the end — a transcript, a recovered output file —
+// is recorded the way a streamed proof is: its time and its progress line
+// too, never just a state flipped in the final record. And a proof that
+// arrives after the stream's own keeps the stream's evidence.
+func TestAnEndingThatProvesAcceptanceStampsItLikeTheStream(t *testing.T) {
+	r, _ := usageRun(t)
+	r.finish(provider.Outcome{Status: job.StatusFailed, ErrorText: "x",
+		PromptState: job.PromptAccepted, Evidence: "claude session transcript"}, exitResult{})
+	m := diskUsage(t, r)
+	if m.PromptState != job.PromptAccepted || m.PromptAcceptedAt == nil ||
+		job.Deref(m.PromptStateEvidence) != "claude session transcript" {
+		t.Fatalf("late acceptance = state %s at %v evidence %v", m.PromptState, m.PromptAcceptedAt, m.PromptStateEvidence)
+	}
+	progress, _ := os.ReadFile(r.ws.ProgressLogPath())
+	if !strings.Contains(string(progress), "state=accepted") {
+		t.Fatalf("late acceptance left no progress line:\n%s", progress)
+	}
+
+	r, _ = usageRun(t)
+	r.markPromptAccepted("claude assistant")
+	r.finish(provider.Outcome{Status: job.StatusOK, PromptState: job.PromptAccepted, Evidence: "claude result/success"}, exitResult{})
+	if got := job.Deref(diskUsage(t, r).PromptStateEvidence); got != "claude assistant" {
+		t.Fatalf("an accepted turn keeps its first evidence, got %q", got)
+	}
+}

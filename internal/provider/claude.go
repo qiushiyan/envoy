@@ -175,7 +175,7 @@ func (c *claude) Poll() []Event {
 	return nil
 }
 
-func (c *claude) Recovery() (Evidence, []Event) {
+func (c *claude) Recovery() Evidence {
 	parsed := parseClaudeMessages(c.messages)
 	exclude := ""
 	if parsed.kind == "failed" {
@@ -184,11 +184,9 @@ func (c *claude) Recovery() (Evidence, []Event) {
 	streamPartial := assistantText(c.messages, exclude)
 	transcript := claudeTranscript(c.sessionID, c.startedAt)
 
-	var events []Event
-	if !c.accepted && transcript != nil && transcript.accepted {
-		c.accepted = true
-		c.evidence = "claude session transcript"
-		events = append(events, Event{Kind: KindAccepted, Evidence: "claude session transcript"})
+	accepted, label := c.accepted, c.evidence
+	if !accepted && transcript != nil && transcript.accepted {
+		accepted, label = true, "claude session transcript"
 	}
 
 	var envelopePartial *string
@@ -205,23 +203,22 @@ func (c *claude) Recovery() (Evidence, []Event) {
 		transcriptPartial = job.Ptr(transcript.partial)
 	}
 	ev := Evidence{
-		Accepted: c.accepted,
-		Label:    c.evidence,
+		Accepted: accepted,
+		Label:    label,
 		Partial:  firstText(envelopePartial, job.Ptr(streamPartial), transcriptPartial),
 	}
 	if parsed.kind != "unparseable" {
 		ev.Tokens = parsed.tokens
 		ev.CostUSD = parsed.costUSD
 	}
-	return ev, events
+	return ev
 }
 
 func (c *claude) Conclude(exit ExitInfo) Outcome {
 	parsed := parseClaudeMessages(c.messages)
 	if parsed.kind == "unparseable" {
 		// No envelope means no tokens or cost: Recovery reads them from it.
-		observed, _ := c.Recovery()
-		return observed.Outcome(job.StatusInfra, prose.ProcessExited("Claude", exit.Command, exit.Code,
+		return c.Recovery().Outcome(job.StatusInfra, prose.ProcessExited("Claude", exit.Command, exit.Code,
 			"but returned no parseable result envelope", stderrDetail(exit.StderrTail)))
 	}
 
@@ -239,6 +236,7 @@ func (c *claude) Conclude(exit ExitInfo) Outcome {
 			Tokens:      parsed.tokens,
 			CostUSD:     parsed.costUSD,
 			PromptState: job.PromptAccepted,
+			Evidence:    c.evidence,
 			SessionID:   parsed.sessionID,
 		}
 	case "budget":
@@ -255,25 +253,13 @@ func (c *claude) Conclude(exit ExitInfo) Outcome {
 			Tokens:      parsed.tokens,
 			CostUSD:     parsed.costUSD,
 			PromptState: job.PromptAccepted,
+			Evidence:    c.evidence,
 			SessionID:   parsed.sessionID,
 		}
 	default: // "failed"
-		observed, _ := c.Recovery()
-		out := Outcome{
-			Status:              job.StatusFailed,
-			ErrorText:           fmt.Sprintf("Claude reported a provider failure: %s", parsed.errorText),
-			Remedy:              "Fix the cause it reported first.",
-			Partial:             job.Ptr(parsed.partial),
-			Tokens:              parsed.tokens,
-			CostUSD:             parsed.costUSD,
-			PromptState:         job.PromptUnknown,
-			PromptStateEvidence: job.PtrIfNonEmpty(observed.Label),
-			HasEvidence:         true,
-			SessionID:           parsed.sessionID,
-		}
-		if observed.Accepted {
-			out.PromptState = job.PromptAccepted
-		}
+		out := c.Recovery().Outcome(job.StatusFailed, fmt.Sprintf("Claude reported a provider failure: %s", parsed.errorText))
+		out.Remedy = "Fix the cause it reported first."
+		out.SessionID = parsed.sessionID
 		return out
 	}
 }

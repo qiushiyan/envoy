@@ -74,19 +74,18 @@ type Evidence struct {
 	CostUSD  *float64
 }
 
-// Outcome is the ending this evidence supports for a turn the provider never
-// concluded itself: the prompt state acceptance proves, and whatever output,
-// tokens and cost survived.
+// Outcome is the ending this evidence supports for a turn that did not
+// deliver: the prompt state acceptance proves, and whatever output, tokens
+// and cost survived.
 func (e Evidence) Outcome(status, errorText string) Outcome {
 	out := Outcome{
-		Status:              status,
-		ErrorText:           errorText,
-		Partial:             e.Partial,
-		Tokens:              e.Tokens,
-		CostUSD:             e.CostUSD,
-		PromptState:         job.PromptUnknown,
-		PromptStateEvidence: job.PtrIfNonEmpty(e.Label),
-		HasEvidence:         true,
+		Status:      status,
+		ErrorText:   errorText,
+		Partial:     e.Partial,
+		Tokens:      e.Tokens,
+		CostUSD:     e.CostUSD,
+		PromptState: job.PromptUnknown,
+		Evidence:    e.Label,
 	}
 	if e.Accepted {
 		out.PromptState = job.PromptAccepted
@@ -111,17 +110,19 @@ type ExitInfo struct {
 // the recovery prescription itself: that follows from the prompt state and is
 // worded once in internal/prose.
 type Outcome struct {
-	Status              string // terminal status; a driver concludes StatusOK, StatusFailed or StatusInfra
-	Text                string // final text (ok only)
-	ErrorText           string // provider verdict or observed command exit
-	Remedy              string // cause-specific fix, e.g. "Raise the budget cap first."; "" when none
-	Partial             *string
-	Tokens              *job.Tokens
-	CostUSD             *float64
-	PromptState         string  // "" = keep the current recorded state
-	PromptStateEvidence *string // set only when HasEvidence
-	HasEvidence         bool
-	SessionID           string // "" = unchanged; claude's result envelope can override
+	Status    string // terminal status; a driver concludes StatusOK, StatusFailed or StatusInfra
+	Text      string // final text (ok only)
+	ErrorText string // provider verdict or observed command exit
+	Remedy    string // cause-specific fix, e.g. "Raise the budget cap first."; "" when none
+	Partial   *string
+	Tokens    *job.Tokens
+	CostUSD   *float64
+	// PromptState is what this ending proves about the prompt, and Evidence
+	// how. Only acceptance and not_started add to the record: unknown proves
+	// nothing, and nothing takes acceptance back.
+	PromptState string
+	Evidence    string
+	SessionID   string // "" = unchanged; claude's result envelope can override
 }
 
 // Driver runs one provider turn's protocol. Drivers are stateful: Feed
@@ -136,9 +137,9 @@ type Driver interface {
 	Feed(line string) []Event
 	// Poll runs on each heartbeat for out-of-band evidence gathering.
 	Poll() []Event
-	// Recovery reports what can be proven after an abnormal ending. Returned
-	// events (e.g. a late acceptance) must be processed by the runner first.
-	Recovery() (Evidence, []Event)
+	// Recovery reports what can be proven about a turn that ended without the
+	// driver's own conclusion: acceptance, and what output survived.
+	Recovery() Evidence
 	// Conclude assembles the outcome for a normally-ended process.
 	Conclude(exit ExitInfo) Outcome
 	// ObservesConnectionErrors reports whether this driver recognizes its

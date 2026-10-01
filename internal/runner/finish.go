@@ -101,6 +101,12 @@ func (r *run) finish(out provider.Outcome, exit exitResult) {
 	if out.SessionID != "" {
 		r.setSession(out.SessionID)
 	}
+	// An ending proved at the last moment goes through the same path a
+	// streamed proof takes, so its time and progress line are recorded too;
+	// a turn already accepted keeps its first evidence.
+	if out.PromptState == job.PromptAccepted {
+		r.markPromptAccepted(out.Evidence)
+	}
 	endedAt := time.Now()
 	collectAction := prose.CollectThisJob(r.ws.Dir)
 
@@ -136,11 +142,9 @@ func (r *run) finish(out provider.Outcome, exit exitResult) {
 			m.Error = job.PtrIfNonEmpty(out.ErrorText)
 			m.Remedy = job.PtrIfNonEmpty(out.Remedy)
 		}
-		if out.PromptState != "" {
+		if out.PromptState == job.PromptNotStarted {
 			m.PromptState = out.PromptState
-		}
-		if out.HasEvidence {
-			m.PromptStateEvidence = out.PromptStateEvidence
+			m.PromptStateEvidence = job.PtrIfNonEmpty(out.Evidence)
 		}
 		m.ResultKind = resultKind
 		m.ChildExitCode = exit.code

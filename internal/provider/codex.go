@@ -165,7 +165,7 @@ func (c *codex) recoveredText() *string {
 	return job.Ptr(string(data))
 }
 
-func (c *codex) Recovery() (Evidence, []Event) {
+func (c *codex) Recovery() Evidence {
 	partial := c.recoveredText()
 	ev := Evidence{
 		Accepted: c.threadStarted || partial != nil,
@@ -177,65 +177,37 @@ func (c *codex) Recovery() (Evidence, []Event) {
 	} else if partial != nil {
 		ev.Label = "codex recovered output"
 	}
-	return ev, nil
+	return ev
 }
 
 func (c *codex) Conclude(exit ExitInfo) Outcome {
-	recovered := c.recoveredText()
-
+	ev := c.Recovery()
 	if c.failedText != nil {
-		out := Outcome{
-			Status:    job.StatusFailed,
-			ErrorText: fmt.Sprintf("Codex reported a provider failure: %s", *c.failedText),
-			Remedy:    "Fix the cause it reported first.",
-			Partial:   recovered,
-			Tokens:    c.tokens,
-		}
-		if c.threadStarted || recovered != nil {
-			out.PromptState = job.PromptAccepted
-		} else {
-			out.PromptState = job.PromptUnknown
-		}
+		out := ev.Outcome(job.StatusFailed, fmt.Sprintf("Codex reported a provider failure: %s", *c.failedText))
+		out.Remedy = "Fix the cause it reported first."
 		return out
 	}
-
-	if recovered != nil {
-		// The terminal envelope wins: if the hard cap fired only while the CLI
-		// or a residual descendant was draining, an observed turn.completed is
-		// still a success, not a timeout casualty.
-		if (exit.Code != nil && *exit.Code == 0) || (exit.Terminated && exit.TerminalType == "codex turn.completed") {
-			return Outcome{
-				Status:      job.StatusOK,
-				Text:        *recovered,
-				Tokens:      c.tokens,
-				PromptState: job.PromptAccepted,
-			}
+	if ev.Partial == nil {
+		detail := stderrDetail(exit.StderrTail)
+		if c.lastErrorText != nil {
+			detail = fmt.Sprintf("last error event %q; stderr: %s", *c.lastErrorText, detail)
 		}
+		return ev.Outcome(job.StatusInfra, prose.ProcessExited("Codex", exit.Command, exit.Code,
+			"but returned no usable result", detail))
+	}
+	// The terminal envelope wins: if the hard cap fired only while the CLI or
+	// a residual descendant was draining, an observed turn.completed is still
+	// a success, not a timeout casualty.
+	if (exit.Code != nil && *exit.Code == 0) || (exit.Terminated && exit.TerminalType == "codex turn.completed") {
 		return Outcome{
-			Status:      job.StatusFailed,
-			ErrorText:   prose.ProcessExited("Codex", exit.Command, exit.Code, "after producing a response", ""),
-			Partial:     recovered,
+			Status:      job.StatusOK,
+			Text:        *ev.Partial,
 			Tokens:      c.tokens,
 			PromptState: job.PromptAccepted,
+			Evidence:    ev.Label,
 		}
 	}
-
-	detail := stderrDetail(exit.StderrTail)
-	if c.lastErrorText != nil {
-		detail = fmt.Sprintf("last error event %q; stderr: %s", *c.lastErrorText, detail)
-	}
-	out := Outcome{
-		Status: job.StatusInfra,
-		ErrorText: prose.ProcessExited("Codex", exit.Command, exit.Code,
-			"but returned no usable result", detail),
-		Tokens: c.tokens,
-	}
-	if c.threadStarted {
-		out.PromptState = job.PromptAccepted
-	} else {
-		out.PromptState = job.PromptUnknown
-	}
-	return out
+	return ev.Outcome(job.StatusFailed, prose.ProcessExited("Codex", exit.Command, exit.Code, "after producing a response", ""))
 }
 
 func (c *codex) ObservesConnectionErrors() bool { return true }

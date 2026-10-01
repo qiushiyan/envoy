@@ -140,16 +140,15 @@ func (r *run) onChildDone(exit exitResult) {
 	r.drainLines(true)
 
 	if r.meta.SessionLockConflict != nil {
-		ev, _ := r.driver.Recovery()
+		ev := r.driver.Recovery()
 		r.finish(provider.Outcome{
 			Status: job.StatusInfra,
 			ErrorText: fmt.Sprintf("%s reported a session id that another turn already holds, so this turn was stopped.",
 				capitalize(r.opts.Provider)),
-			Partial:             ev.Partial,
-			Tokens:              ev.Tokens,
-			PromptState:         job.PromptAccepted,
-			PromptStateEvidence: r.meta.PromptStateEvidence,
-			HasEvidence:         true,
+			Partial:     ev.Partial,
+			Tokens:      ev.Tokens,
+			PromptState: job.PromptAccepted,
+			Evidence:    job.Deref(r.meta.PromptStateEvidence),
 		}, exit)
 		return
 	}
@@ -160,9 +159,7 @@ func (r *run) onChildDone(exit exitResult) {
 	}
 
 	if exit.signal != nil && r.meta.ProviderTerminalAt == nil {
-		ev, evs := r.driver.Recovery()
-		r.handleEvents(evs)
-		r.finish(ev.Outcome(job.StatusInfra, fmt.Sprintf("%s was killed by signal %s, which envoy did not send.",
+		r.finish(r.driver.Recovery().Outcome(job.StatusInfra, fmt.Sprintf("%s was killed by signal %s, which envoy did not send.",
 			r.meta.CommandPrefix[0], *exit.signal)), exit)
 		return
 	}
@@ -188,9 +185,6 @@ func (r *run) onChildDone(exit exitResult) {
 // whatever acceptance evidence survives. Never redispatch merely because
 // output was quiet: that is the recovery invariant these messages encode.
 func (r *run) finishAfterStop(exit exitResult) {
-	ev, evs := r.driver.Recovery()
-	r.handleEvents(evs)
-
 	var stopped string
 	if r.term.kind == "timeout" {
 		stopped = prose.TimedOut(r.opts.TimeoutMin, r.opts.Provider, r.term.stream)
@@ -206,7 +200,7 @@ func (r *run) finishAfterStop(exit exitResult) {
 	if r.term.kind == "timeout" {
 		status = job.StatusTimeout
 	}
-	r.finish(ev.Outcome(status, stopped), exit)
+	r.finish(r.driver.Recovery().Outcome(status, stopped), exit)
 }
 
 // capStream reports what the run had observed of the provider's stream as of
