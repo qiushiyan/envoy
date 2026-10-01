@@ -91,14 +91,13 @@ func NameHold(dir string) (prose.NameHold, bool) {
 	}
 	mayStillStart := proc.PidLiveness(fan.Group.RunnerPid) != proc.Gone
 	for _, m := range fan.Members {
-		stamp, err := job.ReadStamp(m.Dir)
-		if errors.Is(err, job.ErrNoRecord) {
+		if errors.Is(m.Err, job.ErrNoRecord) {
 			if mayStillStart {
 				return prose.NameHold{Kind: prose.HoldUnrecorded, Member: m.Name}, true
 			}
 			continue
 		}
-		if hold, held := stampHold(stamp, err); held {
+		if hold, held := stampHold(m.Stamp); held {
 			hold.Member = m.Name
 			return hold, true
 		}
@@ -112,17 +111,26 @@ func turnHold(dir string) (prose.NameHold, bool) {
 		entries, err := os.ReadDir(dir)
 		return prose.NameHold{Kind: prose.HoldUnrecorded, Empty: err == nil && len(entries) == 0}, true
 	}
-	return stampHold(stamp, err)
+	return stampHold(stamp)
 }
 
-// stampHold is the hold a turn record — its stamp, as read — places on its
-// name. A record of another schema version holds nothing: this engine cannot
-// deliver it, so no caller can be waiting to collect it by the name here.
-func stampHold(stamp *job.Stamp, err error) (prose.NameHold, bool) {
+// stampHold is the hold a turn record's stamp places on its name; a nil stamp
+// is a record that does not parse, which holds as unreadable.
+//
+// A record of another schema version holds only while its own engine may
+// still be running it. That turn is live work under the name until its runner
+// is gone; after that this engine cannot deliver the record, so no caller can
+// be waiting to collect it by the name here — and since no collect of this
+// engine can reconcile it either, holding past the runner would strand the
+// name for good.
+func stampHold(stamp *job.Stamp) (prose.NameHold, bool) {
 	switch {
-	case err != nil:
+	case stamp == nil:
 		return prose.NameHold{Kind: prose.HoldUnreadable}, true
 	case stamp.SchemaVersion != job.MetaSchemaVersion:
+		if stamp.Status == job.StatusRunning && proc.PidLiveness(stamp.RunnerPid) != proc.Gone {
+			return prose.NameHold{Kind: prose.HoldRunning}, true
+		}
 		return prose.NameHold{}, false
 	case stamp.Status == job.StatusRunning:
 		return prose.NameHold{Kind: prose.HoldRunning}, true

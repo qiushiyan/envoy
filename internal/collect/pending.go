@@ -10,6 +10,7 @@ import (
 	"sort"
 
 	"github.com/qiushiyan/envoy/internal/job"
+	"github.com/qiushiyan/envoy/internal/proc"
 	"github.com/qiushiyan/envoy/internal/prose"
 )
 
@@ -51,8 +52,8 @@ func pendingJobs(dirs []string) []pendingItem {
 		if job.IsGroupDir(dir) {
 			item, ok = pendingGroup(dir)
 		} else {
-			meta, err := job.ReadMeta(dir)
-			item, ok = pendingTurn(dir, meta, err)
+			stamp, meta, err := job.ReadRecord(dir)
+			item, ok = pendingTurn(dir, stamp, meta, err)
 		}
 		if ok {
 			pending = append(pending, item)
@@ -61,23 +62,29 @@ func pendingJobs(dirs []string) []pendingItem {
 	return pending
 }
 
-// pendingTurn classifies one turn record, as read: still needing attention,
-// or not. Collection reconciles an abandoned record and renders its recovery
-// from the reconciled state, so the index only points there.
-func pendingTurn(dir string, meta *job.Meta, err error) (pendingItem, bool) {
+// pendingTurn classifies one turn record, as read (job.ReadRecord): still
+// needing attention, or not. Collection reconciles an abandoned record and
+// renders its recovery from the reconciled state, so the index only points
+// there.
+func pendingTurn(dir string, stamp *job.Stamp, meta *job.Meta, err error) (pendingItem, bool) {
+	var other *job.SchemaError
 	switch {
 	case errors.Is(err, job.ErrNoRecord):
 		return pendingItem{}, false
-	case err != nil:
+	case errors.As(err, &other):
 		// Another engine version's record is not damage. Its stamp says
-		// whether anything is still owed; this engine reads no further.
-		if stamp, serr := job.ReadStamp(dir); serr == nil && stamp.SchemaVersion != job.MetaSchemaVersion {
-			if stamp.Status != job.StatusRunning && stamp.CollectedAt != nil {
-				return pendingItem{}, false
-			}
-			return pendingItem{label: "other-schema", dir: dir,
-				why: prose.PendingOtherSchema(stamp.SchemaVersion, job.MetaSchemaVersion), next: prose.PendingOtherSchemaNext(dir)}, true
+		// whether anything is still owed — skipped while its own engine is
+		// provably running it, like any live job — and this engine reads no
+		// further.
+		if stamp.Status == job.StatusRunning && proc.PidLiveness(stamp.RunnerPid) == proc.Live {
+			return pendingItem{}, false
 		}
+		if stamp.Status != job.StatusRunning && stamp.CollectedAt != nil {
+			return pendingItem{}, false
+		}
+		return pendingItem{label: "other-schema", dir: dir,
+			why: prose.PendingOtherSchema(other.Version, job.MetaSchemaVersion), next: prose.PendingOtherSchemaNext(dir)}, true
+	case err != nil:
 		return pendingItem{label: "corrupt", dir: dir,
 			why: prose.PendingUnreadable("meta.json", err), next: prose.PendingUnreadableNext(dir)}, true
 	case meta.Status == job.StatusRunning:
@@ -116,7 +123,7 @@ func pendingGroup(dir string) (pendingItem, bool) {
 			reasons = append(reasons, m.Name+": "+prose.PendingMemberNoRecord())
 			continue
 		}
-		if item, ok := pendingTurn(m.Dir, m.Meta, m.Err); ok {
+		if item, ok := pendingTurn(m.Dir, m.Stamp, m.Meta, m.Err); ok {
 			reasons = append(reasons, m.Name+": "+item.why)
 		}
 	}

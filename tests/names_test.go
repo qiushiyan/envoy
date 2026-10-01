@@ -443,9 +443,16 @@ func TestAnEarlierSchemasJobsLeaveTheirNamesWorking(t *testing.T) {
 		t.Fatalf("probe dispatch = %d\n%s", probe.code, probe.stderr)
 	}
 	store := filepath.Dir(jobLineOf(probe.stdout))
+	gone := exec.Command("true")
+	if err := gone.Run(); err != nil {
+		t.Fatal(err)
+	}
 	earlier := map[string]string{
 		"consult-r1": `{"schemaVersion":9,"status":"ok","provider":"codex","caller":"old-session","collectedAt":"2026-09-01T00:00:00.000Z"}`,
 		"review-r1":  `{"schemaVersion":9,"status":"ok","provider":"codex","collectedAt":null}`,
+		"live-r1":    fmt.Sprintf(`{"schemaVersion":9,"status":"running","provider":"codex","caller":"session-a","runnerPid":%d}`, os.Getpid()),
+		"dead-r1":    fmt.Sprintf(`{"schemaVersion":9,"status":"running","provider":"codex","caller":"session-a","runnerPid":%d}`, gone.Process.Pid),
+		"locked-r1":  `{"schemaVersion":9,"status":"infra","provider":"codex","sessionLockConflict":"session s has a live turn; run envoy collect '/tmp/x'","collectedAt":null}`,
 	}
 	for name, meta := range earlier {
 		dir := filepath.Join(store, name)
@@ -469,15 +476,32 @@ func TestAnEarlierSchemasJobsLeaveTheirNamesWorking(t *testing.T) {
 		t.Fatalf("an earlier schema's job must be refused when read, got %d\n%s", old.code, old.stdout)
 	}
 	mustContain(t, "stderr", old.stderr, "schema 9")
+	// The version is read before anything it changed: a field another schema
+	// gave a different shape is refused as that schema, never as a decode error.
+	locked := runEnvoyIn(t, a, project, "collect", filepath.Join(store, "locked-r1"))
+	if locked.code != 3 {
+		t.Fatalf("an earlier schema's lock refusal must be refused when read, got %d\n%s", locked.code, locked.stdout)
+	}
+	mustContain(t, "stderr", locked.stderr, "schema 9")
+	mustNotContain(t, "stderr", locked.stderr, "unmarshal")
 
 	if r := runEnvoyIn(t, a.as("", ""), project, "run", "review-r1", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5"); r.code != 0 {
 		t.Fatalf("an earlier schema's uncollected job must not hold its name: %d\n%s", r.code, r.stderr)
 	}
+	// A turn the earlier engine is still running is live work under the name:
+	// it holds for as long as its runner may be alive, and only then lets go.
+	if r := runEnvoyIn(t, a, project, "run", "live-r1", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5"); r.code != 3 {
+		t.Fatalf("an earlier engine's live turn must hold its name: %d\n%s", r.code, r.stdout)
+	}
+	if r := runEnvoyIn(t, a, project, "run", "dead-r1", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5"); r.code != 0 {
+		t.Fatalf("an earlier engine's turn whose runner is gone must not hold its name: %d\n%s", r.code, r.stderr)
+	}
 
 	// The recovery index reads the same stamp: a collected earlier job owes
-	// nothing, and an uncollected one is listed for what it is — intact, and
-	// another version's — never as damage.
+	// nothing, a live one is skipped like any live job, and an uncollected one
+	// is listed for what it is — intact, and another version's — never as damage.
 	pend := runEnvoyIn(t, a, project, "pending")
-	mustContain(t, "pending", pend.stdout, "[other-schema] "+filepath.Join(store, "review-r1")+"\n", "schema 9")
-	mustNotContain(t, "pending", pend.stdout, filepath.Join(store, "consult-r1")+"\n", "corrupt", "damaged")
+	mustContain(t, "pending", pend.stdout, "[other-schema] "+filepath.Join(store, "review-r1")+"\n", "schema 9",
+		"[other-schema] "+filepath.Join(store, "dead-r1")+"\n", "[other-schema] "+filepath.Join(store, "locked-r1")+"\n")
+	mustNotContain(t, "pending", pend.stdout, filepath.Join(store, "consult-r1")+"\n", filepath.Join(store, "live-r1")+"\n", "corrupt", "damaged")
 }

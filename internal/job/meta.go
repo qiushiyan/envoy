@@ -165,60 +165,84 @@ func (m *Meta) WriteFile(path string) error {
 // as its own error, never as this one.
 var ErrNoRecord = errors.New("no record")
 
-// ReadMeta reads the turn record in dir, ErrNoRecord when it has none.
-func ReadMeta(dir string) (*Meta, error) {
-	meta, err := ReadMetaFile(Workspace{Dir: dir}.MetaPath())
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, ErrNoRecord
-	}
-	return meta, err
-}
-
-// Stamp is the part of a turn record that naming reads: who dispatched it,
-// and whether it is finished and delivered. No schema change has altered what
-// these fields mean — status and collectedAt since the first schema, caller
+// Stamp is the part of a turn record that naming and pending read: who
+// dispatched it, whether it is finished and delivered, and the process that
+// supervises it while it runs. No schema change has altered what these fields
+// mean — status, collectedAt and runnerPid since the first schema, caller
 // since it was first recorded (absent before, which reads as no identity) —
 // so a stamp is read from a record of any version. A schema change must
 // never take a store's names hostage; everything else in a record of another
-// version is still refused by name (ReadMeta).
+// version is still refused by name.
 type Stamp struct {
 	SchemaVersion int     `json:"schemaVersion"`
 	Status        string  `json:"status"`
 	Caller        *string `json:"caller"`
 	CollectedAt   *string `json:"collectedAt"`
+	RunnerPid     int     `json:"runnerPid"`
 }
 
-// ReadStamp reads the stamp of the turn record in dir, ErrNoRecord when it
-// has none. A record that does not parse is an error, never a blank stamp.
-func ReadStamp(dir string) (*Stamp, error) {
-	data, err := os.ReadFile(Workspace{Dir: dir}.MetaPath())
+// SchemaError is a record another schema version wrote: intact, and refused
+// by name wherever its meaning is read, never reinterpreted.
+type SchemaError struct{ Version int }
+
+func (e *SchemaError) Error() string {
+	return fmt.Sprintf("meta.json is schema %d and this engine reads schema %d only", e.Version, MetaSchemaVersion)
+}
+
+// ReadRecord reads the turn record in dir once. Its stamp comes back from a
+// record of any schema version; the rest of it only from this engine's,
+// decoded after the version is known, so a field another schema shaped
+// differently is refused as that schema (*SchemaError) and never misread as
+// damage. ErrNoRecord when dir has none; any other error with no stamp is a
+// record that does not parse — damage, never a blank stamp.
+func ReadRecord(dir string) (*Stamp, *Meta, error) {
+	stamp, meta, err := readRecordFile(Workspace{Dir: dir}.MetaPath())
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, ErrNoRecord
+		return nil, nil, ErrNoRecord
 	}
-	if err != nil {
-		return nil, err
+	return stamp, meta, err
+}
+
+// ReadMeta reads the turn record in dir as this engine's schema, ErrNoRecord
+// when it has none.
+func ReadMeta(dir string) (*Meta, error) {
+	_, meta, err := ReadRecord(dir)
+	return meta, err
+}
+
+// ReadStamp reads the stamp of the turn record in dir, from a record of any
+// schema version, ErrNoRecord when it has none.
+func ReadStamp(dir string) (*Stamp, error) {
+	stamp, _, err := ReadRecord(dir)
+	if stamp != nil {
+		return stamp, nil
 	}
-	var s Stamp
-	if err := json.Unmarshal(data, &s); err != nil {
-		return nil, err
-	}
-	return &s, nil
+	return nil, err
 }
 
 // ReadMetaFile parses a meta.json this engine wrote.
 func ReadMetaFile(path string) (*Meta, error) {
+	_, meta, err := readRecordFile(path)
+	return meta, err
+}
+
+func readRecordFile(path string) (*Stamp, *Meta, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	var stamp Stamp
+	if err := json.Unmarshal(data, &stamp); err != nil {
+		return nil, nil, err
+	}
+	if stamp.SchemaVersion != MetaSchemaVersion {
+		return &stamp, nil, &SchemaError{Version: stamp.SchemaVersion}
 	}
 	var meta Meta
 	if err := json.Unmarshal(data, &meta); err != nil {
-		return nil, err
+		return &stamp, nil, err
 	}
-	if meta.SchemaVersion != MetaSchemaVersion {
-		return nil, fmt.Errorf("meta.json is schema %d and this engine reads schema %d only", meta.SchemaVersion, MetaSchemaVersion)
-	}
-	return &meta, nil
+	return &stamp, &meta, nil
 }
 
 // Ptr is a convenience for the schema's many nullable fields.

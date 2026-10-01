@@ -157,13 +157,15 @@ type Fan struct {
 	Members []Member
 }
 
-// Member is one roster entry and its record: Meta when it reads, Err when it
-// does not.
+// Member is one roster entry and its record, read once (ReadRecord): Stamp
+// whenever the record parses, Meta when it is this engine's schema, and Err
+// when Meta is missing — ErrNoRecord, a *SchemaError, or damage.
 type Member struct {
-	Name string
-	Dir  string
-	Meta *Meta
-	Err  error
+	Name  string
+	Dir   string
+	Stamp *Stamp
+	Meta  *Meta
+	Err   error
 }
 
 // ReadFan reads the fan-out in dir, ErrNoRecord when it holds no group.json.
@@ -179,7 +181,7 @@ func ReadFan(dir string) (*Fan, error) {
 	fan := &Fan{Group: group, Members: make([]Member, len(group.Members))}
 	for i, name := range group.Members {
 		m := Member{Name: name, Dir: gw.Member(name).Dir}
-		m.Meta, m.Err = ReadMeta(m.Dir)
+		m.Stamp, m.Meta, m.Err = ReadRecord(m.Dir)
 		fan.Members[i] = m
 	}
 	return fan, nil

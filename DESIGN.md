@@ -186,11 +186,15 @@ keyed to `--allow-write` is a read-only sandbox by another name.
   `envoy collect` command, so a stored one would go on prescribing a verb
   after the verb changed.
   The refusal stops short of naming. A name reads only a record's stamp —
-  `caller`, `status`, `collectedAt`, whose meaning no schema has changed — so
-  a schema bump leaves every reused name in a store resolvable (EVIDENCE.md,
-  2026-10-01). A record of another version holds no name, since this engine
-  cannot deliver it, and `pending` reads the same stamp: a collected one owes
-  nothing, an uncollected one is listed as another version's, never as damage.
+  `caller`, `status`, `collectedAt`, `runnerPid`, whose meaning no schema has
+  changed — so a schema bump leaves every reused name in a store resolvable
+  (EVIDENCE.md, 2026-10-01). A record of another version holds its name only
+  while its own engine may still be running it: past that, this engine can
+  neither deliver nor reconcile it, so holding would strand the name for
+  good. `pending` reads the same stamp: a live one is skipped, a collected one
+  owes nothing, an uncollected one is listed as another version's, never as
+  damage. The version is read before anything it governs, so a field another
+  schema shaped differently is refused as that schema, not as a decode error.
   The archive is what was sent: `prompt.md` is written from the one read that
   feeds the provider's stdin, never from a second read of the caller's file.
   A record is also what makes a directory a job — `meta.json` for a turn,
