@@ -341,14 +341,14 @@ func resolveTurns(req RunRequest, invocationCwd, caller string, timeoutMin float
 			voices = append(voices, members...)
 			continue
 		}
-		source, blocker, err := collect.Inspect(ref)
+		meta, blocker, err := collect.Inspect(ref)
 		if err != nil {
 			return nil, prose.ContinueNoTurn(ref, err)
 		}
 		if blocker != "" {
 			return nil, prose.ContinueBlocked(ref, blocker)
 		}
-		v := continuedVoice(ref, source, "")
+		v := continuedVoice(ref, meta, "")
 		v.promptFile = promptFile
 		voices = append(voices, v)
 	}
@@ -430,22 +430,23 @@ func resolveTurns(req RunRequest, invocationCwd, caller string, timeoutMin float
 }
 
 // continuedVoice is the voice that continues a finished job's conversation,
-// from the source its records describe. name presets the member address (a
-// fan-out's member keeps its identity across rounds); "" derives it.
-func continuedVoice(dir string, source *collect.Source, name string) voice {
+// from the record collect.Inspect found continuable. name presets the member
+// address (a fan-out's member keeps its identity across rounds); "" derives it.
+func continuedVoice(dir string, meta *job.Meta, name string) voice {
+	model := job.Deref(meta.Model)
 	if name == "" {
-		name = voiceBase(source.Provider, source.Model)
+		name = voiceBase(meta.Provider, model)
 	}
 	return voice{
 		base:       name,
-		provider:   source.Provider,
-		model:      source.Model,
-		effort:     source.Effort,
-		session:    source.Session,
+		provider:   meta.Provider,
+		model:      model,
+		effort:     job.Deref(meta.Effort),
+		session:    *meta.SessionID,
 		source:     dir,
-		cwd:        source.Cwd,
-		baseline:   source.Baseline,
-		allowWrite: source.AllowWrite,
+		cwd:        meta.Cwd,
+		baseline:   job.Deref(meta.GitBaseline),
+		allowWrite: meta.AllowWrite,
 	}
 }
 
@@ -492,7 +493,7 @@ func fanMembers(dir, promptFile string) ([]voice, string) {
 	var reasons []string
 	for _, name := range group.Members {
 		memberDir := gw.Member(name).Dir
-		source, blocker, err := collect.Inspect(memberDir)
+		meta, blocker, err := collect.Inspect(memberDir)
 		switch {
 		case err != nil:
 			reasons = append(reasons, prose.FanResumeBlockerLine(name, prose.BlockerUnreadableMeta, err.Error()))
@@ -501,7 +502,7 @@ func fanMembers(dir, promptFile string) ([]voice, string) {
 			reasons = append(reasons, prose.FanResumeBlockerLine(name, blocker, ""))
 			continue
 		}
-		v := continuedVoice(memberDir, source, name)
+		v := continuedVoice(memberDir, meta, name)
 		v.promptFile = promptFile
 		voices = append(voices, v)
 	}

@@ -28,19 +28,12 @@ import (
 	"github.com/qiushiyan/envoy/internal/prose"
 )
 
-// JobDirs lists job directories under base, sorted by name. A dir counts as a
+// jobDirs lists job directories under base, sorted by name. A dir counts as a
 // job once it holds a record — meta.json for a turn, group.json for a fan-out —
 // since a record is what a reader can act on; a directory reserved and
-// released without one was never a job.
-//
-// It is the only discovery function, and it returns the read error rather than
-// swallowing it: a store that could not be read is not an empty store. Which
-// errors are benign is the caller's call, not this one's — a derived default
-// store that does not exist yet is simply a project before its first dispatch,
-// while the same error on a --base the caller typed means the caller named
-// something that isn't there. Only the caller knows which it passed, so only
-// the caller can tell those apart (see FirstRun).
-func JobDirs(base string) ([]string, error) {
+// released without one was never a job. It returns the read error rather than
+// swallowing it: a store that could not be read is not an empty store.
+func jobDirs(base string) ([]string, error) {
 	entries, err := os.ReadDir(base)
 	if err != nil {
 		return nil, err
@@ -61,28 +54,7 @@ func hasFile(path string) bool {
 	return err == nil
 }
 
-// FirstRun reports whether a discovery error is just a store that has not been
-// created yet — which only a *derived* base may be, since the first dispatch
-// creates it. A base the caller named and got wrong raises the same error and
-// must not be waved through as an empty project.
-func FirstRun(err error, baseWasDerived bool) bool {
-	return baseWasDerived && errors.Is(err, fs.ErrNotExist)
-}
-
 // ---------- continuing a finished job ----------
-
-// Source is a finished turn whose conversation a follow-up may continue,
-// carrying the recorded settings the follow-up inherits unless the caller
-// overrides them.
-type Source struct {
-	Provider   string
-	Model      string
-	Effort     string
-	Cwd        string
-	Baseline   string
-	Session    string
-	AllowWrite bool
-}
 
 // continuationBlocker is the single definition of "this job's session may
 // not be continued", consulted by every surface that advertises or dispatches
@@ -105,9 +77,11 @@ func continuationBlocker(meta *job.Meta) (prose.ResumeBlockerKind, bool) {
 }
 
 // Inspect reads dir as a single turn and reports whether its conversation
-// can be continued. The error is non-nil only when dir holds no readable
-// turn at all; a real turn that cannot continue reports a blocker instead.
-func Inspect(dir string) (*Source, prose.ResumeBlockerKind, error) {
+// can be continued, returning the record a continuation inherits its
+// settings from — whose session is then always set. The error is non-nil only
+// when dir holds no readable turn at all; a real turn that cannot continue
+// reports a blocker instead.
+func Inspect(dir string) (*job.Meta, prose.ResumeBlockerKind, error) {
 	metaPath := job.Workspace{Dir: dir}.MetaPath()
 	if _, err := os.Stat(metaPath); err != nil {
 		return nil, "", fmt.Errorf("no job found there (no meta.json)")
@@ -122,15 +96,7 @@ func Inspect(dir string) (*Source, prose.ResumeBlockerKind, error) {
 	if kind, blocked := continuationBlocker(meta); blocked {
 		return nil, kind, nil
 	}
-	return &Source{
-		Provider:   meta.Provider,
-		Model:      job.Deref(meta.Model),
-		Effort:     job.Deref(meta.Effort),
-		Cwd:        meta.Cwd,
-		Baseline:   job.Deref(meta.GitBaseline),
-		Session:    *meta.SessionID,
-		AllowWrite: meta.AllowWrite,
-	}, "", nil
+	return meta, "", nil
 }
 
 // NameHold is the single definition of "this job still holds its name": it
@@ -849,9 +815,13 @@ func pendingGroup(dir string) (pendingItem, bool) {
 // jobs, does not print full results, and does not mark anything collected.
 func Pending(base string, baseWasDerived bool, w, errW io.Writer) int {
 	// "no recovery action is needed" over a store that could not be read is the
-	// most reassuring thing this command can say and the least earned.
-	dirs, err := JobDirs(base)
-	if err != nil && !FirstRun(err, baseWasDerived) {
+	// most reassuring thing this command can say and the least earned. The one
+	// benign error is a derived store that does not exist yet — a project
+	// before its first dispatch creates it. The same error on a --base the
+	// caller typed means it named something that isn't there.
+	dirs, err := jobDirs(base)
+	firstRun := baseWasDerived && errors.Is(err, fs.ErrNotExist)
+	if err != nil && !firstRun {
 		fmt.Fprintf(errW, "pending error: %s\n", prose.UnreadableStore(base, err))
 		return job.ExitInfra
 	}

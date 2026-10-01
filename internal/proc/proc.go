@@ -48,12 +48,6 @@ func GroupLiveness(pgid int) Liveness {
 	return classify(syscall.Kill(-pgid, 0))
 }
 
-// Alive reports the two-state view used by session locks, where EPERM counts
-// as alive and any probe failure other than ESRCH is treated as gone.
-func Alive(pid int) bool {
-	return PidLiveness(pid) == Live
-}
-
 var signalNames = map[syscall.Signal]string{
 	syscall.SIGHUP:  "SIGHUP",
 	syscall.SIGINT:  "SIGINT",

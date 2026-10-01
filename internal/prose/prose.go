@@ -821,12 +821,11 @@ func FanStopping(signalName string, total int) string {
 
 // FanNext closes a finished fan-out. It prescribes collection and nothing
 // else: what each member licenses depends on that member's prompt state, which
-// its own section prints.
+// its own section prints. Every member has returned by the time it prints, so
+// none is running.
 func FanNext(groupDir string, statuses []string) string {
 	collect := "Collect the fan-out: " + CollectCommand(groupDir)
 	switch FanStatus(statuses) {
-	case FanRunning:
-		return "This fan-out is still running. Wait for its process to exit, then collect it: " + CollectCommand(groupDir) + "."
 	case FanOK:
 		return collect + " — it prints every member's result in one block."
 	case FanPartial:

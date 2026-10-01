@@ -90,7 +90,9 @@ func Acquire(sessionID, outDir, runnerInstanceID string) (*Handle, error) {
 			held = &parsed
 		}
 	}
-	if held != nil && proc.Alive(held.Pid) {
+	// Only a provably live owner is waited on; every other probe answer falls
+	// to the refusal below, which reclaims nothing either.
+	if held != nil && proc.PidLiveness(held.Pid) == proc.Live {
 		return nil, &Conflict{
 			SessionID: sessionID,
 			Message: fmt.Sprintf(
