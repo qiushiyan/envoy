@@ -7,6 +7,7 @@ package provider
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -148,48 +149,80 @@ type Driver interface {
 	Usage() *job.Usage
 }
 
-// New constructs the named provider's driver.
-func New(name string, opts Options, ws job.Workspace, startedAt time.Time) (Driver, error) {
-	switch name {
-	case "claude":
-		return newClaude(opts, startedAt), nil
-	case "codex":
-		return newCodex(opts, ws), nil
-	default:
-		return nil, fmt.Errorf("--provider must be claude or codex, got '%s'", name)
-	}
+// spec is what the engine knows about a provider before any turn: how to
+// build its driver, its native effort vocabulary, and whether it takes a
+// spend cap. Adding a provider is a driver file and an entry here; every
+// surface that names providers reads this table.
+type spec struct {
+	driver func(Options, job.Workspace, time.Time) Driver
+	// efforts is the provider's own effort vocabulary, lowest first.
+	efforts []string
+	// belowLowest are other providers' efforts below this one's lowest, which
+	// a caller reaches for and this provider does not have.
+	belowLowest []string
+	spendCap    bool
 }
 
-var efforts = map[string][]string{
-	"claude": {"low", "medium", "high", "xhigh", "max"},
-	"codex":  {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"},
+var registry = map[string]spec{
+	"claude": {
+		driver:      func(o Options, _ job.Workspace, startedAt time.Time) Driver { return newClaude(o, startedAt) },
+		efforts:     []string{"low", "medium", "high", "xhigh", "max"},
+		belowLowest: []string{"none", "minimal"},
+		spendCap:    true,
+	},
+	"codex": {
+		driver:  func(o Options, ws job.Workspace, _ time.Time) Driver { return newCodex(o, ws) },
+		efforts: []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"},
+	},
+}
+
+// Names lists the providers in a stable order.
+func Names() []string { return slices.Sorted(maps.Keys(registry)) }
+
+// Known reports whether name is a provider this engine drives.
+func Known(name string) bool {
+	_, ok := registry[name]
+	return ok
+}
+
+// SpendCap reports whether the provider takes a spend cap.
+func SpendCap(name string) bool { return registry[name].spendCap }
+
+// New constructs the named provider's driver.
+func New(name string, opts Options, ws job.Workspace, startedAt time.Time) (Driver, error) {
+	s, ok := registry[name]
+	if !ok {
+		return nil, unknownProvider(name)
+	}
+	return s.driver(opts, ws, startedAt), nil
+}
+
+func unknownProvider(name string) error {
+	return fmt.Errorf("unknown provider '%s'; the providers are %s", name, strings.Join(Names(), " and "))
 }
 
 // ValidateEffort rejects an invalid effort BEFORE spawn: claude silently
 // ignores an invalid effort (runs at default), codex burns a turn-start and
 // fails with an API 400 mid-stream.
 func ValidateEffort(providerName, effort string) error {
-	valid, ok := efforts[providerName]
+	s, ok := registry[providerName]
 	if !ok {
-		return fmt.Errorf("--provider must be claude or codex, got '%s'", providerName)
+		return unknownProvider(providerName)
 	}
-	if effort == "" {
-		return nil
-	}
-	if slices.Contains(valid, effort) {
+	if effort == "" || slices.Contains(s.efforts, effort) {
 		return nil
 	}
 	hint := ""
-	if providerName == "claude" && (effort == "none" || effort == "minimal") {
-		hint = fmt.Sprintf(" (claude has no '%s'; its lowest is 'low')", effort)
+	if slices.Contains(s.belowLowest, effort) {
+		hint = fmt.Sprintf(" (%s has no '%s'; its lowest is '%s')", providerName, effort, s.efforts[0])
 	}
-	return fmt.Errorf("--effort '%s' is not valid for %s. Valid: %s%s",
-		effort, providerName, strings.Join(valid, ", "), hint)
+	return fmt.Errorf("effort '%s' is not valid for %s. Valid: %s%s",
+		effort, providerName, strings.Join(s.efforts, ", "), hint)
 }
 
 // EffortList is the provider's own effort vocabulary, so the CLI's help text
 // and its validation cannot drift apart.
-func EffortList(providerName string) []string { return efforts[providerName] }
+func EffortList(providerName string) []string { return registry[providerName].efforts }
 
 // stderrLines condenses a stderr tail to its last three non-empty lines.
 func stderrLines(tail string) []string {

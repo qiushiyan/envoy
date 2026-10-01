@@ -178,10 +178,17 @@ EXIT CODES OF A RUN, AND WHAT EACH ONE LICENSES
   After a crash or restart, `+"`envoy pending`"+` finds the jobs whose completion
   you may have missed.
 
-  Efforts — claude: %s · codex: %s
-`,
-	strings.Join(envoy.Efforts("claude"), " "),
-	strings.Join(envoy.Efforts("codex"), " "))
+  Efforts — %s
+`, efforts())
+
+// efforts renders each provider's effort vocabulary for the help page.
+func efforts() string {
+	var parts []string
+	for _, name := range envoy.Providers() {
+		parts = append(parts, name+": "+strings.Join(envoy.Efforts(name), " "))
+	}
+	return strings.Join(parts, " · ")
+}
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +27,30 @@ func TestValidateEffort(t *testing.T) {
 	}
 	if err := ValidateEffort("gemini", "low"); err == nil {
 		t.Fatal("unknown provider must fail")
+	}
+	// Effort travels in the voice (codex::high); there is no --effort flag to
+	// send the caller looking for.
+	if err := ValidateEffort("codex", "bogus"); err == nil || strings.Contains(err.Error(), "--effort") {
+		t.Fatalf("the refusal must not name a flag that does not exist: %v", err)
+	}
+}
+
+// Every surface that names providers reads the registry, so a provider is a
+// driver file and one entry — not a hunt for hardcoded lists.
+func TestTheRegistryNamesEveryProvider(t *testing.T) {
+	if got := Names(); !slices.Equal(got, []string{"claude", "codex"}) {
+		t.Fatalf("names = %v", got)
+	}
+	for _, name := range Names() {
+		if !Known(name) || len(EffortList(name)) == 0 {
+			t.Fatalf("%s is registered without its efforts", name)
+		}
+		if _, err := New(name, Options{}, job.Workspace{Dir: t.TempDir()}, time.Now()); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	if !SpendCap("claude") || SpendCap("codex") || Known("gemini") {
+		t.Fatal("capabilities are read from the registry")
 	}
 }
 

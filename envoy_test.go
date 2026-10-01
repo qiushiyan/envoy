@@ -33,3 +33,10 @@ func TestResolveTimeoutZeroValueIsSafe(t *testing.T) {
 		}
 	}
 }
+
+// The spend-cap refusal is rendered from the providers' own capabilities.
+func TestSpendCapRefusalNamesTheProvidersThatTakeOne(t *testing.T) {
+	if got, want := spendCapRefusal(), "--max-budget-usd caps one claude voice; codex has no budget flag"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}

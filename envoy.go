@@ -95,8 +95,11 @@ func resolveTimeout(timeoutMin float64, noTimeout bool) (float64, error) {
 	return timeoutMin, nil
 }
 
-// Efforts lists the effort values a provider accepts, so callers can render
+// Providers lists the providers the engine drives, so callers can render
 // them instead of hardcoding a copy that drifts.
+func Providers() []string { return provider.Names() }
+
+// Efforts lists the effort values a provider accepts, for the same reason.
 func Efforts(providerName string) []string { return provider.EffortList(providerName) }
 
 func usageError(w io.Writer, format string, args ...any) int {
@@ -146,8 +149,8 @@ func Run(req RunRequest) int {
 		}
 	}
 	if req.MaxBudgetUSD != nil {
-		if len(turns) != 1 || turns[0].Options.Provider != "claude" {
-			return usageError(stderr, "--max-budget-usd caps one claude voice; codex has no budget flag")
+		if len(turns) != 1 || !provider.SpendCap(turns[0].Options.Provider) {
+			return usageError(stderr, "%s", spendCapRefusal())
 		}
 		if math.IsNaN(*req.MaxBudgetUSD) || math.IsInf(*req.MaxBudgetUSD, 0) || *req.MaxBudgetUSD <= 0 {
 			return usageError(stderr, "--max-budget-usd must be a positive number")
@@ -252,6 +255,20 @@ func reserve(arg, dir, caller string) (reserved, refusal string, err error) {
 		}
 	}
 	return "", "", err
+}
+
+// spendCapRefusal says which voices --max-budget-usd can cap.
+func spendCapRefusal() string {
+	var capped, uncapped []string
+	for _, name := range provider.Names() {
+		if provider.SpendCap(name) {
+			capped = append(capped, name)
+		} else {
+			uncapped = append(uncapped, name)
+		}
+	}
+	return fmt.Sprintf("--max-budget-usd caps one %s voice; %s has no budget flag",
+		strings.Join(capped, " or "), strings.Join(uncapped, " or "))
 }
 
 // promptReadable reports why a prompt file cannot be sent: missing, a
@@ -566,8 +583,8 @@ func parseVoice(spec string) (voice, error) {
 	if len(parts) > 2 {
 		v.effort = parts[2]
 	}
-	if v.provider != "claude" && v.provider != "codex" {
-		return voice{}, fmt.Errorf("--with '%s' must name provider claude or codex, got '%s'", spec, v.provider)
+	if !provider.Known(v.provider) {
+		return voice{}, fmt.Errorf("--with '%s' must name provider %s, got '%s'", spec, strings.Join(provider.Names(), " or "), v.provider)
 	}
 	if err := provider.ValidateEffort(v.provider, v.effort); err != nil {
 		return voice{}, fmt.Errorf("--with '%s': %s", spec, err)
