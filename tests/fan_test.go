@@ -607,3 +607,25 @@ func TestPendingCarriesARosterMemberWithoutARecord(t *testing.T) {
 	mustNotContain(t, "collect stdout", col.stdout, "never dispatched", "nothing ran for it")
 	mustNotContain(t, "collect stderr", col.stderr, "collect error")
 }
+
+// A member that wrote a record started, whether or not this engine can read
+// the record — damaged, or another version's. Its section says so and sends
+// the reader to its files; it is never glossed as a member nothing ran for.
+func TestAnUnreadableMemberIsNeverCalledUndispatched(t *testing.T) {
+	e := newEnv(t)
+	dir := filepath.Join(t.TempDir(), "group")
+	group := fmt.Sprintf(`{"schemaVersion":2,"startedAt":"2026-09-01T00:00:00.000Z","cwd":%q,"timeoutMin":5,"gitBaseline":null,"members":["codex"]}`, t.TempDir())
+	member := filepath.Join(dir, "codex")
+	if err := os.MkdirAll(member, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(dir, "group.json"), []byte(group), 0o644)
+	os.WriteFile(filepath.Join(member, "meta.json"), []byte(`{"schemaVersion":9,"status":"ok","provider":"codex","collectedAt":null}`), 0o644)
+
+	col := runEnvoy(t, e, "collect", dir)
+	mustContain(t, "collect stdout", col.stdout,
+		"status: unreadable — this member wrote meta.json, so it started",
+		"next: read "+filepath.Join(member, "result.md"))
+	mustNotContain(t, "collect stdout", col.stdout, "never dispatched", "nothing ran for it")
+	mustContain(t, "collect stderr", col.stderr, "schema 9")
+}

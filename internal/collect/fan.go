@@ -52,7 +52,7 @@ func collectGroup(dir, note string, mode Mode, w, errW io.Writer) int {
 		status := ""
 		if m.Err != nil {
 			reportUnreadable(m.Dir, m.Err, errW)
-			fmt.Fprintf(&sections, "status: %s\n", prose.FanUndispatched())
+			fmt.Fprintf(&sections, "status: %s\nnext: %s\n", prose.FanMemberUnreadable(), prose.FanMemberUnreadableNext(m.Dir))
 			resumable = false
 		} else {
 			r := renderJob(m.Dir, m.Meta, mode, &sections, false)

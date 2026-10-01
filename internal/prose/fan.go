@@ -94,6 +94,23 @@ func FanMemberNoRecord() string {
 	return "no record — this member never wrote meta.json, so whether anything ran for it is unknown"
 }
 
+// FanMemberUnreadable is a fan-out member's section when its record is there
+// and will not read — damaged, or written by another engine version. A member
+// that wrote a record started, so it is never called undispatched; the
+// section claims nothing past that.
+func FanMemberUnreadable() string {
+	return "unreadable — this member wrote meta.json, so it started, but the record could not be read (the reason is on stderr)"
+}
+
+// FanMemberUnreadableNext is the one action for a member whose record will
+// not read: its files are the evidence, and this engine does not guess past
+// a record it cannot read.
+func FanMemberUnreadableNext(dir string) string {
+	ws := job.Workspace{Dir: dir}
+	return fmt.Sprintf("read %s and %s directly, with %s, %s and %s beside them, before deciding anything for this member",
+		ws.ResultPath(), ws.MetaPath(), ws.ProgressLogPath(), ws.RawLogPath(), ws.StderrLogPath())
+}
+
 // FanMemberNoRecordNext is the one action for a member without a record.
 func FanMemberNoRecordNext(dir string) string {
 	ws := job.Workspace{Dir: dir}
