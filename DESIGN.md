@@ -179,9 +179,10 @@ keyed to `--allow-write` is a read-only sandbox by another name.
   can repeat the dispatch it replaces — the same source conversation, the
   archived prompt, the spend cap — and the resume line can never disagree
   with what dispatch would accept. Why a turn did not deliver is recorded the
-  same way: `failure` keeps the cause and the provider's own words, and
-  `sessionLockConflict` keeps the lock file's account of the turn holding the
-  session; `internal/prose` words both whenever the record is read. Storing
+  same way: `failure` keeps the cause and the provider's own words and code
+  — absent when the provider gave none, never a fallback the engine wrote —
+  and `sessionLockConflict` keeps the lock file's account of the turn holding
+  the session; `internal/prose` words both whenever the record is read. Storing
   the sentence is the alternative this beats — a lock refusal carries an
   `envoy collect` command, so a stored one would go on prescribing a verb
   after the verb changed.
