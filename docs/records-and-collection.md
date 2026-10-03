@@ -55,8 +55,9 @@ running it (`docs/naming-and-storage.md` § Name holds). `pending` reads the
 same stamp: a live job is skipped, a collected one owes nothing, and an
 uncollected one is listed as another version's, never as damage. A fan-out's
 roster changed shape between group schemas and is not part of its stamp, so
-`pending` judges another version's fan-out by the records its member
-directories hold.
+once its runner is not provably live, `pending` judges another version's
+fan-out by the records its member directories hold — and keeps listing one
+whose directory cannot be listed, since that cannot show nothing is owed.
 
 Only a replaced field moves a schema. An optional observation (`usage`,
 `commandPrefix`) keeps the version: existing fields and continuation

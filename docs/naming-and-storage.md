@@ -81,8 +81,10 @@ can be observed:
   holds exactly while that process may be alive — which also frees a round in
   which every member was refused.
 - **Another schema version's job** holds only while its own runner may be
-  alive. This engine can never deliver it, so a longer hold would strand the
-  name for good.
+  alive, decided from its stamp alone — what a fan-out's directory lists is no
+  part of it. This engine can never deliver that job, so a longer hold would
+  strand the name for good, and its refusal names the other version's process
+  exiting as what frees the name, never a collect.
 - **A store that exists but cannot be listed** is an error, never generation
   zero, and so is a generation newer than the caller's selected one whose
   record is there and cannot be read: either would let an older job answer to
