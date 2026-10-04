@@ -66,12 +66,12 @@ follows prompt state alone.
 ## A refusal is a cause of its own
 
 A claude turn that Anthropic's safety classifier refuses ends in an ordinary
-error envelope, and the envelope's text is written for a person at a
-terminal: the message was flagged, try rephrasing. Recorded as a provider
-verdict, that text left the one fact a caller can act on, the refusal's
-category, in a tag inside a paragraph: callers re-sent ten blocked briefs
-having worked the reason out from that tag each time, and one rewrote its
-brief's system description as well (`EVIDENCE.md`, 2026-10-04).
+error envelope whose text is written for a person at a terminal: the message
+was flagged, try rephrasing. Recording that text as a provider verdict is the
+alternative this beats: the refusal's category, the one fact a caller can act
+on, sits in a tag inside the paragraph, and a caller who reads "flagged" goes
+looking for the offence in the prompt's subject matter (`EVIDENCE.md`,
+2026-10-04).
 
 The stream names the refusal before the envelope arrives: a
 `model_refusal_no_fallback` system record and a synthetic assistant message
@@ -82,8 +82,8 @@ with the category.
 
 The engine stops at the observation. A refusal carries no fix of its own
 beside the recovery: the stream does not say which words the classifier
-matched or whether anything in the prompt was the reason, a refused turn has
-passed on a plain follow-up, and a fix aimed at the prompt would contradict a
+matched or whether anything in the prompt was the reason, a refused turn can
+pass on a plain follow-up, and a fix aimed at the prompt would contradict a
 recovery that continues the session on a new one. Nor does the engine retry a
 refused turn or choose another model for it (`docs/README.md` § Division of
 labor). Recovery follows prompt state as for any other failure. An error

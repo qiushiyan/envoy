@@ -81,7 +81,7 @@ notification that may have been missed. envoy is **not a sandbox**:
   continuing a conversation:** `docs/turn-lifecycle-and-recovery.md`
 - **Several voices as one job:** `docs/fan-out.md`
 - **Provider drivers, models and effort, permissions, transient errors,
-  launchers:** `docs/providers.md`
+  refusals, launchers:** `docs/providers.md`
 - **Claude primary-turn context and token measurements (`meta.json.usage`):**
   `docs/primary-turn-usage.md`
 
