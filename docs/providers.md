@@ -3,7 +3,8 @@
 A provider is the CLI a turn runs: `claude` or `codex`. This doc is why the
 provider seam is shaped the way it is — what a driver owns, how the engine
 treats models, effort and permissions, why a transient error never fails a
-turn, and how launchers keep account choice outside the engine.
+turn, why a refusal is recorded apart from other failures, and how launchers
+keep account choice outside the engine.
 
 ## The driver seam
 
@@ -61,6 +62,30 @@ came before it. The reconnect events are tallied (`connectionErrors` in
 what the provider reported — never "offline", which the engine cannot know —
 and nothing acts on the tally: the cap does not pause, and recovery still
 follows prompt state alone.
+
+## A refusal is a cause of its own
+
+A claude turn that the provider's safety classifier refuses ends in an
+ordinary error envelope, and the envelope's text is written for a person at a
+terminal: the message was flagged, try rephrasing. Recorded as a provider
+verdict, that text sent callers looking for the offence in the prompt's
+subject matter — one rewrote a system description the refusal had nothing to
+do with — and each caller worked the real reason out again from the one tag
+buried in it (`EVIDENCE.md`, 2026-10-04).
+
+The stream names the refusal before the envelope arrives: a
+`model_refusal_no_fallback` system record and a synthetic assistant message
+whose `stop_reason` is `refusal`, each carrying a category and the provider's
+explanation. The driver records those as `provider_refusal`, the category in
+the failure's `code` and the explanation in its `message`. Collect leads with
+the category, and the fix that rides with the recovery points at it.
+
+The engine stops at the observation. It does not retry a refused turn or
+choose another model for it (`docs/README.md` § Division of labor), and it
+does not say which words the classifier matched: the category is what the
+stream held, and what in the prompt it names is the caller's judgment.
+Recovery follows prompt state as for any other failure. An error envelope
+with no refusal in the stream stays a verdict, whatever its words say.
 
 ## Launchers
 

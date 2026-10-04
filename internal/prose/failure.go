@@ -24,6 +24,8 @@ func Failure(m *job.Meta) string {
 		return fmt.Sprintf("envoy could not start %s: %s", command(m), job.Deref(f.Message))
 	case job.CauseProviderVerdict:
 		return fmt.Sprintf("%s reported a provider failure: %s", provider, verdict(f))
+	case job.CauseProviderRefusal:
+		return refused(provider, f)
 	case job.CauseBudgetCap:
 		budget := 0.0
 		if m.MaxBudgetUSD != nil {
@@ -71,6 +73,22 @@ func verdict(f *job.Failure) string {
 	return "turn failed"
 }
 
+// refused words a safety-classifier refusal from the two things the provider
+// gave for it. The category leads because it is the part a caller can act on:
+// it says which rule the classifier applied, where the provider's terminal
+// message says only that something was flagged — and a caller reading that
+// message goes looking for the offence in the prompt's subject matter.
+func refused(provider string, f *job.Failure) string {
+	line := provider + "'s provider refused this turn"
+	if f.Code != nil {
+		line += fmt.Sprintf(" (refusal category %s)", *f.Code)
+	}
+	if f.Message != nil {
+		return line + ": " + *f.Message
+	}
+	return line + "."
+}
+
 // remedy is the fix a cause demands before any recovery, "" when it needs
 // none. It rides along with the prescription rather than replacing it.
 func remedy(f *job.Failure) string {
@@ -80,6 +98,10 @@ func remedy(f *job.Failure) string {
 	switch f.Cause {
 	case job.CauseProviderVerdict:
 		return "Fix the cause it reported first."
+	case job.CauseProviderRefusal:
+		// The category is all the engine holds, so the remedy points at it and
+		// claims nothing about which words matched.
+		return "The category is the provider's reason: change what it names in the prompt and leave the rest, since a rewrite aimed anywhere else keeps the cause."
 	case job.CauseBudgetCap:
 		return "Raise the budget cap before continuing."
 	}

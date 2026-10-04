@@ -416,3 +416,25 @@ each workaround.
   so no earlier bump had crossed them. What stands: naming and `pending` read
   only a version-independent stamp (`DESIGN.md`, Records hold facts). Not a
   mining pass; no usage since 2026-09-27 was read for it.
+- **2026-10-04 — a refusal read as a verdict sent callers after the wrong
+  cause.** Store, claude turns 2026-09-14 → 10-04: 16 failed on the
+  provider's safety classifier, every one category `reasoning_extraction`
+  (15 consult briefs and one diagnosis brief; 4 more are indexed in the
+  transcripts and gone from the store). The record held the envelope's
+  terminal text — "safeguards flagged this message … try rephrasing" — as a
+  provider verdict with the fix "Fix the cause it reported first", and the
+  category sat in a `Details:` tag inside it. Ten host sessions worked the
+  reason out again from that tag, and the first (09-17) rewrote the brief's
+  system description instead. The stream had named the refusal all along:
+  `model_refusal_no_fallback` plus a synthetic assistant message with
+  `stop_reason: refusal`, both with category and explanation, in all 16
+  streams across Claude Code 2.1.274–2.1.283. The driver now records
+  `provider_refusal` from those (`docs/providers.md` § A refusal is a cause
+  of its own); fed the 16 real streams it yields that cause 16 times, and a
+  usage-limit failure beside them stays a verdict. No schema bump: a cause is
+  an added value. The trigger itself was the consult brief's wording and was
+  fixed there (dotfiles `consult/EVIDENCE.md`, 2026-10-04). Compare next
+  pass: after a `provider_refusal`, whether the caller's next dispatch
+  changes what the category names or something else, and whether any refusal
+  arrives in a stream shape the driver misses (a failed claude turn whose
+  message says "safeguards" under cause `provider_verdict`).

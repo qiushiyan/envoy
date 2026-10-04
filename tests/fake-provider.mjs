@@ -242,6 +242,33 @@ if (provider === 'claude') {
       errors: [reason],
     })));
     process.exitCode = 7;
+  } else if (scenario === 'refusal') {
+    const explanation = 'This request was blocked by the fake safety classifier.';
+    const terminal = "API Error: fake-claude-model's safeguards flagged this message. Details: `[reasoning_extraction]`";
+    emit(claudeInit());
+    emit(claudeAssistant('useful claude work before the refusal'));
+    emit({
+      type: 'system',
+      subtype: 'model_refusal_no_fallback',
+      session_id: sessionId,
+      original_model: 'fake-claude-model',
+      api_refusal_category: 'reasoning_extraction',
+      api_refusal_explanation: explanation,
+    });
+    emit({
+      type: 'assistant',
+      session_id: sessionId,
+      error: 'invalid_request',
+      message: {
+        model: '<synthetic>',
+        role: 'assistant',
+        stop_reason: 'refusal',
+        stop_details: { type: 'refusal', category: 'reasoning_extraction', explanation },
+        content: [{ type: 'text', text: terminal }],
+      },
+    });
+    process.stdout.write(JSON.stringify(claudeResult({ is_error: true, stop_reason: 'refusal', result: terminal })));
+    process.exitCode = 1;
   } else {
     process.stderr.write(`unsupported fake claude scenario: ${scenario}\n`);
     process.exit(64);

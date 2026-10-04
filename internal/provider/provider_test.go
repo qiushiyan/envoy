@@ -187,6 +187,56 @@ func TestClaudeFailureExcludesErrorEcho(t *testing.T) {
 	}
 }
 
+// A safety-classifier refusal reaches the result envelope as an ordinary
+// error, worded for a person at a terminal. The stream names it twice before
+// that — a system record and the synthetic assistant message that ends the
+// turn — and the record keeps what those say: the category and the provider's
+// explanation, as a cause of their own.
+func TestClaudeRefusalIsItsOwnCause(t *testing.T) {
+	const (
+		explanation = "This request was blocked as it seems to violate the provider's restrictions on duplicating model outputs."
+		terminal    = "API Error: Opus 5.5's safeguards flagged this message. Details: `[reasoning_extraction]`"
+		notice      = `{"type":"user","isSynthetic":true,"message":{"role":"user","content":[{"type":"text","text":"Your response above was stopped by a safety classifier."}]}}`
+		system      = `{"type":"system","subtype":"model_refusal_no_fallback","original_model":"claude-opus-5-5","api_refusal_category":"reasoning_extraction","api_refusal_explanation":"` + explanation + `"}`
+		synthetic   = `{"type":"assistant","message":{"model":"<synthetic>","role":"assistant","stop_reason":"refusal","stop_details":{"type":"refusal","category":"reasoning_extraction","explanation":"` + explanation + `"},"content":[{"type":"text","text":"` + terminal + `"}]},"error":"invalid_request"}`
+		envelope    = `{"type":"result","subtype":"success","is_error":true,"stop_reason":"refusal","terminal_reason":"api_error","session_id":"s1","result":"` + terminal + `"}`
+	)
+	cases := []struct {
+		name  string
+		lines []string
+	}{
+		{"both records", []string{notice, system, synthetic, envelope}},
+		{"the system record alone", []string{system, envelope}},
+		{"the synthetic message alone", []string{synthetic, envelope}},
+	}
+	for _, tc := range cases {
+		c := newClaude(Options{}, time.Now())
+		c.Feed(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"work before the refusal"}]}}`)
+		for _, line := range tc.lines {
+			c.Feed(line)
+		}
+		out := c.Conclude(ExitInfo{Code: job.Ptr(1)})
+		if out.Status != job.StatusFailed || out.PromptState != job.PromptAccepted {
+			t.Fatalf("%s: status %s, prompt state %s", tc.name, out.Status, out.PromptState)
+		}
+		f := out.Failure
+		if f.Cause != job.CauseProviderRefusal || job.Deref(f.Code) != "reasoning_extraction" || job.Deref(f.Message) != explanation {
+			t.Fatalf("%s: failure = %+v", tc.name, f)
+		}
+		if out.Partial == nil || *out.Partial != "work before the refusal" {
+			t.Fatalf("%s: partial must keep the work and drop the terminal message, got %v", tc.name, out.Partial)
+		}
+	}
+
+	// An error envelope with no refusal in the stream stays a verdict, even
+	// when its words mention one: the cause is what the stream named.
+	c := newClaude(Options{}, time.Now())
+	c.Feed(envelope)
+	if f := c.Conclude(ExitInfo{Code: job.Ptr(1)}).Failure; f.Cause != job.CauseProviderVerdict || job.Deref(f.Message) != terminal {
+		t.Fatalf("an unnamed refusal must stay a verdict, got %+v", f)
+	}
+}
+
 // The echo is left out of every source work is recovered from: a failed turn
 // whose only assistant text repeats the error recovered nothing, whether the
 // stream or the session transcript holds that text, and work the transcript

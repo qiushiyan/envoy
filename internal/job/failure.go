@@ -11,11 +11,12 @@ package job
 // copied here.
 type Failure struct {
 	Cause string `json:"cause"`
-	// Message is the provider's own failure verdict, or the error that
-	// stopped a spawn; absent when the provider gave no words.
+	// Message is the provider's own failure verdict, its explanation of a
+	// refusal, or the error that stopped a spawn; absent when the provider
+	// gave no words.
 	Message *string `json:"message,omitempty"`
 	// Code is the provider's own name for its verdict, where it gives one
-	// (claude's result subtype).
+	// (claude's result subtype, or the category of a refusal).
 	Code *string `json:"code,omitempty"`
 	// StderrTail is the last few non-empty lines of the command's stderr, for
 	// an exit that left no result.
@@ -32,6 +33,7 @@ type Failure struct {
 const (
 	CauseSpawnFailed           = "spawn_failed"            // the command never launched
 	CauseProviderVerdict       = "provider_verdict"        // the provider reported a failure of its own
+	CauseProviderRefusal       = "provider_refusal"        // the provider's safety classifier refused the turn
 	CauseBudgetCap             = "budget_cap"              // the provider stopped at the spend cap
 	CauseExitedAfterResponse   = "exited_after_response"   // a non-zero exit after a response arrived
 	CauseExitedWithoutResult   = "exited_without_result"   // an exit that left no usable result

@@ -29,6 +29,9 @@ type claude struct {
 	// the end of a turn never rescans it. Everything else the stream carried —
 	// tool output included — is in raw.log, not in memory.
 	replies [][]string
+	// refusal is the safety-classifier refusal the stream named, nil when it
+	// named none.
+	refusal *claudeRefusal
 	usage   claudeUsage
 }
 
@@ -128,7 +131,13 @@ func (c *claude) consume(parsed any) []Event {
 			{K: "max_retries", V: event["max_retries"]},
 			{K: "retry_delay_ms", V: event["retry_delay_ms"]},
 		}})
+	case typ == "system" && subtype == "model_refusal_no_fallback":
+		c.observeRefusal(str(event, "api_refusal_category"), str(event, "api_refusal_explanation"))
 	case typ == "assistant":
+		if message, ok := event["message"].(map[string]any); ok && str(message, "stop_reason") == "refusal" {
+			details, _ := message["stop_details"].(map[string]any)
+			c.observeRefusal(str(details, "category"), str(details, "explanation"))
+		}
 		if blocks := replyText(event); len(blocks) > 0 {
 			c.replies = append(c.replies, blocks)
 		}
@@ -250,11 +259,34 @@ func (c *claude) Conclude(exit ExitInfo) Outcome {
 			SessionID:   parsed.sessionID,
 		}
 	default: // envelopeFailed
-		out := c.recovery(parsed).Outcome(job.StatusFailed, job.Failure{Cause: job.CauseProviderVerdict,
-			Message: job.PtrIfNonEmpty(parsed.errorText), Code: job.PtrIfNonEmpty(parsed.subtype)})
+		failure := job.Failure{Cause: job.CauseProviderVerdict,
+			Message: job.PtrIfNonEmpty(parsed.errorText), Code: job.PtrIfNonEmpty(parsed.subtype)}
+		if c.refusal != nil {
+			failure = job.Failure{Cause: job.CauseProviderRefusal,
+				Message: job.PtrIfNonEmpty(c.refusal.explanation), Code: job.PtrIfNonEmpty(c.refusal.category)}
+		}
+		out := c.recovery(parsed).Outcome(job.StatusFailed, failure)
 		out.SessionID = parsed.sessionID
 		return out
 	}
+}
+
+// claudeRefusal is a safety-classifier refusal as the stream named it.
+type claudeRefusal struct {
+	category, explanation string
+}
+
+// observeRefusal keeps the first refusal the stream names. Claude Code
+// announces one twice — a system record and the synthetic assistant message
+// that ends the turn — and either alone is enough. The envelope's own error
+// text names the same refusal in a sentence written for a person at a
+// terminal; the category and the explanation are the provider's reason, and
+// the reason is what a caller needs to tell a refusal from any other failure.
+func (c *claude) observeRefusal(category, explanation string) {
+	if c.refusal != nil || (category == "" && explanation == "") {
+		return
+	}
+	c.refusal = &claudeRefusal{category: category, explanation: explanation}
 }
 
 // ObservesConnectionErrors: claude's network failures arrive as the result
