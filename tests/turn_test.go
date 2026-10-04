@@ -160,8 +160,8 @@ func TestClaudePartialFailure(t *testing.T) {
 }
 
 // A refused turn is collected as a refusal: the block names the category and
-// the provider's explanation instead of the terminal message, the fix points
-// at the category, and the work done before the refusal is still recovered.
+// the provider's explanation instead of the terminal message, and the work
+// done before the refusal is still recovered.
 func TestClaudeRefusalNamesItsCategory(t *testing.T) {
 	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "refusal")
 	outDir := filepath.Join(t.TempDir(), "job")
@@ -176,7 +176,7 @@ func TestClaudeRefusalNamesItsCategory(t *testing.T) {
 	if meta["status"] != "failed" || failure["cause"] != "provider_refusal" || failure["code"] != "reasoning_extraction" {
 		t.Fatalf("meta = status %v failure %v", meta["status"], failure)
 	}
-	const why = "Claude's provider refused this turn (refusal category reasoning_extraction): This request was blocked by the fake safety classifier."
+	const why = "Claude refused this turn (category reasoning_extraction): This request was blocked by the fake safety classifier."
 	result := readFile(t, filepath.Join(outDir, "result.md"))
 	mustContain(t, "result.md", result,
 		"# Turn failed",
@@ -191,7 +191,6 @@ func TestClaudeRefusalNamesItsCategory(t *testing.T) {
 	collected := runEnvoy(t, e, "collect", outDir)
 	mustContain(t, "collect", collected.stdout,
 		why,
-		"The category is the provider's reason: change what it names in the prompt and leave the rest, since a rewrite aimed anywhere else keeps the cause.",
 		"continue the same session with a follow-up prompt",
 	)
 }

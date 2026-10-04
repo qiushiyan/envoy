@@ -26,7 +26,7 @@ import (
 )
 
 // Version of the engine, reported by `envoy version`.
-const Version = "0.12.0"
+const Version = "0.12.1"
 
 // Exit codes: 0 ok · 1 provider failure · 2 infra · 3 usage · 4 timeout ·
 // 5 interrupted · 6 partial (several voices only).

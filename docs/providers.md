@@ -65,27 +65,30 @@ follows prompt state alone.
 
 ## A refusal is a cause of its own
 
-A claude turn that the provider's safety classifier refuses ends in an
-ordinary error envelope, and the envelope's text is written for a person at a
+A claude turn that Anthropic's safety classifier refuses ends in an ordinary
+error envelope, and the envelope's text is written for a person at a
 terminal: the message was flagged, try rephrasing. Recorded as a provider
-verdict, that text sent callers looking for the offence in the prompt's
-subject matter — one rewrote a system description the refusal had nothing to
-do with — and each caller worked the real reason out again from the one tag
-buried in it (`EVIDENCE.md`, 2026-10-04).
+verdict, that text left the one fact a caller can act on, the refusal's
+category, in a tag inside a paragraph: callers re-sent ten blocked briefs
+having worked the reason out from that tag each time, and one rewrote its
+brief's system description as well (`EVIDENCE.md`, 2026-10-04).
 
 The stream names the refusal before the envelope arrives: a
 `model_refusal_no_fallback` system record and a synthetic assistant message
 whose `stop_reason` is `refusal`, each carrying a category and the provider's
 explanation. The driver records those as `provider_refusal`, the category in
-the failure's `code` and the explanation in its `message`. Collect leads with
-the category, and the fix that rides with the recovery points at it.
+the failure's `code` and the explanation in its `message`, and collect leads
+with the category.
 
-The engine stops at the observation. It does not retry a refused turn or
-choose another model for it (`docs/README.md` § Division of labor), and it
-does not say which words the classifier matched: the category is what the
-stream held, and what in the prompt it names is the caller's judgment.
-Recovery follows prompt state as for any other failure. An error envelope
-with no refusal in the stream stays a verdict, whatever its words say.
+The engine stops at the observation. A refusal carries no fix of its own
+beside the recovery: the stream does not say which words the classifier
+matched or whether anything in the prompt was the reason, a refused turn has
+passed on a plain follow-up, and a fix aimed at the prompt would contradict a
+recovery that continues the session on a new one. Nor does the engine retry a
+refused turn or choose another model for it (`docs/README.md` § Division of
+labor). Recovery follows prompt state as for any other failure. An error
+envelope with no refusal in the stream stays a verdict, whatever its words
+say.
 
 ## Launchers
 

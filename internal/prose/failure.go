@@ -78,10 +78,15 @@ func verdict(f *job.Failure) string {
 // it says which rule the classifier applied, where the provider's terminal
 // message says only that something was flagged — and a caller reading that
 // message goes looking for the offence in the prompt's subject matter.
+//
+// It carries no remedy. The record does not hold which words the classifier
+// matched, or whether anything in the prompt was the reason, so a fix would
+// be a guess — and one aimed at the prompt contradicts the recovery beside
+// it, which continues the session on a new prompt.
 func refused(provider string, f *job.Failure) string {
-	line := provider + "'s provider refused this turn"
+	line := provider + " refused this turn"
 	if f.Code != nil {
-		line += fmt.Sprintf(" (refusal category %s)", *f.Code)
+		line += fmt.Sprintf(" (category %s)", *f.Code)
 	}
 	if f.Message != nil {
 		return line + ": " + *f.Message
@@ -98,10 +103,6 @@ func remedy(f *job.Failure) string {
 	switch f.Cause {
 	case job.CauseProviderVerdict:
 		return "Fix the cause it reported first."
-	case job.CauseProviderRefusal:
-		// The category is all the engine holds, so the remedy points at it and
-		// claims nothing about which words matched.
-		return "The category is the provider's reason: change what it names in the prompt and leave the rest, since a rewrite aimed anywhere else keeps the cause."
 	case job.CauseBudgetCap:
 		return "Raise the budget cap before continuing."
 	}

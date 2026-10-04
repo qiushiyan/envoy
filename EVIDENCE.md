@@ -423,16 +423,21 @@ each workaround.
   transcripts and gone from the store). The record held the envelope's
   terminal text — "safeguards flagged this message … try rephrasing" — as a
   provider verdict with the fix "Fix the cause it reported first", and the
-  category sat in a `Details:` tag inside it. Ten host sessions worked the
-  reason out again from that tag, and the first (09-17) rewrote the brief's
-  system description instead. The stream had named the refusal all along:
+  category sat in a `Details:` tag inside it. Hosts re-sent ten of the
+  blocked briefs with the offending section rewritten, the reason worked out
+  from that tag each time, and the first (09-17) rewrote the brief's system
+  description as well; three more continued the refused session on a short
+  follow-up, and all three passed. The stream had named the refusal all along:
   `model_refusal_no_fallback` plus a synthetic assistant message with
   `stop_reason: refusal`, both with category and explanation, in all 16
   streams across Claude Code 2.1.274–2.1.283. The driver now records
   `provider_refusal` from those (`docs/providers.md` § A refusal is a cause
   of its own); fed the 16 real streams it yields that cause 16 times, and a
   usage-limit failure beside them stays a verdict. No schema bump: a cause is
-  an added value. The trigger itself was the consult brief's wording and was
+  an added value. The refusal carries no remedy (0.12.1): 0.12.0 told the
+  caller to change what the category names "in the prompt", beside a recovery
+  that continues the session on a new prompt, and the record cannot show the
+  prompt was the reason. The trigger itself was the consult brief's wording and was
   fixed there (dotfiles `consult/EVIDENCE.md`, 2026-10-04). Compare next
   pass: after a `provider_refusal`, whether the caller's next dispatch
   changes what the category names or something else, and whether any refusal

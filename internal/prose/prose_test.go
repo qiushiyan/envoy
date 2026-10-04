@@ -182,14 +182,6 @@ func TestRecoveryCoversEveryPromptState(t *testing.T) {
 	if got := Recovery(&job.Meta{PromptState: job.PromptAccepted, Failure: &job.Failure{Cause: job.CauseBudgetCap}}, resume, redispatch); !strings.Contains(got, "Raise the budget cap before continuing.") {
 		t.Fatalf("remedy dropped: %s", got)
 	}
-	// A refusal's fix points at the category, the one thing the record holds
-	// about why, and still ends on the resume the prompt state licenses.
-	refusal := Recovery(&job.Meta{PromptState: job.PromptAccepted, Failure: &job.Failure{Cause: job.CauseProviderRefusal, Code: job.Ptr("reasoning_extraction")}}, resume, redispatch)
-	for _, phrase := range []string{"The category is the provider's reason: change what it names in the prompt and leave the rest", resume} {
-		if !strings.Contains(refusal, phrase) {
-			t.Fatalf("refusal prescription is missing %q:\n%s", phrase, refusal)
-		}
-	}
 	// Without a session, the prescriptions stay honest about what is possible.
 	if got := Recovery(&job.Meta{PromptState: job.PromptUnknown}, "", ""); strings.Contains(got, "envoy run") {
 		t.Fatalf("no session must mean no resume command: %s", got)
