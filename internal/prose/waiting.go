@@ -23,17 +23,22 @@ func StoppedWaiting(signalName, jobRef string) string {
 }
 
 // DispatchLost is what a waiter says when the process running the dispatch
-// ended without reporting its exit code.
-func DispatchLost(jobRef string) string {
-	msg := "envoy: the process running this dispatch ended without reporting how the dispatch went."
-	if jobRef == "" {
-		return msg
-	}
-	return msg + " Collect the job for what it recorded: " + CollectCommand(jobRef) + "."
+// ended without reporting its exit code. Whether it reserved a job is what
+// its "job:" line shows; collecting the name without one would read an
+// earlier job.
+func DispatchLost() string {
+	return "envoy: the process running this dispatch ended without reporting how the dispatch went. " +
+		"If a job: line appears above, collect that job for what it recorded; if none does, nothing was dispatched."
 }
 
-// DetachUnavailable is what a dispatch says when it cannot start a process of
-// its own and runs in the caller's instead.
-func DetachUnavailable(err error) string {
-	return fmt.Sprintf("envoy: cannot run this dispatch in a process of its own (%s), so it runs in this one and stops if this command is stopped.", err)
+// DetachFailed is what a dispatch says when the process that runs it cannot
+// be started.
+func DetachFailed(err error) string {
+	return fmt.Sprintf("envoy: cannot start the process that runs this dispatch (%s), so nothing was dispatched.", err)
+}
+
+// StopReachesEveryMember says what a member's stop reaches: every member of
+// its fan-out runs in one process, so none can be stopped alone.
+func StopReachesEveryMember(groupDir string) string {
+	return "this member runs in its fan-out's one process, so that stop interrupts every member of the fan-out " + text.ShellQuote(groupDir) + "; one member cannot be stopped alone"
 }

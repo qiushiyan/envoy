@@ -67,6 +67,6 @@ func TestCodexFreshSessionLockCollision(t *testing.T) {
 	// still names the job to collect whenever this one is read.
 	col := runEnvoy(t, e, "collect", outDir)
 	mustContain(t, "collect stdout", col.stdout, "session: fake-session-id", "next: Another turn holds this session id",
-		"already has a live turn", "then collect its job: envoy collect '/tmp/live-job'")
+		"already has a live turn", "wait for that job — envoy wait '/tmp/live-job' — then collect it: envoy collect '/tmp/live-job'")
 	mustNotContain(t, "collect stdout", col.stdout, "resume: envoy run")
 }

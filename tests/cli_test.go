@@ -84,12 +84,13 @@ func TestHelpIsSelfSufficient(t *testing.T) {
 		"envoy never substitutes", // no model substitution
 		"not a sandbox",           // --allow-write is intent
 		"One live turn per session",
-		"takes a NEW prompt file",      // resume discipline
-		"counts healthy work",          // cap semantics
-		"envoy wait <job>",             // the wait that restores the completion signal
-		"only the waiting stops",       // a stopped task no longer stops the turn
-		"run the stop: command",        // so the turn is stopped this way
-		"including ones still running", // pending lists a turn whose waiter is gone
+		"takes a NEW prompt file",                         // resume discipline
+		"counts healthy work",                             // cap semantics
+		"envoy wait <job>",                                // the wait that restores the completion signal
+		"only the waiting stops",                          // a stopped task no longer stops the turn
+		"run the stop: command",                           // so the turn is stopped this way
+		"including ones still running",                    // pending lists a turn whose waiter is gone
+		"stops only its waiting and exits by that signal", // timeout, kill and scripts meet this too
 		"EXIT CODES OF A RUN, AND WHAT EACH ONE LICENSES",
 		"6 partial",
 		"claude: low medium high xhigh max", // rendered from the provider map

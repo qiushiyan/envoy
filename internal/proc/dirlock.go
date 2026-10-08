@@ -56,6 +56,17 @@ func DirLockLiveness(dir string) Liveness {
 	return Unknown
 }
 
+// RunnerLiveness is the single reading of whether the process supervising a
+// job is alive. A runner that recorded its claim on dir is alive exactly while
+// the claim is held, which a reused PID cannot fake; one that did not — an
+// older record, or a claim that could not be taken — is known only by its PID.
+func RunnerLiveness(dir string, pid int, claimed bool) Liveness {
+	if claimed {
+		return DirLockLiveness(dir)
+	}
+	return PidLiveness(pid)
+}
+
 // AwaitDirUnlock blocks until no claim on dir is held.
 func AwaitDirUnlock(dir string) error {
 	f, err := os.Open(dir)

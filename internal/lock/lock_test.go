@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/qiushiyan/envoy/internal/proc"
 )
 
 // Redirect the state dir via HOME so tests never touch the real lock store.
@@ -107,5 +109,40 @@ func TestSessionIDSanitizedInPath(t *testing.T) {
 	p := lockPath("weird id/../with:stuff")
 	if strings.ContainsAny(p[strings.LastIndex(p, "/")+1:], " /:") {
 		t.Fatalf("lock filename must be sanitized: %q", p)
+	}
+}
+
+// A holder whose job records a claim on its directory is live exactly while
+// that claim is held. Its PID answering proves nothing: after a crash or a
+// reboot the number can belong to any process, and calling that holder live
+// would send the caller to wait on a turn that is gone.
+func TestAHolderThatClaimedItsJobIsLiveOnlyWhileTheClaimIsHeld(t *testing.T) {
+	isolate(t)
+	outDir := t.TempDir()
+	// The holder's recorded PID is this test process: alive, but not the runner.
+	if err := os.WriteFile(outDir+"/meta.json", []byte(`{"schemaVersion":10,"status":"running","runnerLock":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h, err := Acquire("session-c", outDir, "instance-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Release()
+	_, err = Acquire("session-c", "/tmp/other", "instance-2")
+	conflict, ok := err.(*Conflict)
+	if !ok {
+		t.Fatalf("expected conflict, got %v", err)
+	}
+	if conflict.HolderLive {
+		t.Fatalf("a holder whose claim is free must not read as live: %q", conflict.Error())
+	}
+	claim, err := proc.LockDir(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer claim.Release()
+	_, err = Acquire("session-c", "/tmp/other", "instance-2")
+	if conflict, ok := err.(*Conflict); !ok || !conflict.HolderLive {
+		t.Fatalf("a holder whose claim is held must read as live, got %v", err)
 	}
 }

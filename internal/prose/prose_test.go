@@ -263,7 +263,7 @@ func TestContinueVocabulary(t *testing.T) {
 	}
 
 	blocked := map[ResumeBlockerKind][]string{
-		BlockerRunning:      {"still records status running", "one live turn at a time", "wait for its process to exit"},
+		BlockerRunning:      {"still records status running", "one live turn at a time", "wait for it — envoy wait"},
 		BlockerLockConflict: {"session-lock conflict", "may belong to another job"},
 		BlockerNoSession:    {"never published a session id", "no conversation to continue", "fresh dispatch"},
 	}
@@ -312,7 +312,7 @@ func TestContinueVocabulary(t *testing.T) {
 		want []string
 		not  []string
 	}{
-		{NameHold{Kind: HoldRunning}, []string{"which is still running", "its own caller has collected it"}, []string{"envoy collect", "removing"}},
+		{NameHold{Kind: HoldRunning}, []string{"which is still running", "do not dispatch it again: wait for it — envoy wait", "its own caller has collected it"}, []string{"envoy collect", "removing"}},
 		{NameHold{Kind: HoldRunning, Member: "codex"}, []string{"whose member codex is still running"}, []string{"envoy collect"}},
 		{NameHold{Kind: HoldOtherVersion}, []string{"which is still running under another envoy version", "frees once the envoy process running it has exited", "this envoy version cannot collect it"}, []string{"envoy collect", "its own caller has collected it", "removing"}},
 		{NameHold{Kind: HoldUncollected}, []string{"has not been collected", "yours or its caller is gone", "envoy collect '/jobs/review-r1+2'"}, []string{"removing"}},

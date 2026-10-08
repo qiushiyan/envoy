@@ -85,7 +85,7 @@ func pendingTurn(dir string, stamp *job.Stamp, meta *job.Meta, err error, caller
 		// whether anything is still owed — skipped while its own engine is
 		// provably running it, like any live job — and this engine reads no
 		// further.
-		if stamp.Status == job.StatusRunning && runnerLiveness(dir, stamp.RunnerPid, stamp.RunnerLock) == proc.Live {
+		if stamp.Status == job.StatusRunning && proc.RunnerLiveness(dir, stamp.RunnerPid, stamp.RunnerLock) == proc.Live {
 			return pendingItem{}, false
 		}
 		if stamp.Status != job.StatusRunning && stamp.CollectedAt != nil {
@@ -133,7 +133,7 @@ func pendingGroup(dir, caller string) (pendingItem, bool) {
 	}
 	// Every member runs in the fan-out's one process, so while it lives the
 	// fan-out is one running job, listed like a running turn.
-	if runnerLiveness(dir, group.RunnerPid, group.RunnerLock) == proc.Live {
+	if proc.RunnerLiveness(dir, group.RunnerPid, group.RunnerLock) == proc.Live {
 		if !mayAwait(caller, group.Caller) {
 			return pendingItem{}, false
 		}
@@ -168,7 +168,7 @@ func pendingGroup(dir, caller string) (pendingItem, bool) {
 // a directory that cannot be listed cannot show that nothing is. This engine
 // reads no further, so the entry names the files, not a member.
 func pendingOtherFan(dir string, stamp *job.GroupStamp, other *job.SchemaError, caller string) (pendingItem, bool) {
-	if runnerLiveness(dir, stamp.RunnerPid, stamp.RunnerLock) == proc.Live {
+	if proc.RunnerLiveness(dir, stamp.RunnerPid, stamp.RunnerLock) == proc.Live {
 		return pendingItem{}, false
 	}
 	item := pendingItem{label: "other-schema", dir: dir,

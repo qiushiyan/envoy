@@ -202,8 +202,8 @@ func SessionLock(c *job.LockConflict) string {
 		return *c.Error
 	}
 	if c.HolderLive && c.Holder != nil {
-		return fmt.Sprintf("session %s already has a live turn (pid %d, started %s, job %s). One turn per session: wait for that process to exit, then collect its job: %s",
-			c.SessionID, c.Holder.Pid, c.Holder.StartedAt, c.Holder.Dir, CollectCommand(c.Holder.Dir))
+		return fmt.Sprintf("session %s already has a live turn (pid %d, started %s, job %s). One turn per session: wait for that job — %s — then collect it: %s",
+			c.SessionID, c.Holder.Pid, c.Holder.StartedAt, c.Holder.Dir, WaitCommand(c.Holder.Dir), CollectCommand(c.Holder.Dir))
 	}
 	inspect := ""
 	if c.Holder != nil && c.Holder.Dir != "" {

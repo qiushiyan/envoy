@@ -80,8 +80,6 @@ func turnCount(n int) string {
 	return fmt.Sprintf("%d turns", n)
 }
 
-// FanUndispatched glosses a member that never reached a turn of its own: the
-// one fan-out outcome where nothing ran and nothing was changed.
 // FanMemberEnd is one member as a fan-out's ending block shows it: its
 // directory and status, "" for a member that published none.
 type FanMemberEnd struct {
@@ -110,6 +108,8 @@ func FanEnded(groupDir string, members []FanMemberEnd) string {
 	return b.String()
 }
 
+// FanUndispatched glosses a member that never reached a turn of its own: the
+// one fan-out outcome where nothing ran and nothing was changed.
 func FanUndispatched() string {
 	return "never dispatched — envoy rejected or could not start this member, so nothing ran for it"
 }

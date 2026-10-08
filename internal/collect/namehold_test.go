@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/qiushiyan/envoy/internal/job"
@@ -209,30 +208,5 @@ func TestAClaimedRunnerIsLiveOnlyWhileItsClaimIsHeld(t *testing.T) {
 	defer claim.Release()
 	if got := read(); got != prose.RunLive {
 		t.Fatalf("held claim: state = %q, want %q", got, prose.RunLive)
-	}
-}
-
-// A wait on a turn whose runner is gone without a final record returns at
-// once and says so, leaving the record for collect to reconcile.
-func TestWaitReportsARunnerThatLeftNoFinalRecord(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "job")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	gone := deadPid(t)
-	meta := fmt.Sprintf(`{"schemaVersion":10,"status":"running","provider":"codex","promptState":"accepted","timeoutMin":5,`+
-		`"collectedAt":null,"runnerPid":%d,"runnerLock":true,"providerPid":%d,"providerPgid":%d}`, os.Getpid(), gone, gone)
-	if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte(meta), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	var out, errOut strings.Builder
-	if code := Wait(dir, "", &out, &errOut); code != job.ExitInfra {
-		t.Fatalf("exit = %d, want %d\n%s%s", code, job.ExitInfra, out.String(), errOut.String())
-	}
-	if !strings.Contains(out.String(), prose.EndedUnrecorded(dir)) {
-		t.Fatalf("block must send the caller to collect:\n%s", out.String())
-	}
-	if _, m, _ := job.ReadRecord(dir); m.Status != job.StatusRunning {
-		t.Fatalf("a wait must not reconcile the record, status = %q", m.Status)
 	}
 }

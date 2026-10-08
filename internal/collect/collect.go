@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"time"
 
@@ -62,7 +63,7 @@ func Collect(dir, note string, mode Mode, w, errW io.Writer) int {
 		return job.ExitUsage
 	}
 	var body bytes.Buffer
-	r := renderJob(dir, meta, mode, &body, true)
+	r := renderJob(dir, meta, mode, &body, false)
 	if !deliver(w, errW, withNote(body.Bytes(), note, mode, errW)) {
 		return job.ExitInfra
 	}
@@ -129,10 +130,10 @@ type rendered struct {
 
 // renderJob writes one turn's block into w and reports what a fan-out needs
 // to aggregate its members — status and delivery both — without a second
-// reader of meta.json. showGit is false for a member of a fan-out, where the
-// reviewed range belongs to the whole fan-out and is printed once above the
-// members rather than per member.
-func renderJob(dir string, meta *job.Meta, mode Mode, w io.Writer, showGit bool) rendered {
+// reader of meta.json. section is true when the turn is rendered as a section
+// of its fan-out's block, where what belongs to the whole fan-out — the
+// reviewed range, the stop — is printed once above the members instead.
+func renderJob(dir string, meta *job.Meta, mode Mode, w io.Writer, section bool) rendered {
 	state := classifyRunning(dir, meta)
 	meta = reconcileAbandoned(dir, meta, state)
 	state = classifyRunning(dir, meta)
@@ -160,8 +161,8 @@ func renderJob(dir string, meta *job.Meta, mode Mode, w io.Writer, showGit bool)
 	// and must be given the paths, and --status-only delivers nothing at all.
 	// Nothing is lost either way: meta.json stays the authoritative record.
 	delivered := meta.Status == job.StatusOK && resultErr == nil
-	writePreamble(w, dir, meta, state, !delivered || mode == ModeStatusOnly, showGit)
-	if meta.GitBaseline != nil && showGit {
+	writePreamble(w, dir, meta, state, !delivered || mode == ModeStatusOnly, section)
+	if meta.GitBaseline != nil && !section {
 		printGitSinceBaseline(w, meta.Cwd, *meta.GitBaseline)
 	}
 	// The same read the tier decision was made from, so the block cannot
@@ -182,10 +183,7 @@ func renderJob(dir string, meta *job.Meta, mode Mode, w io.Writer, showGit bool)
 // writePreamble writes everything above the payload: the coordinate and
 // status, then — when the block carries its diagnostic tier — the settings,
 // counts, evidence and log paths, and always the follow-up commands.
-//
-// standalone is false for a member of a fan-out, whose process is the whole
-// fan-out's: stopping it is offered once, for the set, above the members.
-func writePreamble(w io.Writer, dir string, meta *job.Meta, state prose.RunObservation, diagnostic, standalone bool) {
+func writePreamble(w io.Writer, dir string, meta *job.Meta, state prose.RunObservation, diagnostic, section bool) {
 	ws := job.Workspace{Dir: dir}
 	fmt.Fprintf(w, "job: %s\n", dir)
 	if meta.Status == job.StatusRunning {
@@ -271,8 +269,13 @@ func writePreamble(w io.Writer, dir string, meta *job.Meta, state prose.RunObser
 	}
 	// A turn outlives the command that dispatched it, so stopping that
 	// command stops only the waiting; the turn itself is stopped here.
-	if standalone && state.State == prose.RunLive {
+	if !section && state.State == prose.RunLive {
 		fmt.Fprintf(w, "stop: %s\n", prose.StopCommand(state.RunnerPid))
+		// A member read on its own runs in its fan-out's one process, so its
+		// stop is the fan-out's, and stops every member with it.
+		if group := filepath.Dir(dir); job.IsGroupDir(group) {
+			fmt.Fprintf(w, "note: %s\n", prose.StopReachesEveryMember(group))
+		}
 	}
 	if meta.Failure != nil {
 		fmt.Fprintf(w, "error: %s\n", prose.Failure(meta))

@@ -107,6 +107,31 @@ func TestWaitOnAFanOut(t *testing.T) {
 	)
 }
 
+// A fan-out whose members ended differently is waited on to the fan-out's
+// own code, and the wait leaves every member owed to a collect.
+func TestWaitOnAPartialFanOut(t *testing.T) {
+	e := newEnv(t).
+		set("ENVOY_FAKE_SCENARIO_CLAUDE", "partial-failure").
+		set("ENVOY_FAKE_SESSION_ID_CODEX", "codex-session").
+		set("ENVOY_FAKE_SESSION_ID_CLAUDE", "claude-session")
+	outDir := filepath.Join(t.TempDir(), "job")
+	prompt := writePrompt(t, t.TempDir())
+	run := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--with", "claude:opus", "--timeout-min", "1")...)
+	if run.code != 6 {
+		t.Fatalf("dispatch exit = %d, want 6\n%s%s", run.code, run.stdout, run.stderr)
+	}
+	res := runEnvoy(t, e, "wait", outDir)
+	if res.code != run.code {
+		t.Fatalf("wait exit = %d, want the dispatch's %d\n%s%s", res.code, run.code, res.stdout, res.stderr)
+	}
+	mustContain(t, "wait stdout", res.stdout, "member codex: ok", "member claude-opus: failed")
+	for _, m := range []string{"codex", "claude-opus"} {
+		if v := readMeta(t, filepath.Join(outDir, m))["collectedAt"]; v != nil {
+			t.Fatalf("a wait must not stamp member %s collected, got %v", m, v)
+		}
+	}
+}
+
 func TestWaitNeedsAJob(t *testing.T) {
 	res := runEnvoy(t, newEnv(t), "wait")
 	if res.code != 3 || !strings.Contains(res.stderr, "wait takes the job to wait for") {

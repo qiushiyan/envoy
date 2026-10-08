@@ -77,8 +77,8 @@ func ContinueBlocked(dir string, kind ResumeBlockerKind) string {
 	switch kind {
 	case BlockerRunning:
 		return head + "this job still records status running, and a session admits one live turn at a time. " +
-			"If it is genuinely running, wait for its process to exit; if you believe it died, collect it first — " +
-			collect + " — and follow its next line."
+			"If it is genuinely running, wait for it — " + WaitCommand(dir) + " — and continue it once that exits; " +
+			"if you believe it died, collect it first — " + collect + " — and follow its next line."
 	case BlockerLockConflict:
 		return head + "this job's last turn ended in a session-lock conflict, so its session may belong to another job. " +
 			"Collect it first — " + collect + " — and follow its next line before continuing this conversation."

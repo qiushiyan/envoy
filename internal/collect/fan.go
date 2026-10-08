@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/qiushiyan/envoy/internal/job"
@@ -56,7 +57,7 @@ func collectGroup(dir, note string, mode Mode, w, errW io.Writer) int {
 			fmt.Fprintf(&sections, "status: %s\nnext: %s\n", prose.FanMemberUnreadable(), prose.FanMemberUnreadableNext(m.Dir))
 			resumable = false
 		} else {
-			r := renderJob(m.Dir, m.Meta, mode, &sections, false)
+			r := renderJob(m.Dir, m.Meta, mode, &sections, true)
 			status = r.meta.Status
 			if r.undelivered {
 				undelivered = append(undelivered, m.Name)
@@ -101,7 +102,7 @@ func collectGroup(dir, note string, mode Mode, w, errW io.Writer) int {
 		fmt.Fprintf(&body, "members: %s\n", strings.Join(labels, " · "))
 		// Every member runs in the fan-out's one process, so one stop
 		// covers the set.
-		if group.RunnerPid > 0 && runnerLiveness(dir, group.RunnerPid, group.RunnerLock) == proc.Live {
+		if group.RunnerPid > 0 && proc.RunnerLiveness(dir, group.RunnerPid, group.RunnerLock) == proc.Live {
 			fmt.Fprintf(&body, "stop: %s\n", prose.StopCommand(group.RunnerPid))
 		}
 		// The set-level follow-up is offered only when it is provably
@@ -115,7 +116,10 @@ func collectGroup(dir, note string, mode Mode, w, errW io.Writer) int {
 			printGitSinceBaseline(&body, group.Cwd, *group.GitBaseline)
 		}
 		body.Write(sections.Bytes())
-		if mode == ModeStatusOnly {
+		// A fan-out still running is told what to wait for whatever the
+		// mode, as a single turn is; a status check of a finished one says
+		// that it delivered nothing.
+		if mode == ModeStatusOnly && !slices.Contains(statuses, job.StatusRunning) {
 			fmt.Fprintf(&body, "\nnext: %s\n", prose.StatusOnlyNext(dir))
 		} else {
 			fmt.Fprintf(&body, "\nnext: %s\n", closing())

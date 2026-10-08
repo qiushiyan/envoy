@@ -45,35 +45,34 @@ const (
 const controlFd = 3
 
 // Dispatch is the waiter: it runs the dispatch with runArgs in a detached
-// process and returns that dispatch's exit code. When no detached process can
-// be started it runs attached — the dispatch as it always ran, stopping when
-// this process is stopped — and says so.
-func Dispatch(runArgs []string, stdout, stderr io.Writer, attached func() int) int {
+// process and returns that dispatch's exit code. A dispatch whose process
+// cannot be started dispatches nothing: there is one way a turn runs.
+func Dispatch(runArgs []string, stdout, stderr io.Writer) int {
 	jobRef := ""
 	if len(runArgs) > 0 && !strings.HasPrefix(runArgs[0], "-") {
 		jobRef = runArgs[0]
 	}
+	notStarted := func(err error) int {
+		fmt.Fprintln(stderr, prose.DetachFailed(err))
+		return job.ExitInfra
+	}
 	exe, err := os.Executable()
 	if err != nil {
-		fmt.Fprintln(stderr, prose.DetachUnavailable(err))
-		return attached()
+		return notStarted(err)
 	}
 	outR, outW, err := os.Pipe()
 	if err != nil {
-		fmt.Fprintln(stderr, prose.DetachUnavailable(err))
-		return attached()
+		return notStarted(err)
 	}
 	errR, errW, err := os.Pipe()
 	if err != nil {
 		closeAll(outR, outW)
-		fmt.Fprintln(stderr, prose.DetachUnavailable(err))
-		return attached()
+		return notStarted(err)
 	}
 	ctlR, ctlW, err := os.Pipe()
 	if err != nil {
 		closeAll(outR, outW, errR, errW)
-		fmt.Fprintln(stderr, prose.DetachUnavailable(err))
-		return attached()
+		return notStarted(err)
 	}
 
 	// Signals are ours from before the start, so none can take the default
@@ -92,9 +91,7 @@ func Dispatch(runArgs []string, stdout, stderr io.Writer, attached func() int) i
 	closeAll(outW, errW, ctlW)
 	if startErr != nil {
 		closeAll(outR, errR, ctlR)
-		signal.Stop(sigCh)
-		fmt.Fprintln(stderr, prose.DetachUnavailable(startErr))
-		return attached()
+		return notStarted(startErr)
 	}
 	go cmd.Wait() // the intermediate exits at once; reap it
 
@@ -155,7 +152,7 @@ func Dispatch(runArgs []string, stdout, stderr io.Writer, attached func() int) i
 		}
 	}
 	if code < 0 {
-		fmt.Fprintln(stderr, prose.DispatchLost(jobRef))
+		fmt.Fprintln(stderr, prose.DispatchLost())
 		return job.ExitInfra
 	}
 	return code
@@ -194,17 +191,23 @@ func readReports(r *os.File) <-chan report {
 // detached process to init: no longer below the caller in the process tree,
 // and never a session leader, so it can never acquire a controlling terminal.
 func Spawn(runArgs []string) int {
+	ctl := os.NewFile(controlFd, "control")
+	// A detached process that never starts reports nothing, so its exit code
+	// is reported here: nothing was dispatched.
+	notStarted := func(err error) int {
+		fmt.Fprintln(os.Stderr, prose.DetachFailed(err))
+		fmt.Fprintf(ctl, "exit %d\n", job.ExitInfra)
+		return job.ExitInfra
+	}
 	exe, err := os.Executable()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, prose.DetachUnavailable(err))
-		return job.ExitInfra
+		return notStarted(err)
 	}
 	cmd := exec.Command(exe, append([]string{DetachedEntry}, runArgs...)...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	cmd.ExtraFiles = []*os.File{os.NewFile(controlFd, "control")}
+	cmd.ExtraFiles = []*os.File{ctl}
 	if err := cmd.Start(); err != nil {
-		fmt.Fprintln(os.Stderr, prose.DetachUnavailable(err))
-		return job.ExitInfra
+		return notStarted(err)
 	}
 	return job.ExitOK
 }

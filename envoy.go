@@ -323,30 +323,11 @@ func Collect(req CollectRequest) int {
 	case req.StatusOnly:
 		mode = collect.ModeStatusOnly
 	}
-	invocationCwd, err := os.Getwd()
-	if err != nil {
-		fmt.Fprintf(stderr, "collect error: cannot determine cwd: %s\n", err)
-		return ExitInfra
+	dir, note, code, ok := resolveJob(req.Job, "collect", "collect takes the job to print: the name it was run as, or its directory", stderr)
+	if !ok {
+		return code
 	}
-	if req.Job == "" {
-		return usageError(stderr, "collect takes the job to print: the name it was run as, or its directory")
-	}
-	ref, err := job.ResolveRef(req.Job, invocationCwd, job.CallerFromEnv())
-	if msg, ok := unresolvable(err); ok {
-		fmt.Fprintf(stderr, "collect error: %s\n", msg)
-		return ExitInfra
-	}
-	if err != nil {
-		return usageError(stderr, "%s", err)
-	}
-	// A name that did not mean a job of the caller's own says so: the engine
-	// cannot tell work picked up on purpose from a caller whose identity
-	// changed, so it reports which happened and leaves the judgment.
-	note := ""
-	if ref.FellBack {
-		note = prose.NameFellBack(ref.Name, ref.Owner != "")
-	}
-	return collect.Collect(ref.Dir, note, mode, stdout, stderr)
+	return collect.Collect(dir, note, mode, stdout, stderr)
 }
 
 // WaitRequest selects the job to wait for.
@@ -361,27 +342,40 @@ type WaitRequest struct {
 // It delivers nothing: collect is still what reads the result.
 func Wait(req WaitRequest) int {
 	stdout, stderr := defaultWriters(req.Stdout, req.Stderr)
+	dir, note, code, ok := resolveJob(req.Job, "wait", "wait takes the job to wait for: the name it was run as, or its directory", stderr)
+	if !ok {
+		return code
+	}
+	return collect.Wait(dir, note, stdout, stderr)
+}
+
+// resolveJob resolves the job a read names — a name in this project's store,
+// or a directory — to the directory it means to this caller, and the note a
+// name that fell back to another caller's job carries: the engine cannot tell
+// work picked up on purpose from a caller whose identity changed, so it
+// reports which happened and leaves the judgment. verb labels its errors and
+// missing words the refusal of an empty job; ok false means code is the exit.
+func resolveJob(arg, verb, missing string, stderr io.Writer) (dir, note string, code int, ok bool) {
 	invocationCwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintf(stderr, "wait error: cannot determine cwd: %s\n", err)
-		return ExitInfra
+		fmt.Fprintf(stderr, "%s error: cannot determine cwd: %s\n", verb, err)
+		return "", "", ExitInfra, false
 	}
-	if req.Job == "" {
-		return usageError(stderr, "wait takes the job to wait for: the name it was run as, or its directory")
+	if arg == "" {
+		return "", "", usageError(stderr, "%s", missing), false
 	}
-	ref, err := job.ResolveRef(req.Job, invocationCwd, job.CallerFromEnv())
-	if msg, ok := unresolvable(err); ok {
-		fmt.Fprintf(stderr, "wait error: %s\n", msg)
-		return ExitInfra
+	ref, err := job.ResolveRef(arg, invocationCwd, job.CallerFromEnv())
+	if msg, unres := unresolvable(err); unres {
+		fmt.Fprintf(stderr, "%s error: %s\n", verb, msg)
+		return "", "", ExitInfra, false
 	}
 	if err != nil {
-		return usageError(stderr, "%s", err)
+		return "", "", usageError(stderr, "%s", err), false
 	}
-	note := ""
 	if ref.FellBack {
 		note = prose.NameFellBack(ref.Name, ref.Owner != "")
 	}
-	return collect.Wait(ref.Dir, note, stdout, stderr)
+	return ref.Dir, note, 0, true
 }
 
 // Pending prints the discovery-only recovery index for base ("" = the default

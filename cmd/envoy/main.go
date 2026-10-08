@@ -173,6 +173,10 @@ EXIT CODES OF A RUN, AND WHAT EACH ONE LICENSES
   6 partial      fan-out only: some members returned a result and others did
                  not — the results that landed are usable, and only the members
                  that failed need a decision
+  A dispatch that receives SIGTERM or SIGHUP — your session ending, a stopped
+  task, timeout, kill — stops only its waiting and exits by that signal, with
+  none of these codes; its turn runs on, and envoy wait <job> waits for it
+  again. Only Ctrl-C on the dispatch and the stop: command stop the turn.
   A fan-out where no member returned a result exits with its worst member's
   code, so a non-zero code says nothing about the other members: collect
   it and read each member's own status. Collect exits 0 whenever it printed
@@ -214,7 +218,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "run":
 		// The turn runs in a process of its own; this one waits for it.
-		return detach.Dispatch(args[1:], stdout, stderr, func() int { return cmdRun(args[1:], stdout, stderr) })
+		return detach.Dispatch(args[1:], stdout, stderr)
 	case detach.SpawnEntry:
 		return detach.Spawn(args[1:])
 	case detach.DetachedEntry:

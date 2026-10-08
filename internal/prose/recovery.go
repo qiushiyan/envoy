@@ -166,6 +166,20 @@ func EndedUnrecorded(dir string) string {
 		"Collect it for what the evidence shows and the one action to take: " + CollectCommand(dir) + "."
 }
 
+// FanEndedUnrecorded is the status a wait gives a fan-out whose process is
+// gone while some members left no final record, or one this envoy cannot
+// read: neither the dispatch's ending block nor a running status fits them.
+func FanEndedUnrecorded(members []string) string {
+	return fmt.Sprintf("ended — the fan-out's process is gone, and %s left no final record this envoy can read", strings.Join(members, ", "))
+}
+
+// FanEndedUnrecordedNext sends that wait's caller to collect, which reads
+// the rest of the evidence and gives each member its own action.
+func FanEndedUnrecordedNext(groupDir string) string {
+	return "How those members ended is not recorded. Collect the fan-out for what the evidence shows and each member's own action: " +
+		CollectCommand(groupDir) + "."
+}
+
 // RunState classifies a turn still recorded as running by what its processes
 // show. internal/collect decides which applies; the wording is here.
 type RunState string

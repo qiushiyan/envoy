@@ -93,7 +93,7 @@ func NameHold(dir string) (prose.NameHold, bool) {
 	case err != nil:
 		return prose.NameHold{Kind: prose.HoldUnreadable}, true
 	}
-	mayStillStart := runnerLiveness(dir, group.RunnerPid, group.RunnerLock) != proc.Gone
+	mayStillStart := proc.RunnerLiveness(dir, group.RunnerPid, group.RunnerLock) != proc.Gone
 	for _, m := range job.ReadMembers(dir, group) {
 		if errors.Is(m.Err, job.ErrNoRecord) {
 			if mayStillStart {
@@ -116,7 +116,7 @@ func NameHold(dir string) (prose.NameHold, bool) {
 // name, so a hold past the runner would strand it for good, and a manifest
 // that records no runner gives this engine nothing to wait on.
 func otherFanHold(dir string, stamp *job.GroupStamp) (prose.NameHold, bool) {
-	if (stamp.RunnerPid > 0 || stamp.RunnerLock) && runnerLiveness(dir, stamp.RunnerPid, stamp.RunnerLock) != proc.Gone {
+	if (stamp.RunnerPid > 0 || stamp.RunnerLock) && proc.RunnerLiveness(dir, stamp.RunnerPid, stamp.RunnerLock) != proc.Gone {
 		return prose.NameHold{Kind: prose.HoldOtherVersion}, true
 	}
 	return prose.NameHold{}, false
@@ -145,7 +145,7 @@ func stampHold(dir string, stamp *job.Stamp) (prose.NameHold, bool) {
 	case stamp == nil:
 		return prose.NameHold{Kind: prose.HoldUnreadable}, true
 	case stamp.SchemaVersion != job.MetaSchemaVersion:
-		if stamp.Status == job.StatusRunning && runnerLiveness(dir, stamp.RunnerPid, stamp.RunnerLock) != proc.Gone {
+		if stamp.Status == job.StatusRunning && proc.RunnerLiveness(dir, stamp.RunnerPid, stamp.RunnerLock) != proc.Gone {
 			return prose.NameHold{Kind: prose.HoldOtherVersion}, true
 		}
 		return prose.NameHold{}, false
@@ -157,24 +157,13 @@ func stampHold(dir string, stamp *job.Stamp) (prose.NameHold, bool) {
 	return prose.NameHold{}, false
 }
 
-// runnerLiveness is the single reading of whether the process supervising a
-// job is alive. A runner that recorded its claim on dir is alive exactly while
-// the claim is held, which a reused PID cannot fake; one that did not — an
-// older record, or a claim that could not be taken — is known only by its PID.
-func runnerLiveness(dir string, pid int, locked bool) proc.Liveness {
-	if locked {
-		return proc.DirLockLiveness(dir)
-	}
-	return proc.PidLiveness(pid)
-}
-
 // classifyRunning reads a turn recorded as running by what its processes
 // show; a turn that is not running observes nothing.
 func classifyRunning(dir string, meta *job.Meta) prose.RunObservation {
 	if meta.Status != job.StatusRunning {
 		return prose.RunObservation{}
 	}
-	runnerAlive := runnerLiveness(dir, meta.RunnerPid, meta.RunnerLock)
+	runnerAlive := proc.RunnerLiveness(dir, meta.RunnerPid, meta.RunnerLock)
 	pgid := 0
 	if meta.ProviderPgid != nil {
 		pgid = *meta.ProviderPgid

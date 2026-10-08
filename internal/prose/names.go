@@ -93,9 +93,15 @@ func NameHeld(name, dir string, hold NameHold) string {
 	// older one of its own — so the sentence claims no more than "earlier".
 	earlier := fmt.Sprintf(" Collecting %s now reads an earlier job, not a new one.", name)
 	var state, release string
+	redispatch := fmt.Sprintf("Dispatch again under a different name (%s-b, say).", name)
 	switch hold.Kind {
 	case HoldRunning:
 		state = "is still running"
+		// A turn runs in a process of its own, so the caller holding the
+		// name may be the one that dispatched it and lost its wait: sending
+		// it to another name would run the same work twice.
+		redispatch = fmt.Sprintf("If it is the job you meant to dispatch, do not dispatch it again: wait for it — %s — and then collect it. "+
+			"Otherwise dispatch again under a different name (%s-b, say).", WaitCommand(dir), name)
 		release = earlier + " The name frees once that job has finished and its own caller has collected it."
 	case HoldOtherVersion:
 		state = "is still running under another envoy version"
@@ -119,7 +125,6 @@ func NameHeld(name, dir string, hold NameHold) string {
 		state = "holds a record that cannot be read"
 		release = " Inspect that directory before anything reuses its name."
 	}
-	return fmt.Sprintf("nothing was dispatched: the name %s is held by another job, %s, %s %s. "+
-		"Dispatch again under a different name (%s-b, say).%s",
-		name, dir, subject, state, name, release)
+	return fmt.Sprintf("nothing was dispatched: the name %s is held by another job, %s, %s %s. %s%s",
+		name, dir, subject, state, redispatch, release)
 }

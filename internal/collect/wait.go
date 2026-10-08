@@ -54,35 +54,38 @@ func Wait(dir, note string, w, errW io.Writer) int {
 }
 
 func waitTurn(dir string, errW io.Writer) (string, int) {
-	var stamp *job.Stamp
-	var meta *job.Meta
-	var err error
-	for {
-		stamp, meta, err = job.ReadRecord(dir)
-		if stamp == nil || !turnLive(dir, stamp) {
-			break
+	awaitRunner(dir, func() (live, claimed bool) {
+		stamp, err := job.ReadStamp(dir)
+		if err != nil {
+			return false, false
 		}
-		pause(dir, stamp.RunnerLock)
-	}
-	if err != nil {
-		reportUnreadable(dir, err, errW)
+		return turnLive(dir, stamp), stamp.RunnerLock
+	})
+	end := readEnding(dir)
+	switch {
+	case end.err != nil:
+		reportUnreadable(dir, end.err, errW)
 		return "", job.ExitUsage
-	}
-	if meta.Status == job.StatusRunning {
-		return fmt.Sprintf("\nstatus: %s\nnext: %s\n", prose.RunningStatus(classifyRunning(dir, meta)), prose.EndedUnrecorded(dir)),
+	case !end.final():
+		return fmt.Sprintf("\nstatus: %s\nnext: %s\n", prose.RunningStatus(classifyRunning(dir, end.meta)), prose.EndedUnrecorded(dir)),
 			job.ExitInfra
 	}
-	return prose.TurnEnded(dir, meta.Status, job.Deref(meta.SessionID)), job.ExitCodeFor(meta.Status)
+	return prose.TurnEnded(dir, end.meta.Status, job.Deref(end.meta.SessionID)), job.ExitCodeFor(end.meta.Status)
 }
 
+// waitGroup waits for a fan-out's process, then reads each member's ending
+// the way waitTurn reads a turn's. The dispatch's ending block describes a
+// set of members that each ended or never started; a member still recorded
+// as running, or one whose record will not read, did neither, so such a set
+// is reported as an ending the records do not hold, for collect to read.
 func waitGroup(dir string, errW io.Writer) (string, int) {
-	for {
+	awaitRunner(dir, func() (live, claimed bool) {
 		stamp, _, err := job.ReadGroupRecord(dir)
-		if stamp == nil || !groupLive(dir, stamp, err) {
-			break
+		if stamp == nil {
+			return false, false
 		}
-		pause(dir, stamp.RunnerLock)
-	}
+		return groupLive(dir, stamp, err), stamp.RunnerLock
+	})
 	fan, err := job.ReadFan(dir)
 	if err != nil {
 		fmt.Fprintf(errW, "wait error: %s could not be read (%s). Each member's job dir under %s is self-contained — collect one directly to see its result.\n",
@@ -91,43 +94,70 @@ func waitGroup(dir string, errW io.Writer) (string, int) {
 	}
 	members := make([]prose.FanMemberEnd, len(fan.Members))
 	codes := make([]int, len(fan.Members))
+	var unended []string
 	for i, m := range fan.Members {
 		members[i] = prose.FanMemberEnd{Name: m.Name, Dir: m.Dir}
-		// A member with no record never started a provider: the runner
-		// writes its first record before it spawns one. Which refusal
-		// stopped it is not recorded, so its code is the dispatch's default.
-		codes[i] = job.ExitInfra
-		if m.Err == nil {
-			members[i].Status = m.Meta.Status
-			codes[i] = job.ExitCodeFor(m.Meta.Status)
+		switch end := (ending{meta: m.Meta, err: m.Err}); {
+		case end.final():
+			members[i].Status = end.meta.Status
+			codes[i] = job.ExitCodeFor(end.meta.Status)
+		case end.unstarted():
+			// Which refusal stopped it is not recorded, so its code is the
+			// dispatch's default for a member that published no status.
+			codes[i] = job.ExitInfra
+		default:
+			unended = append(unended, m.Name)
 		}
+	}
+	if len(unended) > 0 {
+		return fmt.Sprintf("\nstatus: %s\nnext: %s\n", prose.FanEndedUnrecorded(unended), prose.FanEndedUnrecordedNext(dir)), job.ExitInfra
 	}
 	return prose.FanEnded(dir, members), job.ExitCodeForGroup(codes)
 }
 
+// ending is a turn's record as a wait reads it once the turn's runner is
+// gone: the record, or why there is none to read.
+type ending struct {
+	meta *job.Meta
+	err  error
+}
+
+func readEnding(dir string) ending {
+	_, meta, err := job.ReadRecord(dir)
+	return ending{meta: meta, err: err}
+}
+
+// final is whether the record says how the turn ended.
+func (e ending) final() bool { return e.err == nil && e.meta.Status != job.StatusRunning }
+
+// unstarted is whether the turn never wrote a record. A runner writes its
+// first record before it spawns a provider, so once its process is gone,
+// nothing ran for it.
+func (e ending) unstarted() bool { return errors.Is(e.err, job.ErrNoRecord) }
+
 // turnLive is whether a turn's runner is still running it. A claimed runner
 // is alive exactly while its claim is held — past its final record, until it
-// has released the session lock too. One known only by its PID is alive while
-// its record says running and the PID answers; a finished record ends the
-// wait whatever the PID, which a later process may have reused.
+// has released the session lock too. One known only by its PID is trusted
+// only while its record says running: a finished runner's PID may since have
+// been reused.
 func turnLive(dir string, stamp *job.Stamp) bool {
-	if stamp.RunnerLock {
-		return proc.DirLockLiveness(dir) == proc.Live
+	if proc.RunnerLiveness(dir, stamp.RunnerPid, stamp.RunnerLock) != proc.Live {
+		return false
 	}
-	return stamp.Status == job.StatusRunning && proc.PidLiveness(stamp.RunnerPid) == proc.Live
+	return stamp.RunnerLock || stamp.Status == job.StatusRunning
 }
 
 // groupLive is whether the process supervising a fan-out is still running
-// it, read the way turnLive reads a turn: its claim when it recorded one,
-// otherwise its PID while some member is still recorded as running.
+// it, read the way turnLive reads a turn: by its claim when it recorded one,
+// otherwise by its PID while some member is still recorded as running.
 func groupLive(dir string, stamp *job.GroupStamp, readErr error) bool {
-	if stamp.RunnerLock {
-		return proc.DirLockLiveness(dir) == proc.Live
-	}
-	var other *job.SchemaError
-	if stamp.RunnerPid <= 0 || proc.PidLiveness(stamp.RunnerPid) != proc.Live {
+	if proc.RunnerLiveness(dir, stamp.RunnerPid, stamp.RunnerLock) != proc.Live {
 		return false
 	}
+	if stamp.RunnerLock {
+		return true
+	}
+	var other *job.SchemaError
 	if errors.As(readErr, &other) {
 		// Another version's roster is not read; its members are found by
 		// the records they hold.
@@ -154,11 +184,17 @@ func groupLive(dir string, stamp *job.GroupStamp, readErr error) bool {
 	return false
 }
 
-// pause waits for the next look at a live runner: until its claim is
-// released when it holds one, otherwise one poll interval.
-func pause(dir string, claimed bool) {
-	if claimed && proc.AwaitDirUnlock(dir) == nil {
-		return
+// awaitRunner blocks while look reports the runner alive: on its claim when
+// it holds one, otherwise one poll interval at a time.
+func awaitRunner(dir string, look func() (live, claimed bool)) {
+	for {
+		live, claimed := look()
+		if !live {
+			return
+		}
+		if claimed && proc.AwaitDirUnlock(dir) == nil {
+			continue
+		}
+		time.Sleep(waitPoll)
 	}
-	time.Sleep(waitPoll)
 }
