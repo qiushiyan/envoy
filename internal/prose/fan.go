@@ -180,6 +180,14 @@ func FanNext(groupDir string, statuses []string) string {
 	}
 }
 
+// FanRunnerGone closes a collection of a fan-out whose process is gone while
+// members are still recorded as running: nothing will finish them and
+// nothing is left to wait on, so each member's own section is what to act on.
+func FanRunnerGone() string {
+	return "This fan-out's process is gone, so nothing will finish the members still recorded as running. " +
+		"Each of them carries its own action in its section above — act on it per member."
+}
+
 // FanCollected closes a collection of the whole fan-out, pointing at the
 // payload the way CollectedOK does for a single turn.
 func FanCollected(groupDir string, statuses []string) string {

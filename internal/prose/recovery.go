@@ -168,16 +168,17 @@ func EndedUnrecorded(dir string) string {
 
 // FanEndedUnrecorded is the status a wait gives a fan-out whose process is
 // gone while some members left no final record, or one this envoy cannot
-// read: neither the dispatch's ending block nor a running status fits them.
+// read: neither the dispatch's ending block nor a running status fits them,
+// and a member's provider may yet be alive, so nothing here calls it ended.
 func FanEndedUnrecorded(members []string) string {
-	return fmt.Sprintf("ended — the fan-out's process is gone, and %s left no final record this envoy can read", strings.Join(members, ", "))
+	return fmt.Sprintf("the fan-out's process is gone, and %s left no final record this envoy can read", strings.Join(members, ", "))
 }
 
 // FanEndedUnrecordedNext sends that wait's caller to collect, which reads
 // the rest of the evidence and gives each member its own action.
 func FanEndedUnrecordedNext(groupDir string) string {
-	return "How those members ended is not recorded. Collect the fan-out for what the evidence shows and each member's own action: " +
-		CollectCommand(groupDir) + "."
+	return "What became of those members is not recorded here, and a member's provider may still be running. " +
+		"Collect the fan-out for what the evidence shows and each member's own action: " + CollectCommand(groupDir) + "."
 }
 
 // RunState classifies a turn still recorded as running by what its processes

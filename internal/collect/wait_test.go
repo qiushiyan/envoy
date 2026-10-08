@@ -3,8 +3,10 @@ package collect
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -206,5 +208,38 @@ func TestAClaimedFanOutHoldsForAnUnstartedMemberOnlyWhileClaimed(t *testing.T) {
 	defer claim.Release()
 	if hold, held := NameHold(dir); !held || hold.Kind != prose.HoldUnrecorded || hold.Member != "codex" {
 		t.Fatalf("held claim: hold = %+v, held = %v; want the unstarted member to hold", hold, held)
+	}
+}
+
+// A fan-out whose process is gone while a member's provider lives on is not
+// something a wait can end: the wait returns at once and sends the caller to
+// collect. So collect's closing line defers to each member's own action
+// instead of to a wait, and the two never send a caller round in a loop.
+func TestCollectDefersToMembersWhenTheFanOutsProcessIsGone(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "job")
+	writeClaimedGroup(t, dir, "codex")
+	orphan := exec.Command("sleep", "30")
+	orphan.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := orphan.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { orphan.Process.Kill(); orphan.Wait() }()
+	meta := fmt.Sprintf(`{"schemaVersion":10,"status":"running","provider":"codex","promptState":"accepted","timeoutMin":5,`+
+		`"collectedAt":null,"runnerPid":%d,"runnerLock":true,"providerPid":%d,"providerPgid":%d}`,
+		os.Getpid(), orphan.Process.Pid, orphan.Process.Pid)
+	if err := os.WriteFile(filepath.Join(dir, "codex", "meta.json"), []byte(meta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []Mode{ModeFull, ModeStatusOnly} {
+		var out, errOut strings.Builder
+		Collect(dir, "", mode, &out, &errOut)
+		block := out.String()
+		closing := block[strings.LastIndex(block, "\nnext: "):]
+		if strings.Contains(closing, "envoy wait") || !strings.Contains(closing, "its own action in its section") {
+			t.Errorf("mode %d: the closing line must defer to the members, not a wait:%s", mode, closing)
+		}
+		if !strings.Contains(block, "still alive") {
+			t.Errorf("mode %d: the member's own section must say its provider is still alive:\n%s", mode, block)
+		}
 	}
 }

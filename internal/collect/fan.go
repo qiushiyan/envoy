@@ -77,12 +77,24 @@ func collectGroup(dir, note string, mode Mode, w, errW io.Writer) int {
 		labels = append(labels, m.Name+" "+label)
 	}
 
+	// Every member runs in the fan-out's one process, so its liveness is the
+	// set's: what a stop reaches, and whether a member recorded as running
+	// can still be waited on.
+	live := proc.RunnerLiveness(dir, group.RunnerPid, group.RunnerLock) == proc.Live
+	running := slices.Contains(statuses, job.StatusRunning)
+
 	// The group's closing aggregates delivery alongside status: a member that
 	// reports ok while its payload never printed must not be folded into
-	// "every result above is usable".
+	// "every result above is usable". A member still recorded as running once
+	// the fan-out's process is gone is nothing a wait can end — a wait would
+	// return at once and send the caller back here — so the closing defers to
+	// the action that member's own section prescribes.
 	closing := func() string {
-		if len(undelivered) > 0 {
+		switch {
+		case len(undelivered) > 0:
 			return prose.FanUndeliveredResults(undelivered)
+		case running && !live:
+			return prose.FanRunnerGone()
 		}
 		return prose.FanCollected(dir, statuses)
 	}
@@ -100,9 +112,8 @@ func collectGroup(dir, note string, mode Mode, w, errW io.Writer) int {
 		fmt.Fprintf(&body, "fan-out: %s\n", dir)
 		fmt.Fprintf(&body, "status: %s\n", prose.FanStatusLine(statuses))
 		fmt.Fprintf(&body, "members: %s\n", strings.Join(labels, " · "))
-		// Every member runs in the fan-out's one process, so one stop
-		// covers the set.
-		if group.RunnerPid > 0 && proc.RunnerLiveness(dir, group.RunnerPid, group.RunnerLock) == proc.Live {
+		// One stop covers the set.
+		if live && group.RunnerPid > 0 {
 			fmt.Fprintf(&body, "stop: %s\n", prose.StopCommand(group.RunnerPid))
 		}
 		// The set-level follow-up is offered only when it is provably
@@ -116,10 +127,10 @@ func collectGroup(dir, note string, mode Mode, w, errW io.Writer) int {
 			printGitSinceBaseline(&body, group.Cwd, *group.GitBaseline)
 		}
 		body.Write(sections.Bytes())
-		// A fan-out still running is told what to wait for whatever the
-		// mode, as a single turn is; a status check of a finished one says
-		// that it delivered nothing.
-		if mode == ModeStatusOnly && !slices.Contains(statuses, job.StatusRunning) {
+		// A fan-out with a member still recorded as running gets its closing
+		// whatever the mode, as a single turn does; a status check of a
+		// finished one says that it delivered nothing.
+		if mode == ModeStatusOnly && !running {
 			fmt.Fprintf(&body, "\nnext: %s\n", prose.StatusOnlyNext(dir))
 		} else {
 			fmt.Fprintf(&body, "\nnext: %s\n", closing())
