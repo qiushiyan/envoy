@@ -145,17 +145,7 @@ func (r *run) finish(out provider.Outcome, exit exitResult) {
 	)
 	r.releaseLock()
 
-	w := r.opts.Stdout
-	fmt.Fprintln(w, "")
-	fmt.Fprintf(w, "status: %s\n", prose.StatusLine(out.Status))
-	fmt.Fprintf(w, "result: %s\n", r.ws.ResultPath())
-	fmt.Fprintf(w, "meta: %s\n", r.ws.MetaPath())
-	session := job.Deref(r.meta.SessionID)
-	if session == "" {
-		session = "(none)"
-	}
-	fmt.Fprintf(w, "session: %s\n", session)
-	fmt.Fprintf(w, "next: %s\n", prose.CollectThisJob(r.ws.Dir))
+	fmt.Fprint(r.opts.Stdout, prose.TurnEnded(r.ws.Dir, out.Status, job.Deref(r.meta.SessionID)))
 
 	r.exitCode = job.ExitCodeFor(out.Status)
 }

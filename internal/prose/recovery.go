@@ -143,6 +143,26 @@ func CollectThisJob(outDir string) string {
 	return "Collect and verify this job: " + CollectCommand(outDir) + "."
 }
 
+// TurnEnded is the block a dispatch prints when its turn ends, and the one
+// `envoy wait` prints for it later, read from the same record: how the turn
+// ended, where its files are, its session, and the collect to run next.
+func TurnEnded(dir, status, session string) string {
+	ws := job.Workspace{Dir: dir}
+	if session == "" {
+		session = "(none)"
+	}
+	return fmt.Sprintf("\nstatus: %s\nresult: %s\nmeta: %s\nsession: %s\nnext: %s\n",
+		StatusLine(status), ws.ResultPath(), ws.MetaPath(), session, CollectThisJob(dir))
+}
+
+// EndedUnrecorded is what a wait says of a turn whose process ended without
+// writing how the turn ended: the record cannot say, and collect is what
+// reads the rest of the evidence and prescribes the recovery.
+func EndedUnrecorded(dir string) string {
+	return "This turn's runner is gone and left no final record, so how the turn ended is not recorded. " +
+		"Collect it for what the evidence shows and the one action to take: " + CollectCommand(dir) + "."
+}
+
 // RunState classifies a turn still recorded as running by what its processes
 // show. internal/collect decides which applies; the wording is here.
 type RunState string

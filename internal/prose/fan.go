@@ -82,6 +82,34 @@ func turnCount(n int) string {
 
 // FanUndispatched glosses a member that never reached a turn of its own: the
 // one fan-out outcome where nothing ran and nothing was changed.
+// FanMemberEnd is one member as a fan-out's ending block shows it: its
+// directory and status, "" for a member that published none.
+type FanMemberEnd struct {
+	Name, Dir, Status string
+}
+
+// FanEnded is the block a fan-out dispatch prints once every member is done,
+// and the one `envoy wait` prints for it later: the aggregate, each member's
+// status and result, the manifest, and the one collect that covers them all.
+func FanEnded(groupDir string, members []FanMemberEnd) string {
+	statuses := make([]string, len(members))
+	for i, m := range members {
+		statuses[i] = m.Status
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "\nstatus: %s\n", FanStatusLine(statuses))
+	for _, m := range members {
+		if m.Status == "" {
+			fmt.Fprintf(&b, "member %s: %s\n", m.Name, FanUndispatched())
+			continue
+		}
+		fmt.Fprintf(&b, "member %s: %s · result %s\n", m.Name, StatusLine(m.Status), job.Workspace{Dir: m.Dir}.ResultPath())
+	}
+	fmt.Fprintf(&b, "group: %s\n", job.GroupWorkspace{Dir: groupDir}.GroupPath())
+	fmt.Fprintf(&b, "next: %s\n", FanNext(groupDir, statuses))
+	return b.String()
+}
+
 func FanUndispatched() string {
 	return "never dispatched — envoy rejected or could not start this member, so nothing ran for it"
 }

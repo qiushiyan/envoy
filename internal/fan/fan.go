@@ -193,23 +193,11 @@ func printDispatchBlock(opts Options, gw job.GroupWorkspace) {
 }
 
 func printTerminalBlock(opts Options, outcomes []outcome) {
-	statuses := make([]string, len(outcomes))
+	members := make([]prose.FanMemberEnd, len(outcomes))
 	for i, o := range outcomes {
-		statuses[i] = o.status
+		members[i] = prose.FanMemberEnd{Name: o.name, Dir: o.outDir, Status: o.status}
 	}
-	w := opts.Stdout
-	fmt.Fprintln(w, "")
-	fmt.Fprintf(w, "status: %s\n", prose.FanStatusLine(statuses))
-	for _, o := range outcomes {
-		if o.status == "" {
-			fmt.Fprintf(w, "member %s: %s\n", o.name, prose.FanUndispatched())
-			continue
-		}
-		fmt.Fprintf(w, "member %s: %s · result %s\n", o.name, prose.StatusLine(o.status),
-			job.Workspace{Dir: o.outDir}.ResultPath())
-	}
-	fmt.Fprintf(w, "group: %s\n", job.GroupWorkspace{Dir: opts.OutDir}.GroupPath())
-	fmt.Fprintf(w, "next: %s\n", prose.FanNext(opts.OutDir, statuses))
+	fmt.Fprint(opts.Stdout, prose.FanEnded(opts.OutDir, members))
 }
 
 // prefixWriter labels one member's warnings on the shared stderr and

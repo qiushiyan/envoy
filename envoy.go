@@ -349,6 +349,41 @@ func Collect(req CollectRequest) int {
 	return collect.Collect(ref.Dir, note, mode, stdout, stderr)
 }
 
+// WaitRequest selects the job to wait for.
+type WaitRequest struct {
+	Job    string // the job's name in this project's store, or its directory
+	Stdout io.Writer
+	Stderr io.Writer
+}
+
+// Wait blocks until the job's own process has finished it, then prints the
+// block its dispatch prints on ending and returns the dispatch's exit code.
+// It delivers nothing: collect is still what reads the result.
+func Wait(req WaitRequest) int {
+	stdout, stderr := defaultWriters(req.Stdout, req.Stderr)
+	invocationCwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "wait error: cannot determine cwd: %s\n", err)
+		return ExitInfra
+	}
+	if req.Job == "" {
+		return usageError(stderr, "wait takes the job to wait for: the name it was run as, or its directory")
+	}
+	ref, err := job.ResolveRef(req.Job, invocationCwd, job.CallerFromEnv())
+	if msg, ok := unresolvable(err); ok {
+		fmt.Fprintf(stderr, "wait error: %s\n", msg)
+		return ExitInfra
+	}
+	if err != nil {
+		return usageError(stderr, "%s", err)
+	}
+	note := ""
+	if ref.FellBack {
+		note = prose.NameFellBack(ref.Name, ref.Owner != "")
+	}
+	return collect.Wait(ref.Dir, note, stdout, stderr)
+}
+
 // Pending prints the discovery-only recovery index for base ("" = the default
 // job root for the current directory).
 func Pending(base string, stdout, stderr io.Writer) int {

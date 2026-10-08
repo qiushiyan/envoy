@@ -3,6 +3,7 @@
 //
 //	envoy run <job> [--prompt-file <F>] --with <voice>[=<F>] [--with <voice>…] [flags]
 //	envoy collect [--result-only|--status-only] <job>
+//	envoy wait <job>
 //	envoy pending [--base DIR]
 //	envoy version
 package main
@@ -28,6 +29,7 @@ var usageText = fmt.Sprintf(`envoy — run headless AI-session turns (claude or 
 USAGE
   envoy run <job> [--prompt-file <F>] --with <voice>[=<F>] [--with <voice>…] [flags]
   envoy collect [--result-only|--status-only] <job>
+  envoy wait <job>                block until a running job ends, then say how it ended
   envoy pending [--base DIR]      jobs still needing attention after a missed completion
   envoy version
 
@@ -204,6 +206,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdRun(args[1:], stdout, stderr)
 	case "collect":
 		return cmdCollect(args[1:], stdout, stderr)
+	case "wait":
+		return cmdWait(args[1:], stdout, stderr)
 	case "pending":
 		return cmdPending(args[1:], stdout, stderr)
 	case "version", "--version", "-v":
@@ -314,6 +318,18 @@ func cmdCollect(args []string, stdout, stderr io.Writer) int {
 		Stdout:     stdout,
 		Stderr:     stderr,
 	})
+}
+
+func cmdWait(args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("wait", stderr)
+	if proceed, code := parseFlags(fs, args, stdout); !proceed {
+		return code
+	}
+	if fs.NArg() > 1 {
+		fmt.Fprintf(stderr, "usage error: wait takes exactly one job; %q is extra\n", fs.Arg(1))
+		return envoy.ExitUsage
+	}
+	return envoy.Wait(envoy.WaitRequest{Job: fs.Arg(0), Stdout: stdout, Stderr: stderr})
 }
 
 func cmdPending(args []string, stdout, stderr io.Writer) int {
