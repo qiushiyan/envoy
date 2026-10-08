@@ -89,11 +89,11 @@ func NameHold(dir string) (prose.NameHold, bool) {
 	var other *job.SchemaError
 	switch {
 	case errors.As(err, &other):
-		return otherFanHold(stamp)
+		return otherFanHold(dir, stamp)
 	case err != nil:
 		return prose.NameHold{Kind: prose.HoldUnreadable}, true
 	}
-	mayStillStart := proc.PidLiveness(group.RunnerPid) != proc.Gone
+	mayStillStart := runnerLiveness(dir, group.RunnerPid, group.RunnerLock) != proc.Gone
 	for _, m := range job.ReadMembers(dir, group) {
 		if errors.Is(m.Err, job.ErrNoRecord) {
 			if mayStillStart {
@@ -101,7 +101,7 @@ func NameHold(dir string) (prose.NameHold, bool) {
 			}
 			continue
 		}
-		if hold, held := stampHold(m.Stamp); held {
+		if hold, held := stampHold(m.Dir, m.Stamp); held {
 			hold.Member = m.Name
 			return hold, true
 		}
@@ -115,8 +115,8 @@ func NameHold(dir string) (prose.NameHold, bool) {
 // records, not provably gone. This engine can deliver nothing under that
 // name, so a hold past the runner would strand it for good, and a manifest
 // that records no runner gives this engine nothing to wait on.
-func otherFanHold(stamp *job.GroupStamp) (prose.NameHold, bool) {
-	if stamp.RunnerPid > 0 && proc.PidLiveness(stamp.RunnerPid) != proc.Gone {
+func otherFanHold(dir string, stamp *job.GroupStamp) (prose.NameHold, bool) {
+	if (stamp.RunnerPid > 0 || stamp.RunnerLock) && runnerLiveness(dir, stamp.RunnerPid, stamp.RunnerLock) != proc.Gone {
 		return prose.NameHold{Kind: prose.HoldOtherVersion}, true
 	}
 	return prose.NameHold{}, false
@@ -128,7 +128,7 @@ func turnHold(dir string) (prose.NameHold, bool) {
 		entries, err := os.ReadDir(dir)
 		return prose.NameHold{Kind: prose.HoldUnrecorded, Empty: err == nil && len(entries) == 0}, true
 	}
-	return stampHold(stamp)
+	return stampHold(dir, stamp)
 }
 
 // stampHold is the hold a turn record's stamp places on its name; a nil stamp
@@ -140,12 +140,12 @@ func turnHold(dir string) (prose.NameHold, bool) {
 // be waiting to collect it by the name here — and since no collect of this
 // engine can reconcile it either, holding past the runner would strand the
 // name for good.
-func stampHold(stamp *job.Stamp) (prose.NameHold, bool) {
+func stampHold(dir string, stamp *job.Stamp) (prose.NameHold, bool) {
 	switch {
 	case stamp == nil:
 		return prose.NameHold{Kind: prose.HoldUnreadable}, true
 	case stamp.SchemaVersion != job.MetaSchemaVersion:
-		if stamp.Status == job.StatusRunning && proc.PidLiveness(stamp.RunnerPid) != proc.Gone {
+		if stamp.Status == job.StatusRunning && runnerLiveness(dir, stamp.RunnerPid, stamp.RunnerLock) != proc.Gone {
 			return prose.NameHold{Kind: prose.HoldOtherVersion}, true
 		}
 		return prose.NameHold{}, false
@@ -157,13 +157,24 @@ func stampHold(stamp *job.Stamp) (prose.NameHold, bool) {
 	return prose.NameHold{}, false
 }
 
+// runnerLiveness is the single reading of whether the process supervising a
+// job is alive. A runner that recorded its claim on dir is alive exactly while
+// the claim is held, which a reused PID cannot fake; one that did not — an
+// older record, or a claim that could not be taken — is known only by its PID.
+func runnerLiveness(dir string, pid int, locked bool) proc.Liveness {
+	if locked {
+		return proc.DirLockLiveness(dir)
+	}
+	return proc.PidLiveness(pid)
+}
+
 // classifyRunning reads a turn recorded as running by what its processes
 // show; a turn that is not running observes nothing.
-func classifyRunning(meta *job.Meta) prose.RunObservation {
+func classifyRunning(dir string, meta *job.Meta) prose.RunObservation {
 	if meta.Status != job.StatusRunning {
 		return prose.RunObservation{}
 	}
-	runnerAlive := proc.PidLiveness(meta.RunnerPid)
+	runnerAlive := runnerLiveness(dir, meta.RunnerPid, meta.RunnerLock)
 	pgid := 0
 	if meta.ProviderPgid != nil {
 		pgid = *meta.ProviderPgid

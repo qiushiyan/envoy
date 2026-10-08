@@ -90,6 +90,9 @@ func TestFanDispatchesEveryMemberAsAnOrdinaryTurn(t *testing.T) {
 	if len(members) != 2 || members[0] != "codex" || members[1] != "claude-opus" {
 		t.Fatalf("group.json members = %v", members)
 	}
+	if group["runnerLock"] != true {
+		t.Fatalf("group.json runnerLock = %v, want true", group["runnerLock"])
+	}
 
 	locks, _ := os.ReadDir(filepath.Join(e.home, ".local", "state", "envoy", "locks"))
 	if len(locks) != 0 {

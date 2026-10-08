@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/qiushiyan/envoy/internal/job"
+	"github.com/qiushiyan/envoy/internal/proc"
 	"github.com/qiushiyan/envoy/internal/prose"
 )
 
@@ -170,5 +172,41 @@ func TestNameHoldClassifiesWhatStillHoldsAName(t *testing.T) {
 		if held != c.held || got != c.want {
 			t.Errorf("%s: NameHold = %+v held=%v, want %+v held=%v", c.name, got, held, c.want, c.held)
 		}
+	}
+}
+
+// A runner that recorded its claim on the directory is alive exactly while the
+// claim is held. Its PID answering a probe proves nothing: after a crash or a
+// reboot the number can belong to any process, and reading that as a live
+// runner would leave a turn running forever to every reader.
+func TestAClaimedRunnerIsLiveOnlyWhileItsClaimIsHeld(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "job")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gone := deadPid(t)
+	// The recorded runner PID is this test process: alive, but not the runner.
+	meta := fmt.Sprintf(`{"schemaVersion":10,"status":"running","provider":"codex","promptState":"accepted","timeoutMin":5,`+
+		`"collectedAt":null,"runnerPid":%d,"runnerLock":true,"providerPid":%d,"providerPgid":%d}`, os.Getpid(), gone, gone)
+	if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte(meta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	read := func() prose.RunState {
+		_, m, err := job.ReadRecord(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return classifyRunning(dir, m).State
+	}
+	if got := read(); got != prose.RunAbandoned {
+		t.Fatalf("free claim, live PID: state = %q, want %q", got, prose.RunAbandoned)
+	}
+	claim, err := proc.LockDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer claim.Release()
+	if got := read(); got != prose.RunLive {
+		t.Fatalf("held claim: state = %q, want %q", got, prose.RunLive)
 	}
 }

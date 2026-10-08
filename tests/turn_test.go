@@ -69,6 +69,10 @@ func TestCodexSuccess(t *testing.T) {
 	if meta["providerReportedModel"] != nil {
 		t.Fatalf("codex reports no model; the field must stay null, got %v", meta["providerReportedModel"])
 	}
+	// The runner's claim on its directory is what liveness is read from.
+	if meta["runnerLock"] != true {
+		t.Fatalf("runnerLock = %v, want true", meta["runnerLock"])
+	}
 
 	progress := readFile(t, filepath.Join(outDir, "progress.log"))
 	mustContain(t, "progress.log", progress, "state=starting", "state=accepted", "state=provider-terminal", "state=terminal status=ok")

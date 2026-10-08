@@ -75,6 +75,13 @@ func Run(opts Options) int {
 			return job.ExitInfra
 		}
 	}
+	// The fan-out process claims its directory before the manifest exists,
+	// as each member's runner claims its own; see runner.Run.
+	claim, claimErr := proc.LockDir(opts.OutDir)
+	if claimErr != nil {
+		fmt.Fprintf(opts.Stderr, "envoy: cannot claim the job dir, so its liveness will be read from the runner PID: %s\n", claimErr)
+	}
+	defer claim.Release()
 	group := &job.Group{
 		SchemaVersion: job.GroupSchemaVersion,
 		StartedAt:     job.ISO(startedAt),
@@ -84,6 +91,7 @@ func Run(opts Options) int {
 		Members:       names,
 		Caller:        job.PtrIfNonEmpty(shared.Caller),
 		RunnerPid:     os.Getpid(),
+		RunnerLock:    claimErr == nil,
 	}
 	// The manifest is the record that makes the directory a fan-out: discovery
 	// keys on it, and the reserved name is released when it is absent. So a

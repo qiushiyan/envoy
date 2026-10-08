@@ -79,6 +79,9 @@ type Group struct {
 	// it. A member the roster names with no record may still start while it
 	// lives and never will once it is gone. Absent in older manifests.
 	RunnerPid int `json:"runnerPid,omitempty"`
+	// RunnerLock records that the supervising process held its claim on the
+	// fan-out directory for as long as it ran; see Meta.RunnerLock.
+	RunnerLock bool `json:"runnerLock,omitempty"`
 }
 
 // Marshal renders the canonical on-disk form.
@@ -101,8 +104,9 @@ func (g *Group) WriteFile(path string) error {
 
 // GroupStamp is the part of a fan-out manifest that naming and pending read:
 // who dispatched it and the process supervising it. No group schema has
-// changed what either means (both absent before they were first recorded,
-// which reads as no identity and no known runner), so a stamp is read from a
+// changed what these mean (each absent before it was first recorded, which
+// reads as no identity and no known runner, or one known only by its PID),
+// so a stamp is read from a
 // manifest of any version. The roster is not part of it: its entries changed
 // shape between schemas, so another version's members are found by the
 // records they hold instead (RecordedMembers).
@@ -110,6 +114,7 @@ type GroupStamp struct {
 	SchemaVersion int     `json:"schemaVersion"`
 	Caller        *string `json:"caller"`
 	RunnerPid     int     `json:"runnerPid"`
+	RunnerLock    bool    `json:"runnerLock"`
 }
 
 // ReadGroupRecord reads the fan-out manifest in dir once. Its stamp comes

@@ -133,9 +133,9 @@ type rendered struct {
 // reviewed range belongs to the whole fan-out and is printed once above the
 // members rather than per member.
 func renderJob(dir string, meta *job.Meta, mode Mode, w io.Writer, showGit bool) rendered {
-	state := classifyRunning(meta)
+	state := classifyRunning(dir, meta)
 	meta = reconcileAbandoned(dir, meta, state)
-	state = classifyRunning(meta)
+	state = classifyRunning(dir, meta)
 
 	// The payload is read once, before anything is printed, because whether it
 	// reads is what the rest of the block is shaped around — not a detail

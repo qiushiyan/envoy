@@ -76,7 +76,7 @@ func pendingTurn(dir string, stamp *job.Stamp, meta *job.Meta, err error) (pendi
 		// whether anything is still owed — skipped while its own engine is
 		// provably running it, like any live job — and this engine reads no
 		// further.
-		if stamp.Status == job.StatusRunning && proc.PidLiveness(stamp.RunnerPid) == proc.Live {
+		if stamp.Status == job.StatusRunning && runnerLiveness(dir, stamp.RunnerPid, stamp.RunnerLock) == proc.Live {
 			return pendingItem{}, false
 		}
 		if stamp.Status != job.StatusRunning && stamp.CollectedAt != nil {
@@ -88,7 +88,7 @@ func pendingTurn(dir string, stamp *job.Stamp, meta *job.Meta, err error) (pendi
 		return pendingItem{label: "corrupt", dir: dir,
 			why: prose.PendingUnreadable("meta.json", err), next: prose.PendingUnreadableNext(dir)}, true
 	case meta.Status == job.StatusRunning:
-		state := classifyRunning(meta)
+		state := classifyRunning(dir, meta)
 		if state.State == prose.RunLive {
 			return pendingItem{}, false
 		}
@@ -146,7 +146,7 @@ func pendingGroup(dir string) (pendingItem, bool) {
 // a directory that cannot be listed cannot show that nothing is. This engine
 // reads no further, so the entry names the files, not a member.
 func pendingOtherFan(dir string, stamp *job.GroupStamp, other *job.SchemaError) (pendingItem, bool) {
-	if proc.PidLiveness(stamp.RunnerPid) == proc.Live {
+	if runnerLiveness(dir, stamp.RunnerPid, stamp.RunnerLock) == proc.Live {
 		return pendingItem{}, false
 	}
 	item := pendingItem{label: "other-schema", dir: dir,

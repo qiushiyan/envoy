@@ -46,6 +46,7 @@ func (r *run) initMeta() {
 		ProviderArgv:     append([]string{r.opts.Provider}, r.argv...),
 		CommandPrefix:    commandPrefix(r.opts.Provider),
 		RunnerPid:        os.Getpid(),
+		RunnerLock:       r.claimed,
 		RunnerInstanceID: r.instance,
 		PromptState:      job.PromptUnknown,
 		ResultKind:       job.ResultNone,

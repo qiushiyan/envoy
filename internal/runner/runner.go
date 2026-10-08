@@ -24,6 +24,7 @@ import (
 
 	"github.com/qiushiyan/envoy/internal/job"
 	"github.com/qiushiyan/envoy/internal/lock"
+	"github.com/qiushiyan/envoy/internal/proc"
 	"github.com/qiushiyan/envoy/internal/provider"
 	"github.com/qiushiyan/envoy/internal/text"
 )
@@ -102,6 +103,10 @@ type run struct {
 	argv      []string // provider argv, computed once: spawned and recorded
 
 	sessionLock *lock.Handle
+	// claimed is whether this runner holds its claim on the job directory,
+	// which it keeps until Run returns: past the terminal record and the
+	// session lock's release, so a free claim means the turn is wholly over.
+	claimed bool
 
 	rawFile    *os.File
 	stderrFile *os.File
@@ -183,6 +188,16 @@ func Run(opts Options) Result {
 	if err != nil {
 		fmt.Fprintf(opts.Stderr, "envoy: cannot read prompt file: %s\n", err)
 		return Result{ExitCode: job.ExitInfra}
+	}
+
+	// The claim comes before the first record, so any record that says it
+	// was taken was written while it was held. A turn that cannot take it
+	// still runs, recorded as one known only by its PID.
+	if claim, err := proc.LockDir(outDir); err != nil {
+		fmt.Fprintf(opts.Stderr, "envoy: cannot claim the job dir, so its liveness will be read from the runner PID: %s\n", err)
+	} else {
+		r.claimed = true
+		defer claim.Release()
 	}
 
 	// A known session id (claude, or any continuation) locks before any job

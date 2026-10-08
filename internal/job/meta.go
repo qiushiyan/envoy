@@ -112,6 +112,11 @@ type Meta struct {
 	LastProviderActivityAt    *string  `json:"lastProviderActivityAt"`
 	LastProviderEventType     *string  `json:"lastProviderEventType"`
 	ProviderReportedModel     *string  `json:"providerReportedModel"` // the provider's own announcement; never inferred
+	// RunnerLock records that the runner held its claim on this directory
+	// (proc.DirLock) for as long as it ran, so whether it is still running
+	// is read from that claim rather than from a PID a later process may
+	// reuse. Absent in older records, and when the claim could not be taken.
+	RunnerLock bool `json:"runnerLock,omitempty"`
 	// ConnectionErrors counts the provider's own connection-error events over
 	// the turn. Non-nil only for a driver that observes them (a zero count is
 	// a real observation); nil means the driver never looked.
@@ -169,7 +174,8 @@ var ErrNoRecord = errors.New("no record")
 // dispatched it, whether it is finished and delivered, and the process that
 // supervises it while it runs. No schema change has altered what these fields
 // mean — status, collectedAt and runnerPid since the first schema, caller
-// since it was first recorded (absent before, which reads as no identity) —
+// and runnerLock since they were first recorded (absent before, which reads
+// as no identity and a runner known only by its PID) —
 // so a stamp is read from a record of any version. A schema change must
 // never take a store's names hostage; everything else in a record of another
 // version is still refused by name.
@@ -179,6 +185,7 @@ type Stamp struct {
 	Caller        *string `json:"caller"`
 	CollectedAt   *string `json:"collectedAt"`
 	RunnerPid     int     `json:"runnerPid"`
+	RunnerLock    bool    `json:"runnerLock"`
 }
 
 // SchemaError is a record another schema version wrote: intact, and refused
