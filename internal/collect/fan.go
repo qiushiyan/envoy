@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/qiushiyan/envoy/internal/job"
+	"github.com/qiushiyan/envoy/internal/proc"
 	"github.com/qiushiyan/envoy/internal/prose"
 )
 
@@ -98,6 +99,11 @@ func collectGroup(dir, note string, mode Mode, w, errW io.Writer) int {
 		fmt.Fprintf(&body, "fan-out: %s\n", dir)
 		fmt.Fprintf(&body, "status: %s\n", prose.FanStatusLine(statuses))
 		fmt.Fprintf(&body, "members: %s\n", strings.Join(labels, " · "))
+		// Every member runs in the fan-out's one process, so one stop
+		// covers the set.
+		if group.RunnerPid > 0 && runnerLiveness(dir, group.RunnerPid, group.RunnerLock) == proc.Live {
+			fmt.Fprintf(&body, "stop: %s\n", prose.StopCommand(group.RunnerPid))
+		}
 		// The set-level follow-up is offered only when it is provably
 		// possible: every member finished and holds a session to continue.
 		if resumable {

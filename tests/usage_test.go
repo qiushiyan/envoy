@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -28,7 +27,7 @@ func TestClaudeUsageLiveAndCollected(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		if cmd.ProcessState == nil {
-			cmd.Process.Signal(syscall.SIGTERM)
+			killDispatch(cmd, outDir)
 			cmd.Wait()
 		}
 	})

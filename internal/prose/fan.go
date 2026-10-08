@@ -185,8 +185,9 @@ func FanNext(groupDir string, statuses []string) string {
 func FanCollected(groupDir string, statuses []string) string {
 	switch FanStatus(statuses) {
 	case fanRunning:
-		return "This fan-out has members still running, so the sections above are not final. Wait for its process to exit, " +
-			"then collect it again: " + CollectCommand(groupDir) + "."
+		return "This fan-out has members still running in its own process, so the sections above are not final. " +
+			"If your dispatch of it is still running, let it finish; if not, run this in the background and collect the " +
+			"fan-out once it exits: " + WaitCommand(groupDir) + "."
 	case FanOK:
 		return "the member results above are this fan-out's return value — use them in the step that dispatched it."
 	case fanPartial:

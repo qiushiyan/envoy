@@ -418,7 +418,7 @@ func TestASecondInterruptKillsTheTreeNow(t *testing.T) {
 		if pid > 0 {
 			syscall.Kill(pid, syscall.SIGKILL)
 		}
-		cmd.Process.Kill()
+		killDispatch(cmd, outDir)
 	})
 	waitUntil := func(what string, ok func() bool) {
 		deadline := time.Now().Add(10 * time.Second)
@@ -475,7 +475,7 @@ func TestInterruptRecordsPartialAndResume(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		if time.Now().After(deadline) {
-			cmd.Process.Kill()
+			killDispatch(cmd, outDir)
 			t.Fatalf("provider never accepted; stdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
 		}
 		if data, err := os.ReadFile(filepath.Join(outDir, "meta.json")); err == nil &&

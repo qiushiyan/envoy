@@ -79,3 +79,16 @@ func RedispatchCommand(dir string, m *job.Meta) string {
 func CollectCommand(outDir string) string {
 	return "envoy collect " + text.ShellQuote(outDir)
 }
+
+// WaitCommand blocks until a running job ends and says how it ended; it is
+// the completion signal for a caller that no longer holds the dispatch.
+func WaitCommand(outDir string) string {
+	return "envoy wait " + text.ShellQuote(outDir)
+}
+
+// StopCommand stops a running turn — every member, for a fan-out — the way
+// Ctrl-C on its dispatch does: it interrupts the process running it, which
+// stops the provider tree and records the turn as interrupted.
+func StopCommand(runnerPid int) string {
+	return fmt.Sprintf("kill -INT %d", runnerPid)
+}

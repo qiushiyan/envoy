@@ -26,7 +26,7 @@ import (
 )
 
 // Version of the engine, reported by `envoy version`.
-const Version = "0.12.1"
+const Version = "0.13.0"
 
 // Exit codes: 0 ok · 1 provider failure · 2 infra · 3 usage · 4 timeout ·
 // 5 interrupted · 6 partial (several voices only).
@@ -397,7 +397,7 @@ func Pending(base string, stdout, stderr io.Writer) int {
 		}
 		base = job.DefaultBase(cwd)
 	}
-	return collect.Pending(absOrSelf(base), derived, stdout, stderr)
+	return collect.Pending(absOrSelf(base), derived, job.CallerFromEnv(), stdout, stderr)
 }
 
 func defaultWriters(stdout, stderr io.Writer) (io.Writer, io.Writer) {

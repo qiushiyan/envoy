@@ -257,7 +257,7 @@ func TestLauncherSupervision(t *testing.T) {
 							}
 						}
 					}
-					cmd.Process.Kill()
+					killDispatch(cmd, out)
 				})
 				deadline := time.Now().Add(10 * time.Second)
 				for {

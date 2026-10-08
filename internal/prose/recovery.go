@@ -113,8 +113,11 @@ func DispatchNext(outDir string) string {
 }
 
 // RunningNext is what a caller that collects too early should do instead.
+// The turn runs in a process of its own, so a caller may still be waiting on
+// its dispatch, or may have lost it to a session that ended.
 func RunningNext(outDir string) string {
-	return "This turn is still running. Wait for its process to exit, then collect it again: " + CollectCommand(outDir) + "."
+	return "This turn is still running in its own process. If your dispatch of it is still running, let it finish; " +
+		"if not, run this in the background and collect the job once it exits: " + WaitCommand(outDir) + "."
 }
 
 // CollectedOK closes a successful collection by pointing at the payload.
@@ -237,6 +240,24 @@ func PendingOtherSchemaNext(dir string) string {
 // fan-out, whose results sit one level down, in its members' directories.
 func PendingOtherSchemaFanNext(dir string) string {
 	return fmt.Sprintf("read each member's result.md and meta.json under %s directly, or collect it with the envoy version that wrote it", dir)
+}
+
+// PendingRunning is why a job still running is listed: its caller may have
+// stopped waiting on it, so it may be owed a wait.
+func PendingRunning(observed string) string {
+	return "still running in its own process (" + observed + "); if your dispatch of it is no longer running, nothing will tell you when it ends"
+}
+
+// PendingFanAlive is what a fan-out still running shows: the one process
+// every member runs in.
+func PendingFanAlive() string {
+	return "the process running every member is alive"
+}
+
+// PendingRunningNext is the one action for a running job a caller may have
+// lost: a wait, in the background, whose exit is the completion signal.
+func PendingRunningNext(dir string) string {
+	return "run this in the background and collect the job once it exits: " + WaitCommand(dir)
 }
 
 // PendingUncollected is why a finished job needs attention.

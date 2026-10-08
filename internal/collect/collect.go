@@ -160,7 +160,7 @@ func renderJob(dir string, meta *job.Meta, mode Mode, w io.Writer, showGit bool)
 	// and must be given the paths, and --status-only delivers nothing at all.
 	// Nothing is lost either way: meta.json stays the authoritative record.
 	delivered := meta.Status == job.StatusOK && resultErr == nil
-	writePreamble(w, dir, meta, state, !delivered || mode == ModeStatusOnly)
+	writePreamble(w, dir, meta, state, !delivered || mode == ModeStatusOnly, showGit)
 	if meta.GitBaseline != nil && showGit {
 		printGitSinceBaseline(w, meta.Cwd, *meta.GitBaseline)
 	}
@@ -182,7 +182,10 @@ func renderJob(dir string, meta *job.Meta, mode Mode, w io.Writer, showGit bool)
 // writePreamble writes everything above the payload: the coordinate and
 // status, then — when the block carries its diagnostic tier — the settings,
 // counts, evidence and log paths, and always the follow-up commands.
-func writePreamble(w io.Writer, dir string, meta *job.Meta, state prose.RunObservation, diagnostic bool) {
+//
+// standalone is false for a member of a fan-out, whose process is the whole
+// fan-out's: stopping it is offered once, for the set, above the members.
+func writePreamble(w io.Writer, dir string, meta *job.Meta, state prose.RunObservation, diagnostic, standalone bool) {
 	ws := job.Workspace{Dir: dir}
 	fmt.Fprintf(w, "job: %s\n", dir)
 	if meta.Status == job.StatusRunning {
@@ -265,6 +268,11 @@ func writePreamble(w io.Writer, dir string, meta *job.Meta, state prose.RunObser
 		} else {
 			fmt.Fprintf(w, "resume: %s\n", resume)
 		}
+	}
+	// A turn outlives the command that dispatched it, so stopping that
+	// command stops only the waiting; the turn itself is stopped here.
+	if standalone && state.State == prose.RunLive {
+		fmt.Fprintf(w, "stop: %s\n", prose.StopCommand(state.RunnerPid))
 	}
 	if meta.Failure != nil {
 		fmt.Fprintf(w, "error: %s\n", prose.Failure(meta))

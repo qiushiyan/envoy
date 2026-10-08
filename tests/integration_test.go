@@ -13,7 +13,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 var (
@@ -172,4 +174,46 @@ func mustNotContain(t *testing.T, name, s string, subs ...string) {
 func runArgs(prompt, outDir string, extra ...string) []string {
 	args := []string{"run", outDir, "--prompt-file", prompt}
 	return append(args, extra...)
+}
+
+// stopTurns kills what a dispatch left running under outDir — each turn's
+// provider group and the process running it — and waits until those
+// processes are gone. A dispatch runs its turn in a process of its own, so
+// killing the `envoy run` a test started stops only its waiting; a cleanup
+// that left the rest would leak a runner and a fake provider into a deleted
+// HOME.
+func stopTurns(outDir string) {
+	metas, _ := filepath.Glob(filepath.Join(outDir, "meta.json"))
+	members, _ := filepath.Glob(filepath.Join(outDir, "*", "meta.json"))
+	var runners []int
+	for _, path := range append(metas, members...) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var m map[string]any
+		if json.Unmarshal(data, &m) != nil {
+			continue
+		}
+		if pgid, ok := m["providerPgid"].(float64); ok && pgid > 0 {
+			syscall.Kill(-int(pgid), syscall.SIGKILL)
+		}
+		if pid, ok := m["runnerPid"].(float64); ok && pid > 0 {
+			syscall.Kill(int(pid), syscall.SIGKILL)
+			runners = append(runners, int(pid))
+		}
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for _, pid := range runners {
+		for syscall.Kill(pid, 0) == nil && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
+// killDispatch stops a dispatch a test started and everything it left
+// running.
+func killDispatch(cmd *exec.Cmd, outDir string) {
+	cmd.Process.Kill()
+	stopTurns(outDir)
 }

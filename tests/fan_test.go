@@ -191,7 +191,7 @@ func TestFanInterruptStopsEveryMember(t *testing.T) {
 	deadline := time.Now().Add(15 * time.Second)
 	for {
 		if time.Now().After(deadline) {
-			cmd.Process.Kill()
+			killDispatch(cmd, outDir)
 			t.Fatalf("members never accepted; stdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
 		}
 		accepted := 0

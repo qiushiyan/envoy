@@ -48,7 +48,7 @@ func TestPendingReadsAnotherSchemasFanOut(t *testing.T) {
 	for _, c := range cases {
 		dir := filepath.Join(t.TempDir(), "job")
 		c.build(dir)
-		item, listed := pendingGroup(dir)
+		item, listed := pendingGroup(dir, "")
 		if listed != c.listed {
 			t.Errorf("%s: listed = %v, want %v (%+v)", c.name, listed, c.listed, item)
 			continue

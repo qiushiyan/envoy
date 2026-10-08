@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/qiushiyan/envoy"
+	"github.com/qiushiyan/envoy/internal/detach"
 )
 
 // usageText is the tool description an agent reads before driving envoy. It
@@ -44,6 +45,14 @@ THE LOOP
 
     envoy run review-r1 --prompt-file brief.md --with codex --timeout-min 30
     envoy collect review-r1
+
+  The turn runs in a process of its own, not inside your command. If your
+  session ends or the background task is stopped, only the waiting stops:
+  the turn runs on to its end or its cap. Run envoy wait <job> in the
+  background to be told again when it ends; envoy pending lists a job of yours
+  still running. To stop the turn itself, run the stop: command that
+  envoy collect --status-only <job> prints while it runs; Ctrl-C on the
+  dispatch stops it too.
 
   A <job> is a name (one path segment; letters, digits, . _ -) kept in this
   project's store under ~/.local/state/envoy, or a directory path. A name
@@ -159,7 +168,8 @@ EXIT CODES OF A RUN, AND WHAT EACH ONE LICENSES
   3 usage        flags were rejected, the name is held, or a session is
                  locked; for a single turn, nothing ran
   4 timeout      the cap elapsed — not evidence the provider hung
-  5 interrupted  a signal stopped the turn
+  5 interrupted  a signal stopped the turn — Ctrl-C on the dispatch, or its
+                 stop: command
   6 partial      fan-out only: some members returned a result and others did
                  not — the results that landed are usable, and only the members
                  that failed need a decision
@@ -178,7 +188,7 @@ EXIT CODES OF A RUN, AND WHAT EACH ONE LICENSES
   provider accepted the prompt decides between a safe retry and duplicating
   work that already changed the tree, and the job knows which happened.
   After a crash or restart, `+"`envoy pending`"+` finds the jobs whose completion
-  you may have missed.
+  you may have missed, including ones still running.
 
   Efforts — %s
 `, efforts())
@@ -203,7 +213,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	switch args[0] {
 	case "run":
-		return cmdRun(args[1:], stdout, stderr)
+		// The turn runs in a process of its own; this one waits for it.
+		return detach.Dispatch(args[1:], stdout, stderr, func() int { return cmdRun(args[1:], stdout, stderr) })
+	case detach.SpawnEntry:
+		return detach.Spawn(args[1:])
+	case detach.DetachedEntry:
+		return detach.Serve(func() int { return cmdRun(args[1:], stdout, stderr) })
 	case "collect":
 		return cmdCollect(args[1:], stdout, stderr)
 	case "wait":
