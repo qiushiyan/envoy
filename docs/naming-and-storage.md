@@ -77,9 +77,11 @@ can be observed:
   its absence does not say it was refused: members start independently, and
   one was seen still preparing its turn after its sibling had finished and
   been collected. What says it never will start is the supervising process
-  being gone, so `group.json` records `runnerPid` and a recordless member
-  holds exactly while that process may be alive — which also frees a round in
-  which every member was refused.
+  being gone, so a recordless member holds exactly while that process may be
+  alive — read from its claim on the fan-out directory, or from `runnerPid` in
+  a manifest without one (`docs/turn-lifecycle-and-recovery.md` § A runner is
+  alive while it holds its claim) — which also frees a round in which every
+  member was refused.
 - **Another schema version's job** holds only while its own runner may be
   alive, decided from its stamp alone — what a fan-out's directory lists is no
   part of it. This engine can never deliver that job, so a longer hold would

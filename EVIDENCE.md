@@ -443,3 +443,25 @@ each workaround.
   changes what the category names or something else, and whether any refusal
   arrives in a stream shape the driver misses (a failed claude turn whose
   message says "safeguards" under cause `provider_verdict`).
+- **2026-10-08 — a caller's session ending killed its turns.** Both stores,
+  every turn record (mac's from 2026-09-12, mini's whole; counted 2026-10-08):
+  13 of 788 `interrupted`, every one SIGTERM with the prompt accepted, in five
+  incidents — a tmux server that died, two network drops and two session
+  restarts (one after a usage limit), each followed by Claude Code's "didn't
+  finish before the previous session ended" — for 32.5 minutes of provider
+  time, 15 of them one xhigh codex review. No stop call fell in any window;
+  two deliberate stops of envoy turns predate mac's store (07-30, a brief that
+  grew; 08-02, a suspected hang). Probes showed the teardown: SIGTERM to the
+  task's process group and every descendant, from `TaskStop`, a headless exit
+  and a killed tmux server alike, which only a process outside both survived.
+  Two sessions hand-rolled a detached relaunch within a day — `nohup … &
+  disown` from a foreground call, and a perl double fork — each beside a
+  polling waiter, one matching statuses envoy never writes. What stands
+  (0.13.0): the turn runs in a process of its own, `envoy wait`, the printed
+  stop, and liveness from the runner's claim on its job directory
+  (`docs/turn-lifecycle-and-recovery.md` § A turn outlives its caller). Review
+  caught a fan-out wait that read member endings its own way, and a collect
+  and a wait that sent an orphaned member's caller round a loop. Compare next
+  pass: whether a restarted caller runs `envoy wait` or re-dispatches, whether
+  `stop:` replaces `TaskStop` as the cancel, and whether a script expecting
+  exit 5 from a SIGTERM appears.

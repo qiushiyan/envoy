@@ -22,13 +22,18 @@ envoy run review-r1 --prompt-file brief.md --with @consult-r1/codex --with codex
                               # a continued conversation beside a cold voice
 envoy collect review-r1       # print one job and mark it collected
 envoy collect --status-only review-r1   # the full preamble, no result body, no stamp
+envoy wait review-r1          # lost the dispatch? exits when its turn ends
 envoy pending [--base DIR]    # jobs still needing attention after a missed completion
 envoy version
 ```
 
 The caller names the job, so nothing printed by a dispatch has to be read
 back: run it in the background, let the process exit, then collect by the same
-name. A name means the latest job *your session* dispatched under it, else the
+name. The turn runs in a process of its own, so the session that dispatched it
+can end — tmux dying, a dropped connection — without killing it: the turn runs
+on, `envoy wait <job>` waits for it again, and `envoy pending` lists it. A
+running turn's `stop:` line, printed by collect and pending, stops it, as does
+Ctrl-C on the dispatch. A name means the latest job *your session* dispatched under it, else the
 newest anyone dispatched — which is how a later session picks up earlier work.
 Each dispatch runs in its own directory beside the earlier ones, so sessions
 sharing a checkout reuse the same names without colliding. A voice is
@@ -86,7 +91,8 @@ live turn per session, never auto-reclaimed.
 Exit codes of a run: `0` ok · `1` provider failure · `2` infra · `3` usage ·
 `4` timeout · `5` interrupted · `6` partial (fan-out only: some members
 returned a result and others did not). A fan-out with no result exits with its
-worst member's code; collect exits `0` whenever it printed the job.
+worst member's code; collect exits `0` whenever it printed the job. A dispatch
+sent SIGTERM or SIGHUP exits by that signal and leaves its turn running.
 
 ## Running providers through a launcher
 
@@ -134,8 +140,12 @@ envoy.Run(envoy.RunRequest{Job: "review-r1", With: []string{"codex"}, PromptFile
 envoy.Run(envoy.RunRequest{Job: "consult-r1", With: []string{"codex", "claude:opus"}, PromptFile: "brief.md"})
 envoy.Run(envoy.RunRequest{Job: "consult-r1", With: []string{"codex=survey.md", "claude:opus=critique.md"}})
 envoy.Collect(envoy.CollectRequest{Job: "review-r1"})
+envoy.Wait(envoy.WaitRequest{Job: "review-r1"})
 envoy.Pending(base, os.Stdout, os.Stderr)
 ```
+
+The library runs a dispatch in the calling process; running it in a process of
+its own is the CLI's.
 
 ## Development
 

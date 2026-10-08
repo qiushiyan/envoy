@@ -116,7 +116,8 @@ package-level state — which is what made the fan-out free. Spawning `envoy
 run` subprocesses is rejected: the supervisor would become a second, drifting
 copy of the CLI's argv and validation surface. The cost accepted in exchange
 is blast radius, so a member panic is contained per member rather than taking
-its siblings down.
+its siblings down. The set is also stopped as one: its stop interrupts every
+member, and a member read on its own offers that same stop and says so.
 
 ## Member stdout is dropped, not interleaved
 

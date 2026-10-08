@@ -43,8 +43,9 @@ so a field another schema shaped differently is refused as that schema, not as
 a decode error.
 
 The refusal stops short of naming. A name reads only a record's **stamp** —
-for a turn `caller`, `status`, `collectedAt` and `runnerPid` (`job.Stamp`),
-for a fan-out's manifest `caller` and `runnerPid` (`job.GroupStamp`) — fields
+for a turn `caller`, `status`, `collectedAt`, `runnerPid` and `runnerLock`
+(`job.Stamp`), for a fan-out's manifest `caller`, `runnerPid` and `runnerLock`
+(`job.GroupStamp`) — fields
 whose meaning no schema has changed, so a schema bump leaves every reused name
 in a store resolvable. A meta schema bump run against a real store showed what
 the rule prevents: every Claude Code caller reusing a name was refused, and
@@ -60,7 +61,7 @@ fan-out by the records its member directories hold — and keeps listing one
 whose directory cannot be listed, since that cannot show nothing is owed.
 
 Only a replaced field moves a schema. An optional observation (`usage`,
-`commandPrefix`) keeps the version: existing fields and continuation
+`commandPrefix`, `runnerLock`) keeps the version: existing fields and continuation
 eligibility keep their meaning, and readers treat an absent field as
 unavailable. Bumping for an addition would refuse compatible jobs and force
 callers to change their schema pins; the engine version (`envoy version`)
@@ -73,10 +74,17 @@ boundary.
 marks a delivered deliverable — an ok turn's printed result body, or a non-ok
 turn's full diagnostic block, whose status and recovery are its result. The
 block is rendered in full, written, and stamped only after the write
-succeeded. `--status-only` and `pending` never stamp, since they read
-coordinates without delivering anything, and neither does a collect of an ok
-turn whose `result.md` will not read: the result stays owed and `pending`
+succeeded. `--status-only`, `pending` and `envoy wait` never stamp, since they
+read coordinates without delivering anything, and neither does a collect of an
+ok turn whose `result.md` will not read: the result stays owed and `pending`
 keeps listing the job.
+
+`pending` lists what a caller may still be owed: an uncollected terminal job, a
+record that will not read, a turn whose runner is gone, and a job still
+running — the last only to a caller that could have been waiting on it, the
+same caller or either side without an identity, as a name hold binds. Its
+dispatch may have ended with a session, so it is listed with its wait and its
+stop; anyone else's healthy turn is not theirs to wait on or collect.
 
 The selection flags exist because the block is read by an agent whose context
 the result body and the status preamble compete for. They select sections and

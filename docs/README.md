@@ -42,10 +42,14 @@ when it is supervision and presentation and adds no turn semantics; the
 fan-out is the feature that passed that test (`docs/fan-out.md`).
 
 The adjacent non-responsibilities are settled too. envoy is **not a job
-manager**: the caller's background-task layer owns liveness and completion
+manager**: the caller's background-task layer owns waiting and completion
 notification, and `pending` is only a recovery index over durable files for a
-notification that may have been missed. envoy is **not a sandbox**:
-`--allow-write` is intent, not enforcement (`docs/providers.md` § Permissions).
+notification that may have been missed. The turn's own lifetime is the
+engine's — it runs in a process the caller does not own, bounded by its cap —
+because a caller's lifetime ends for reasons that are no decision about the
+turn (`docs/turn-lifecycle-and-recovery.md` § A turn outlives its caller).
+envoy is **not a sandbox**: `--allow-write` is intent, not enforcement
+(`docs/providers.md` § Permissions).
 
 ## Commitments that hold everywhere
 
@@ -69,7 +73,10 @@ notification that may have been missed. envoy is **not a sandbox**:
   hang or a completion. There is no watch command and no `--detach` mode: a
   watched log once implied live evidence the stream did not carry, and a
   consult lost twenty minutes to a false hang diagnosis (`EVIDENCE.md`,
-  2026-07-11).
+  2026-07-11). `envoy run` blocks until its turn ends even though the turn
+  runs in a process of its own, and `envoy wait` gives that signal back to a
+  caller that lost it; a wait prints nothing until the end, so it reports a
+  completion, never live evidence.
 
 ## Where each decision lives
 
@@ -77,7 +84,8 @@ notification that may have been missed. envoy is **not a sandbox**:
   `docs/naming-and-storage.md`
 - **What `meta.json` and `group.json` hold, schema versions, and how collect
   delivers a job:** `docs/records-and-collection.md`
-- **A turn's lifecycle, the timeout, recovery by prompt state, session locks,
+- **A turn's lifecycle, outliving its caller, waiting for and stopping a turn,
+  runner liveness, the timeout, recovery by prompt state, session locks,
   continuing a conversation:** `docs/turn-lifecycle-and-recovery.md`
 - **Several voices as one job:** `docs/fan-out.md`
 - **Provider drivers, models and effort, permissions, transient errors,
@@ -88,8 +96,9 @@ notification that may have been missed. envoy is **not a sandbox**:
 ## Deliberately not built
 
 - **No daemon, status command, cancel service or job listing.** The caller's
-  background-task layer is the live-job layer, and the caller named the job it
-  wants; `pending` is the one index, and it is recovery, not discovery.
+  background-task layer is the waiting layer, and the caller named the job it
+  wants; a live turn's stop is a printed command, not a service; `pending` is
+  the one index, and it is recovery, not discovery.
 - **No alias translation, effort aliases, model fallbacks or provider
   auto-selection** (`docs/providers.md`).
 - **No group-wide retry and no partial resume of a fan-out**
