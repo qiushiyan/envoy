@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"bufio"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -129,6 +130,51 @@ func TestWaitOnAPartialFanOut(t *testing.T) {
 		if v := readMeta(t, filepath.Join(outDir, m))["collectedAt"]; v != nil {
 			t.Fatalf("a wait must not stamp member %s collected, got %v", m, v)
 		}
+	}
+}
+
+// A wait names the job it resolved to before it blocks, so whoever runs it
+// sees at once which job it is waiting on.
+func TestWaitNamesItsJobBeforeItBlocks(t *testing.T) {
+	e := newEnv(t).
+		set("ENVOY_FAKE_SCENARIO", "delayed-success").
+		set("ENVOY_FAKE_START_DELAY_MS", "0").
+		set("ENVOY_FAKE_DELAY_MS", "60000")
+	outDir := filepath.Join(t.TempDir(), "job")
+	prompt := writePrompt(t, t.TempDir())
+	dispatch := exec.Command(binPath, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "1")...)
+	dispatch.Env = e.build()
+	if err := dispatch.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { killDispatch(dispatch, outDir); dispatch.Wait() })
+	waitForStatus(t, outDir, "running")
+
+	wait := exec.Command(binPath, "wait", outDir)
+	wait.Env = e.build()
+	out, err := wait.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wait.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { wait.Process.Kill(); wait.Wait() })
+	first := make(chan string, 1)
+	go func() {
+		line, _ := bufio.NewReader(out).ReadString('\n')
+		first <- line
+	}()
+	select {
+	case line := <-first:
+		if line != "job: "+outDir+"\n" {
+			t.Fatalf("first line = %q, want the job it waits on", line)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("wait printed nothing while it blocked")
+	}
+	if status := readMeta(t, outDir)["status"]; status != "running" {
+		t.Fatalf("the job line arrived only after the turn ended (status %v)", status)
 	}
 }
 

@@ -35,19 +35,19 @@ var waitPoll = func() time.Duration {
 // whose process ended without a final record is reported as such, and collect
 // decides what that record means.
 func Wait(dir, note string, w, errW io.Writer) int {
+	// The job is named before the wait blocks, so whoever runs it sees at
+	// once which job it waits on — and, from the note, when the name meant
+	// another session's. A coordinate delivers nothing.
+	fmt.Fprintf(w, "job: %s\n", dir)
+	if note != "" {
+		fmt.Fprintf(w, "note: %s\n", note)
+	}
 	var block string
 	var code int
 	if job.IsGroupDir(dir) {
 		block, code = waitGroup(dir, errW)
 	} else {
 		block, code = waitTurn(dir, errW)
-	}
-	if block == "" {
-		return code
-	}
-	fmt.Fprintf(w, "job: %s\n", dir)
-	if note != "" {
-		fmt.Fprintf(w, "note: %s\n", note)
 	}
 	fmt.Fprint(w, block)
 	return code

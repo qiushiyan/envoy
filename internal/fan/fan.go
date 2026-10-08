@@ -189,6 +189,8 @@ func printDispatchBlock(opts Options, gw job.GroupWorkspace) {
 	if shared.Baseline != "" {
 		fmt.Fprintf(w, "baseline: %s\n", shared.Baseline)
 	}
+	// Every member runs in this process, so one stop covers the set.
+	fmt.Fprintf(w, "stop: %s\n", prose.StopCommand(os.Getpid()))
 	fmt.Fprintf(w, "next: %s\n", prose.FanDispatchNext(gw.Dir))
 }
 

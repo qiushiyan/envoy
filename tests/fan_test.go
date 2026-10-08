@@ -93,6 +93,11 @@ func TestFanDispatchesEveryMemberAsAnOrdinaryTurn(t *testing.T) {
 	if group["runnerLock"] != true {
 		t.Fatalf("group.json runnerLock = %v, want true", group["runnerLock"])
 	}
+	// One stop, naming the process every member runs in, covers the set.
+	stop := fmt.Sprintf("stop: kill -INT %d", int(group["runnerPid"].(float64)))
+	if n := strings.Count(res.stdout, "stop: "); n != 1 || !strings.Contains(res.stdout, stop) {
+		t.Fatalf("dispatch must print %q once, printed %d stop lines:\n%s", stop, n, res.stdout)
+	}
 
 	locks, _ := os.ReadDir(filepath.Join(e.home, ".local", "state", "envoy", "locks"))
 	if len(locks) != 0 {

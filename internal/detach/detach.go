@@ -144,7 +144,7 @@ func Dispatch(runArgs []string, stdout, stderr io.Writer) int {
 			// SIGTERM and SIGHUP are what a harness or a terminal sends
 			// when the caller is going away, and the only way it stops a
 			// background task: they stop the waiting, never the turn.
-			fmt.Fprintln(stderr, prose.StoppedWaiting(proc.SignalName(sig), jobRef))
+			fmt.Fprintln(stderr, prose.StoppedWaiting(proc.SignalName(sig), jobRef, pid))
 			signal.Reset(sig)
 			s := sig.(syscall.Signal)
 			syscall.Kill(os.Getpid(), s)

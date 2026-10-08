@@ -73,6 +73,8 @@ func TestCodexSuccess(t *testing.T) {
 	if meta["runnerLock"] != true {
 		t.Fatalf("runnerLock = %v, want true", meta["runnerLock"])
 	}
+	// The dispatch names the process its turn runs in, which is what stops it.
+	mustContain(t, "stdout", res.stdout, fmt.Sprintf("stop: kill -INT %d", int(meta["runnerPid"].(float64))))
 
 	progress := readFile(t, filepath.Join(outDir, "progress.log"))
 	mustContain(t, "progress.log", progress, "state=starting", "state=accepted", "state=provider-terminal", "state=terminal status=ok")

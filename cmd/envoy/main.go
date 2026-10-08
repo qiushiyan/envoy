@@ -50,9 +50,9 @@ THE LOOP
   session ends or the background task is stopped, only the waiting stops:
   the turn runs on to its end or its cap. Run envoy wait <job> in the
   background to be told again when it ends; envoy pending lists a job of yours
-  still running. To stop the turn itself, run the stop: command that
-  envoy collect --status-only <job> prints while it runs; Ctrl-C on the
-  dispatch stops it too.
+  still running. To stop the turn itself, run the stop: command the dispatch
+  prints as it starts, which envoy collect --status-only <job> also prints
+  while it runs; Ctrl-C on the dispatch stops it too.
 
   A <job> is a name (one path segment; letters, digits, . _ -) kept in this
   project's store under ~/.local/state/envoy, or a directory path. A name

@@ -12,14 +12,20 @@ import (
 
 // StoppedWaiting is what a waiter says when the caller's environment stops
 // it: the waiting ended and the turn did not, with the commands that wait for
-// it again and that stop it. jobRef is the job as the caller named it.
-func StoppedWaiting(signalName, jobRef string) string {
+// it again and that stop it. jobRef is the job as the caller named it, and
+// pid the process running the dispatch, 0 when it never reported one.
+func StoppedWaiting(signalName, jobRef string, pid int) string {
 	msg := fmt.Sprintf("envoy: received %s, so this command stopped waiting; the turn keeps running in its own process, to its end or its cap.", signalName)
-	if jobRef == "" {
-		return msg
+	if jobRef != "" {
+		msg += " Wait for it again: envoy wait " + text.ShellQuote(jobRef) + "."
 	}
-	ref := text.ShellQuote(jobRef)
-	return msg + " Wait for it again: envoy wait " + ref + ". To stop the turn itself, run the stop: command that envoy collect --status-only " + ref + " prints."
+	switch {
+	case pid > 0:
+		msg += " To stop the turn itself: " + StopCommand(pid) + "."
+	case jobRef != "":
+		msg += " To stop the turn itself, run the stop: command that envoy collect --status-only " + text.ShellQuote(jobRef) + " prints."
+	}
+	return msg
 }
 
 // DispatchLost is what a waiter says when the process running the dispatch

@@ -32,8 +32,8 @@ back: run it in the background, let the process exit, then collect by the same
 name. The turn runs in a process of its own, so the session that dispatched it
 can end — tmux dying, a dropped connection — without killing it: the turn runs
 on, `envoy wait <job>` waits for it again, and `envoy pending` lists it. A
-running turn's `stop:` line, printed by collect and pending, stops it, as does
-Ctrl-C on the dispatch. A name means the latest job *your session* dispatched under it, else the
+running turn's `stop:` line — printed as the dispatch starts, and by collect
+and pending — stops it, as does Ctrl-C on the dispatch. A name means the latest job *your session* dispatched under it, else the
 newest anyone dispatched — which is how a later session picks up earlier work.
 Each dispatch runs in its own directory beside the earlier ones, so sessions
 sharing a checkout reuse the same names without colliding. A voice is

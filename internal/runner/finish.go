@@ -82,6 +82,9 @@ func (r *run) printStartupBlock() {
 	if r.opts.ResumedFrom != "" {
 		fmt.Fprintf(w, "resumed-from: %s\n", r.opts.ResumedFrom)
 	}
+	// The turn runs in this process, which the caller's own stop does not
+	// reach, so the dispatch says from its first lines how to stop it.
+	fmt.Fprintf(w, "stop: %s\n", prose.StopCommand(os.Getpid()))
 	fmt.Fprintf(w, "next: %s\n", prose.DispatchNext(r.ws.Dir))
 }
 

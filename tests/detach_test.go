@@ -95,6 +95,7 @@ func TestATurnOutlivesItsCaller(t *testing.T) {
 			mustContain(t, "dispatch stderr", stderr.String(),
 				"received "+name+", so this command stopped waiting; the turn keeps running",
 				"envoy wait '"+outDir+"'",
+				fmt.Sprintf("To stop the turn itself: kill -INT %d.", int(readMeta(t, outDir)["runnerPid"].(float64))),
 			)
 
 			res := runEnvoy(t, e, "wait", outDir)

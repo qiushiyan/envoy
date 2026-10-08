@@ -48,13 +48,13 @@ terminal sends, and the only way Claude Code stops a task — stop the waiting
 alone: the waiter says so and dies by that signal, and the turn runs on to its
 end or its cap. That takes the task layer's cancel away, and callers do cancel —
 a brief that grew, a suspected hang — so a live turn shows its **stop**, `kill
--INT <runner pid>`, wherever it is shown: collect, once for a whole fan-out, and
-`pending`. It is a printed command, not a verb; a cancel service stays a
-non-goal.
+-INT <runner pid>`, wherever it is shown: the dispatch's first lines and the
+waiter's last, collect — once for a whole fan-out — and `pending`. It is a
+printed command, not a verb; a cancel service stays a non-goal.
 
 **`envoy wait <job>`** gives a caller that lost its waiter the completion signal
-back: it blocks on the runner's claim, then prints the block the dispatch ends
-on and exits with the dispatch's code. A wait delivers nothing — no result, no
+back: it names the job it resolved to, blocks on the runner's claim, then
+prints the block the dispatch ends on and exits with the dispatch's code. A wait delivers nothing — no result, no
 stamp, no reconciliation — because a background command's output reaches no
 reader, and its block sends the caller to collect. A turn whose runner left no
 final record, or a fan-out with a member that did, is reported as an ending the
