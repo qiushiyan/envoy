@@ -16,7 +16,14 @@ const sessionId = perProvider('ENVOY_FAKE_SESSION_ID', 'fake-session-id');
 const finalText = process.env.ENVOY_FAKE_FINAL_TEXT ?? 'fake provider result';
 const invocationFile = perProvider('ENVOY_FAKE_INVOCATION_FILE', '');
 if (invocationFile) {
-  fs.writeFileSync(invocationFile, JSON.stringify({ argv: providerArgs, env: process.env, pid: process.pid }));
+  // The system-level text a launch was handed, read as the real CLI would: at
+  // launch, from the file named, so a test sees what the provider received.
+  const appendAt = providerArgs.indexOf('--append-system-prompt-file');
+  const appendedSystemPrompt = appendAt >= 0 ? fs.readFileSync(providerArgs[appendAt + 1], 'utf8') : null;
+  fs.writeFileSync(
+    invocationFile,
+    JSON.stringify({ argv: providerArgs, env: process.env, pid: process.pid, appendedSystemPrompt }),
+  );
 }
 
 // A turn that itself drives envoy: the command runs once, in the provider's

@@ -218,6 +218,10 @@ func FanResumeBlockerLine(member string, kind ResumeBlockerKind, detail string) 
 		return fmt.Sprintf("member %s is still running", member)
 	case BlockerLockConflict:
 		return fmt.Sprintf("member %s's last turn ended in a session-lock conflict, so its session may belong to another job", member)
+	case BlockerInstructionsMissing:
+		return fmt.Sprintf("member %s was sent standing instructions, and their archive is missing or will not read", member)
+	case BlockerInstructionsChanged:
+		return fmt.Sprintf("member %s's standing instructions archive no longer holds the text it was sent", member)
 	default: // BlockerNoSession
 		return fmt.Sprintf("member %s never published a session id, so it has no conversation to continue", member)
 	}

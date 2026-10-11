@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/qiushiyan/envoy/internal/collect"
 	"github.com/qiushiyan/envoy/internal/fan"
@@ -26,7 +27,7 @@ import (
 )
 
 // Version of the engine, reported by `envoy version`.
-const Version = "0.13.1"
+const Version = "0.14.0"
 
 // Exit codes: 0 ok · 1 provider failure · 2 infra · 3 usage · 4 timeout ·
 // 5 interrupted · 6 partial (several voices only).
@@ -53,18 +54,26 @@ const (
 // Zero values mean the current directory for Cwd and the engine's 30-minute
 // safety cap for TimeoutMin. Running uncapped requires saying so with
 // NoTimeout: the dangerous state must not be the zero value. A continued
-// voice inherits its provider, session, model, effort, cwd, baseline and
-// write intent from the job's own records; explicit Cwd and Baseline win, and
-// AllowWrite may only widen a single continued voice, never narrow it.
+// voice inherits its provider, session, model, effort, cwd, baseline, write
+// intent and standing instructions from the job's own records; explicit Cwd
+// and Baseline win, and AllowWrite may only widen a single continued voice,
+// never narrow it.
+//
+// InstructionsFile holds the standing instructions of every conversation the
+// job starts: system-level text the provider receives beside each turn's
+// prompt, archived in the job directory and passed again on every turn that
+// continues the conversation. A conversation keeps the instructions it
+// started with, so on a continued voice the file must match them.
 type RunRequest struct {
-	Job        string
-	With       []string
-	PromptFile string
-	Baseline   string
-	AllowWrite bool
-	Cwd        string
-	TimeoutMin float64 // hard wall-clock cap in minutes; 0 = the 30-minute default
-	NoTimeout  bool    // explicitly disable the cap (leave TimeoutMin zero)
+	Job              string
+	With             []string
+	PromptFile       string
+	InstructionsFile string
+	Baseline         string
+	AllowWrite       bool
+	Cwd              string
+	TimeoutMin       float64 // hard wall-clock cap in minutes; 0 = the 30-minute default
+	NoTimeout        bool    // explicitly disable the cap (leave TimeoutMin zero)
 	// MaxBudgetUSD caps one claude voice's spend — the safety a program
 	// dispatching unattended turns needs; nil = no cap.
 	MaxBudgetUSD *float64
@@ -134,8 +143,15 @@ func Run(req RunRequest) int {
 		return usageError(stderr, "%s", err)
 	}
 
+	instructions := ""
+	if req.InstructionsFile != "" {
+		if instructions, err = readInstructions(req.InstructionsFile); err != nil {
+			return usageError(stderr, "instructions file %s", err)
+		}
+	}
+
 	caller := job.CallerFromEnv()
-	turns, errText := resolveTurns(req, invocationCwd, caller, timeoutMin)
+	turns, errText := resolveTurns(req, instructions, invocationCwd, caller, timeoutMin)
 	if errText != "" {
 		return usageError(stderr, "%s", errText)
 	}
@@ -287,6 +303,27 @@ func promptReadable(path string) error {
 	}
 	f.Close()
 	return nil
+}
+
+// readInstructions reads the standing instructions once, before anything is
+// reserved; that one read is what every turn of the job is sent and archives.
+// They are text a conversation keeps for its lifetime, so an empty file — a
+// conversation with none is one dispatched without the flag — or one that is
+// not UTF-8 is a mistake to refuse, not a text to carry on.
+func readInstructions(path string) (string, error) {
+	if err := promptReadable(path); err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(path)
+	switch {
+	case err != nil:
+		return "", fmt.Errorf("cannot be read: %s", err)
+	case strings.TrimSpace(string(data)) == "":
+		return "", fmt.Errorf("is empty: %s; a conversation without standing instructions is dispatched without --instructions-file", path)
+	case !utf8.Valid(data):
+		return "", fmt.Errorf("is not UTF-8 text: %s", path)
+	}
+	return string(data), nil
 }
 
 // releaseIfUnstarted gives a reserved name back when nothing ran under it: a

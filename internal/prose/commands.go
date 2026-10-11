@@ -48,7 +48,9 @@ func voiceSpec(provider, model, effort string) string {
 // name. It repeats the dispatch it replaces: the same conversation when the
 // turn was a continuation (a
 // cold voice would start a different one), the recorded tree, anchor, write
-// intent, cap and spend cap, and the prompt exactly as the job archived it.
+// intent, cap and spend cap, and the prompt exactly as the job archived it —
+// with the standing instructions as archived too when the turn started its
+// conversation; a continuation carries its own on from the source.
 // The new dispatch reads its own environment, including the launcher prefix;
 // CommandPrefix is an observation, not a setting this command replays.
 func RedispatchCommand(dir string, m *job.Meta) string {
@@ -58,6 +60,9 @@ func RedispatchCommand(dir string, m *job.Meta) string {
 	}
 	parts := []string{"envoy run", jobPlaceholder, "--with " + voice,
 		"--prompt-file " + text.ShellQuote(job.Workspace{Dir: dir}.PromptPath())}
+	if m.InstructionsSha256 != nil && m.ResumedFrom == nil {
+		parts = append(parts, "--instructions-file "+text.ShellQuote(job.Workspace{Dir: dir}.InstructionsPath()))
+	}
 	if m.AllowWrite {
 		parts = append(parts, "--allow-write")
 	}

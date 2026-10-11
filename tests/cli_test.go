@@ -72,7 +72,14 @@ func TestHelpIsSelfSufficient(t *testing.T) {
 		"stands alone",                                // a fan-out reference
 		"--with <voice>=<file>",                       // a voice's own prompt
 		"--with @consult-r1=round2.md",                // a round on one NEW prompt
+		"--instructions-file F",                       // standing instructions
+		"write intent and standing instructions from the job's own records", // carried on by a continuation
 		"WHAT A JOB LEAVES BEHIND",
+		"instructions.md  the standing instructions it was sent",
+		"so the session keeps them after its context is compacted", // why they ride every turn
+		"never needs to repeat them",
+		"and refuses a different one",
+		"replacing any in its own config", // codex's developer_instructions
 		"RUNNING PROVIDERS THROUGH A LAUNCHER",
 		"ENVOY_CODEX_CMD=\"headroom launch --vendor codex --\"",
 		"ENVOY_CLAUDE_CMD=\"headroom launch --\"",

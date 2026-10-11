@@ -184,6 +184,9 @@ func printDispatchBlock(opts Options, gw job.GroupWorkspace) {
 		if t.Options.ResumedFrom != "" {
 			fmt.Fprintf(w, " · continues %s", t.Options.ResumedFrom)
 		}
+		if t.Options.Turn.Instructions != "" {
+			fmt.Fprint(w, " · standing instructions")
+		}
 		fmt.Fprintln(w)
 	}
 	if shared.Baseline != "" {

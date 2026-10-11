@@ -99,8 +99,9 @@ VOICES
   reference counts as its members. Members never see each other's output. A
   fan-out is read-only: its members share one working tree.
 
-  A continued voice takes its provider, session, model, effort, tree, baseline
-  and write intent from the job's own records; --cwd and --baseline override.
+  A continued voice takes its provider, session, model, effort, tree, baseline,
+  write intent and standing instructions from the job's own records; --cwd
+  and --baseline override.
   Provider and model cannot change across a continuation. A fan-out reference
   stands alone: to seat one of its members beside others, name the member.
 
@@ -108,6 +109,10 @@ FLAGS
   --prompt-file F   the whole prompt for every voice without its own; required
                     unless each voice carries one. Copied into the job dir
   --with VOICE      once per voice (required); see VOICES
+  --instructions-file F
+                    standing instructions for each conversation the job
+                    starts, sent as system-level text beside every turn's
+                    prompt; see Standing instructions below
   --timeout-min N   wall-clock safety cap in minutes, 0 = off (default 30);
                     each member of a fan-out gets it separately
   --cwd DIR         directory the session works in (default: current dir)
@@ -129,12 +134,14 @@ RUNNING PROVIDERS THROUGH A LAUNCHER
   stderr.log preserves launcher stderr, and stderr alone does not mean failure.
 
 WHAT A JOB LEAVES BEHIND
-  result.md     the answer — this is the return value
-  prompt.md     exactly what was sent
-  meta.json     status, session id, and recovery coordinates
-  progress.log  lifecycle milestones and a heartbeat
-  raw.log       the provider's own event stream, verbatim
-  stderr.log    the provider's stderr
+  result.md        the answer — this is the return value
+  prompt.md        exactly what was sent
+  instructions.md  the standing instructions it was sent, when its
+                   conversation has them
+  meta.json        status, session id, and recovery coordinates
+  progress.log     lifecycle milestones and a heartbeat
+  raw.log          the provider's own event stream, verbatim
+  stderr.log       the provider's stderr
   A fan-out holds group.json and one such directory per member, named after
   the member (codex, claude-opus, codex-2 …).
 
@@ -157,6 +164,19 @@ FACTS THE FLAGS CANNOT TELL YOU
   own. It takes a NEW prompt file, since re-sending the original repeats work
   the provider already did. One live turn per session: continuing a job that
   is still running, or whose session may belong to another job, is refused.
+
+  Standing instructions. Rules that hold for every turn of a conversation —
+  working unattended, what stays out of commits — go in --instructions-file
+  once, when the conversation starts, instead of in each turn's prompt. The
+  provider receives them as system-level text, codex as its
+  developer_instructions setting, replacing any in its own config. Every turn
+  that continues the conversation passes them again from the job's records,
+  so the session keeps them after its context is compacted; a turn's prompt
+  never needs to repeat them. A conversation keeps the instructions it
+  started with: a continuation accepts --instructions-file only when the file
+  matches them, and refuses a different one, or any for a conversation that
+  started without, because the session would go on holding its first text.
+  A one-turn exception belongs in that turn's prompt.
 
   The cap bounds wall-clock time as a safety net, not a stall detector — it
   counts healthy work, so reaching it never proves a hang.
@@ -280,6 +300,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) int {
 	var with stringList
 	fs.Var(&with, "with", "")
 	fs.StringVar(&req.PromptFile, "prompt-file", "", "")
+	fs.StringVar(&req.InstructionsFile, "instructions-file", "", "")
 	fs.StringVar(&req.Baseline, "baseline", "", "")
 	fs.BoolVar(&req.AllowWrite, "allow-write", false, "")
 	fs.StringVar(&req.Cwd, "cwd", "", "")

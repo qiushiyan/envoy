@@ -211,6 +211,14 @@ func writePreamble(w io.Writer, dir string, meta *job.Meta, state prose.RunObser
 			fmt.Fprintln(w, line)
 		}
 	}
+	// What the session was set up with is a setting like the model, held back
+	// with it — unless the archive no longer supplies it, which is why the
+	// block offers no resume: and so is printed whatever the tier.
+	if meta.InstructionsSha256 != nil {
+		if _, problem := job.ReadInstructions(dir, meta); diagnostic || problem != "" {
+			fmt.Fprintf(w, "instructions: %s\n", prose.InstructionsArchive(dir, problem))
+		}
+	}
 	if meta.DurationMs != nil {
 		costSuffix := ""
 		if meta.CostUSD != nil {

@@ -65,7 +65,7 @@ func collectGroup(dir, note string, mode Mode, w, errW io.Writer) int {
 			if r.stamp {
 				stamps = append(stamps, stampable{m.Dir, r.meta})
 			}
-			if _, blocked := continuationBlocker(r.meta); blocked {
+			if _, blocked := continuationBlocker(m.Dir, r.meta); blocked {
 				resumable = false
 			}
 		}

@@ -21,32 +21,57 @@ import (
 // and the @<job> inspection at dispatch. One definition means no surface can
 // advertise a follow-up that dispatch would refuse. A recorded session-lock
 // conflict blocks because the session may belong to another job.
-func continuationBlocker(meta *job.Meta) (prose.ResumeBlockerKind, bool) {
+func continuationBlocker(dir string, meta *job.Meta) (prose.ResumeBlockerKind, bool) {
+	_, kind, blocked := continuation(dir, meta)
+	return kind, blocked
+}
+
+// continuation is continuationBlocker's definition, which also hands back the
+// standing instructions a continuation carries on. A conversation whose
+// record names instructions continues only with them: every launch re-passes
+// them, so one without them would leave the session bare after its next
+// compaction — and an archive that is gone or edited cannot supply them.
+func continuation(dir string, meta *job.Meta) (string, prose.ResumeBlockerKind, bool) {
 	switch {
 	case meta == nil:
-		return prose.BlockerUnreadableMeta, true
+		return "", prose.BlockerUnreadableMeta, true
 	case meta.Status == job.StatusRunning:
-		return prose.BlockerRunning, true
+		return "", prose.BlockerRunning, true
 	case meta.SessionLockConflict != nil:
-		return prose.BlockerLockConflict, true
+		return "", prose.BlockerLockConflict, true
 	case meta.SessionID == nil:
-		return prose.BlockerNoSession, true
+		return "", prose.BlockerNoSession, true
 	}
-	return "", false
+	instructions, problem := job.ReadInstructions(dir, meta)
+	switch problem {
+	case job.InstructionsMissing:
+		return "", prose.BlockerInstructionsMissing, true
+	case job.InstructionsChanged:
+		return "", prose.BlockerInstructionsChanged, true
+	}
+	return instructions, "", false
+}
+
+// Continuation is what a continuable turn hands the voice that continues it:
+// the record it inherits its settings from, whose session is always set, and
+// the standing instructions the conversation carries on ("" = none).
+type Continuation struct {
+	Meta         *job.Meta
+	Instructions string
 }
 
 // Inspect reads dir as a single turn and reports whether its conversation
 // can be continued; see Continuable.
-func Inspect(dir string) (*job.Meta, prose.ResumeBlockerKind, error) {
-	return Continuable(job.ReadMeta(dir))
+func Inspect(dir string) (*Continuation, prose.ResumeBlockerKind, error) {
+	meta, err := job.ReadMeta(dir)
+	return Continuable(dir, meta, err)
 }
 
-// Continuable judges a turn record as read — the record and its read error —
-// returning the record a continuation inherits its settings from, whose
-// session is then always set. The error is non-nil only when there is no
-// readable turn at all; a real turn that cannot continue reports a blocker
-// instead.
-func Continuable(meta *job.Meta, err error) (*job.Meta, prose.ResumeBlockerKind, error) {
+// Continuable judges the turn record read from dir — the record and its read
+// error — returning what a continuation inherits. The error is non-nil only
+// when there is no readable turn at all; a real turn that cannot continue
+// reports a blocker instead.
+func Continuable(dir string, meta *job.Meta, err error) (*Continuation, prose.ResumeBlockerKind, error) {
 	if errors.Is(err, job.ErrNoRecord) {
 		return nil, "", errors.New("no job found there (no meta.json)")
 	}
@@ -56,10 +81,11 @@ func Continuable(meta *job.Meta, err error) (*job.Meta, prose.ResumeBlockerKind,
 	if !job.KnownStatus(meta.Status) || meta.Provider == "" {
 		return nil, "", fmt.Errorf("meta.json is not a job this engine wrote (status %q)", meta.Status)
 	}
-	if kind, blocked := continuationBlocker(meta); blocked {
+	instructions, kind, blocked := continuation(dir, meta)
+	if blocked {
 		return nil, kind, nil
 	}
-	return meta, "", nil
+	return &Continuation{Meta: meta, Instructions: instructions}, "", nil
 }
 
 // NameHold is the single definition of "this job still holds its name": it
@@ -195,7 +221,7 @@ func classifyRunning(dir string, meta *job.Meta) prose.RunObservation {
 // voice applies, so collect can never offer a continuation dispatch would
 // refuse.
 func resumeCommand(dir string, meta *job.Meta) string {
-	if _, blocked := continuationBlocker(meta); blocked {
+	if _, blocked := continuationBlocker(dir, meta); blocked {
 		return ""
 	}
 	return prose.ContinueCommand(dir, meta.TimeoutMin)

@@ -31,6 +31,10 @@ type voice struct {
 	cwd        string // recorded tree, for a continued voice
 	baseline   string // recorded anchor, for a continued voice
 	allowWrite bool   // recorded write intent, for a continued voice
+	// instructions is the conversation's standing instructions, carried on
+	// from the source job's archive for a continued voice; "" = none. A cold
+	// voice takes the roster's.
+	instructions string
 }
 
 // resolveTurns turns the voices into the turns a job runs, every refusal
@@ -38,8 +42,9 @@ type voice struct {
 // reference expands into its members and each one is resolved exactly as a
 // member named directly would be, so there is one eligibility rule and one
 // set of roster checks whatever the caller spelled. errText is "" exactly
-// when the roster is dispatchable.
-func resolveTurns(req RunRequest, invocationCwd, caller string, timeoutMin float64) ([]fan.Turn, string) {
+// when the roster is dispatchable. instructions is the roster's standing
+// instructions, read from --instructions-file ("" = none).
+func resolveTurns(req RunRequest, instructions, invocationCwd, caller string, timeoutMin float64) ([]fan.Turn, string) {
 	var voices []voice
 	for _, seat := range req.With {
 		seated, errText := seatVoices(seat, req, invocationCwd, caller)
@@ -48,7 +53,7 @@ func resolveTurns(req RunRequest, invocationCwd, caller string, timeoutMin float
 		}
 		voices = append(voices, seated...)
 	}
-	shared, errText := shareRoster(voices, req, timeoutMin)
+	shared, errText := shareRoster(voices, req, instructions, timeoutMin)
 	if errText != "" {
 		return nil, errText
 	}
@@ -60,6 +65,9 @@ func resolveTurns(req RunRequest, invocationCwd, caller string, timeoutMin float
 	taken := map[string]bool{}
 	turns := make([]fan.Turn, len(voices))
 	for i, v := range voices {
+		if v.source == "" {
+			v.instructions = instructions
+		}
 		turns[i] = fan.Turn{
 			Name: memberName(v.base, taken),
 			Options: runner.Options{
@@ -76,6 +84,7 @@ func resolveTurns(req RunRequest, invocationCwd, caller string, timeoutMin float
 					Effort:       v.effort,
 					Resume:       v.session,
 					MaxBudgetUSD: req.MaxBudgetUSD,
+					Instructions: v.instructions,
 				},
 			},
 		}
@@ -116,31 +125,40 @@ func seatVoices(seat string, req RunRequest, invocationCwd, caller string) ([]vo
 		}
 		return fanMembers(ref, promptFile)
 	}
-	meta, blocker, err := collect.Inspect(ref)
+	cont, blocker, err := collect.Inspect(ref)
 	if err != nil {
 		return nil, prose.ContinueNoTurn(ref, err)
 	}
 	if blocker != "" {
 		return nil, prose.ContinueBlocked(ref, blocker)
 	}
-	v := continuedVoice(ref, meta, "")
+	v := continuedVoice(ref, cont, "")
 	v.promptFile = promptFile
 	return []voice{v}, ""
 }
 
 // roster is what every turn of a job shares: one tree, one anchor, and one
-// write intent.
+// write intent. Standing instructions are not shared: each conversation keeps
+// its own, and the roster's apply to the conversations it starts.
 type roster struct {
 	cwd, baseline string // "" = not chosen and not inherited
 	allowWrite    bool
 }
 
 // shareRoster applies the roster checks: one conversation once; one tree and
-// one anchor across every continued voice unless the caller chose them; and
-// write intent only on a single voice. Write intent is checked after
-// expansion: a roster is read-only unless it is one voice, and a continued
-// write conversation keeps its intent only by continuing alone.
-func shareRoster(voices []voice, req RunRequest, timeoutMin float64) (roster, string) {
+// one anchor across every continued voice unless the caller chose them;
+// standing instructions, when the roster names them, equal to every continued
+// conversation's own; and write intent only on a single voice. Write intent is
+// checked after expansion: a roster is read-only unless it is one voice, and a
+// continued write conversation keeps its intent only by continuing alone.
+//
+// A conversation keeps the instructions it started with, because the
+// providers do: the session holds its first text until a compaction and then
+// takes whatever that launch passed, so an added or changed text would leave
+// the record naming one text while the session holds another until a moment
+// no one can observe. The same text again is no change, and a caller that
+// passes it on every turn is accepted.
+func shareRoster(voices []voice, req RunRequest, instructions string, timeoutMin float64) (roster, string) {
 	shared := roster{cwd: req.Cwd, baseline: req.Baseline}
 	sessions := map[string]string{}
 	inheritedCwdFrom, inheritedBaselineFrom := "", ""
@@ -153,6 +171,12 @@ func shareRoster(voices []voice, req RunRequest, timeoutMin float64) (roster, st
 			return roster{}, prose.DuplicateConversation(v.session, prev, v.source)
 		}
 		sessions[v.session] = v.source
+		if instructions != "" && v.instructions == "" {
+			return roster{}, prose.InstructionsAdded(v.source)
+		}
+		if instructions != "" && v.instructions != instructions {
+			return roster{}, prose.InstructionsDiffer(v.source)
+		}
 		if v.allowWrite {
 			writeSources = append(writeSources, v.source)
 		}
@@ -183,23 +207,25 @@ func shareRoster(voices []voice, req RunRequest, timeoutMin float64) (roster, st
 }
 
 // continuedVoice is the voice that continues a finished job's conversation,
-// from the record collect.Inspect found continuable. name presets the member
-// address (a fan-out's member keeps its identity across rounds); "" derives it.
-func continuedVoice(dir string, meta *job.Meta, name string) voice {
+// from what collect found continuable. name presets the member address (a
+// fan-out's member keeps its identity across rounds); "" derives it.
+func continuedVoice(dir string, cont *collect.Continuation, name string) voice {
+	meta := cont.Meta
 	model := job.Deref(meta.Model)
 	if name == "" {
 		name = voiceBase(meta.Provider, model)
 	}
 	return voice{
-		base:       name,
-		provider:   meta.Provider,
-		model:      model,
-		effort:     job.Deref(meta.Effort),
-		session:    *meta.SessionID,
-		source:     dir,
-		cwd:        meta.Cwd,
-		baseline:   job.Deref(meta.GitBaseline),
-		allowWrite: meta.AllowWrite,
+		base:         name,
+		provider:     meta.Provider,
+		model:        model,
+		effort:       job.Deref(meta.Effort),
+		session:      *meta.SessionID,
+		source:       dir,
+		cwd:          meta.Cwd,
+		baseline:     job.Deref(meta.GitBaseline),
+		allowWrite:   meta.AllowWrite,
+		instructions: cont.Instructions,
 	}
 }
 
@@ -230,11 +256,11 @@ func splitSeat(seat string) (spec, promptFile, errText string) {
 }
 
 // fanMember is one member of a fan-out judged by the one eligibility
-// definition: the candidate prose words, and the record a continuation of it
-// inherits from — nil when the candidate is blocked.
+// definition: the candidate prose words, and what a continuation of it
+// inherits — nil when the candidate is blocked.
 type fanMember struct {
 	prose.FanMemberCandidate
-	meta *job.Meta
+	cont *collect.Continuation
 }
 
 // inspectFan reads a fan-out's members in roster order, each through
@@ -248,14 +274,14 @@ func inspectFan(dir string) ([]fanMember, error) {
 	members := make([]fanMember, len(fan.Members))
 	for i, m := range fan.Members {
 		c := prose.FanMemberCandidate{Name: m.Name, Dir: m.Dir}
-		meta, blocker, err := collect.Continuable(m.Meta, m.Err)
+		cont, blocker, err := collect.Continuable(m.Dir, m.Meta, m.Err)
 		switch {
 		case err != nil:
 			c.Kind, c.Detail = prose.BlockerUnreadableMeta, err.Error()
 		case blocker != "":
 			c.Kind = blocker
 		}
-		members[i] = fanMember{c, meta}
+		members[i] = fanMember{c, cont}
 	}
 	return members, nil
 }
@@ -279,7 +305,7 @@ func fanMembers(dir, promptFile string) ([]voice, string) {
 			reasons = append(reasons, prose.FanResumeBlockerLine(m.Name, m.Kind, m.Detail))
 			continue
 		}
-		v := continuedVoice(m.Dir, m.meta, m.Name)
+		v := continuedVoice(m.Dir, m.cont, m.Name)
 		v.promptFile = promptFile
 		voices = append(voices, v)
 	}

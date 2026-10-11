@@ -1,0 +1,399 @@
+// Standing instructions: the system-level text a conversation is started
+// with. Every job of the conversation archives it and every launch passes it
+// again, because both providers keep the first text only until a compaction
+// and then take whatever that launch passed. The conversation owns the text:
+// a continuation inherits it from the source job's records, never from what
+// the caller passes, and a conversation whose archive no longer supplies it
+// does not continue at all.
+package integration
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+)
+
+func writeInstructions(t *testing.T, text string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "rules.md")
+	if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func digest(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:])
+}
+
+// argAfter is the argument following flag in argv, "" when flag is absent.
+func argAfter(argv []string, flag string) string {
+	if i := slices.Index(argv, flag); i >= 0 && i+1 < len(argv) {
+		return argv[i+1]
+	}
+	return ""
+}
+
+// A claude conversation started with --instructions-file hands the provider
+// its job's own archive on the first turn and on every turn that continues
+// it, with or without the flag — and the prompt archive stays the turn's job
+// alone.
+func TestStandingInstructionsRideEveryTurnOfAClaudeConversation(t *testing.T) {
+	capture := filepath.Join(t.TempDir(), "invocation.json")
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").set("ENVOY_FAKE_INVOCATION_FILE", capture)
+	text := "Work unattended: nobody answers mid-turn.\nProduction is read-only.\n"
+	rules := writeInstructions(t, text)
+	prompt := writePrompt(t, t.TempDir())
+
+	r1 := filepath.Join(t.TempDir(), "design")
+	res := runEnvoy(t, e, runArgs(prompt, r1, "--with", "claude", "--instructions-file", rules)...)
+	if res.code != 0 {
+		t.Fatalf("first turn exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+
+	// Each turn: its own archive, the record's digest of it, the archive as
+	// what claude was pointed at, and the prompt untouched.
+	check := func(name, dir string, stdout string) {
+		t.Helper()
+		archive := filepath.Join(dir, "instructions.md")
+		mustContain(t, name+" stdout", stdout, "instructions: "+archive)
+		if got := readFile(t, archive); got != text {
+			t.Fatalf("%s instructions.md = %q, want %q", name, got, text)
+		}
+		meta := readMeta(t, dir)
+		if meta["instructionsSha256"] != digest(text) {
+			t.Fatalf("%s instructionsSha256 = %v, want %s", name, meta["instructionsSha256"], digest(text))
+		}
+		if got := argAfter(stringsFromMeta(t, meta, "providerArgv"), "--append-system-prompt-file"); got != archive {
+			t.Fatalf("%s recorded argv passes %q, want the job's own archive %s", name, got, archive)
+		}
+		inv := readInvocation(t, capture)
+		if inv.AppendedSystemPrompt == nil || *inv.AppendedSystemPrompt != text {
+			t.Fatalf("%s: the provider was handed %v, want the instructions", name, inv.AppendedSystemPrompt)
+		}
+		if got := readFile(t, filepath.Join(dir, "prompt.md")); strings.Contains(got, "Production is read-only") {
+			t.Fatalf("%s prompt.md carries the instructions: %q", name, got)
+		}
+	}
+	check("first turn", r1, res.stdout)
+
+	followUp := filepath.Join(t.TempDir(), "build.md")
+	if err := os.WriteFile(followUp, []byte("build it\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r2 := filepath.Join(t.TempDir(), "build")
+	res = runEnvoy(t, e, "run", r2, "--with", "@"+r1, "--prompt-file", followUp)
+	if res.code != 0 {
+		t.Fatalf("continuation exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	check("continuation", r2, res.stdout)
+	if got := readFile(t, filepath.Join(r2, "prompt.md")); got != "build it\n" {
+		t.Fatalf("continuation prompt.md = %q, want the NEW prompt only", got)
+	}
+
+	// A caller that passes the same file on every turn is passing no change.
+	r3 := filepath.Join(t.TempDir(), "review")
+	res = runEnvoy(t, e, "run", r3, "--with", "@"+r2, "--prompt-file", followUp, "--instructions-file", rules)
+	if res.code != 0 {
+		t.Fatalf("identical re-pass exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	check("identical re-pass", r3, res.stdout)
+
+	// The archive is a setting like the model: held back from a delivered
+	// turn's block, printed on the full read.
+	mustContain(t, "status-only", runEnvoy(t, e, "collect", "--status-only", r3).stdout,
+		"instructions: "+filepath.Join(r3, "instructions.md"))
+	mustNotContain(t, "delivered block", runEnvoy(t, e, "collect", r3).stdout, "instructions:")
+}
+
+// codex takes the text inline as its developer_instructions setting, encoded
+// as a TOML string so that quotes, backslashes and newlines arrive intact, on
+// a fresh thread and on its resume alike.
+func TestStandingInstructionsReachCodexAsDeveloperInstructions(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").set("ENVOY_FAKE_SESSION_ID", "thread-1")
+	text := "Say \"done\" when done.\nPaths look like C:\\tmp.\n"
+	want := `developer_instructions="Say \"done\" when done.\nPaths look like C:\\tmp.\n"`
+	rules := writeInstructions(t, text)
+	prompt := writePrompt(t, t.TempDir())
+
+	r1 := filepath.Join(t.TempDir(), "consult")
+	if res := runEnvoy(t, e, runArgs(prompt, r1, "--with", "codex", "--instructions-file", rules)...); res.code != 0 {
+		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	if argv := stringsFromMeta(t, readMeta(t, r1), "providerArgv"); !slices.Contains(argv, want) {
+		t.Fatalf("fresh codex argv = %v, want %s", argv, want)
+	}
+	r2 := filepath.Join(t.TempDir(), "round2")
+	if res := runEnvoy(t, e, runArgs(prompt, r2, "--with", "@"+r1)...); res.code != 0 {
+		t.Fatalf("resume exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	argv := stringsFromMeta(t, readMeta(t, r2), "providerArgv")
+	if !slices.Contains(argv, "resume") || !slices.Contains(argv, want) {
+		t.Fatalf("resumed codex argv = %v, want the instructions again on the resume", argv)
+	}
+	if got := readFile(t, filepath.Join(r2, "instructions.md")); got != text {
+		t.Fatalf("resumed instructions.md = %q, want %q", got, text)
+	}
+}
+
+// A conversation keeps the instructions it started with: a different file,
+// or any file for a conversation that started without one, is refused before
+// anything is reserved — the session would go on holding its first text. A
+// conversation that never had any continues as it is.
+func TestContinuationRefusesChangedOrAddedInstructions(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	prompt := writePrompt(t, t.TempDir())
+	rules := writeInstructions(t, "rule A\n")
+	other := writeInstructions(t, "rule B\n")
+
+	bare := filepath.Join(t.TempDir(), "bare")
+	if res := runEnvoy(t, e, runArgs(prompt, bare, "--with", "claude")...); res.code != 0 {
+		t.Fatalf("bare exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	ruled := filepath.Join(t.TempDir(), "ruled")
+	if res := runEnvoy(t, e, runArgs(prompt, ruled, "--with", "claude", "--instructions-file", rules)...); res.code != 0 {
+		t.Fatalf("ruled exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+
+	cases := []struct {
+		with, file string
+		want       []string
+	}{
+		{bare, rules, []string{"--with @" + bare + ": that conversation started without standing instructions",
+			"Continue it without --instructions-file"}},
+		{ruled, other, []string{"--with @" + ruled + ": --instructions-file differs from the standing instructions",
+			filepath.Join(ruled, "instructions.md"), "Leave --instructions-file off"}},
+	}
+	for _, c := range cases {
+		dir := filepath.Join(t.TempDir(), "next")
+		res := runEnvoy(t, e, runArgs(prompt, dir, "--with", "@"+c.with, "--instructions-file", c.file)...)
+		if res.code != 3 {
+			t.Fatalf("@%s with %s: exit = %d, want 3\nstderr:\n%s", c.with, c.file, res.code, res.stderr)
+		}
+		mustContain(t, "refusal", res.stderr, c.want...)
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("@%s: a refused run must leave no job dir", c.with)
+		}
+	}
+
+	// Absence is not loss: the bare conversation continues bare.
+	next := filepath.Join(t.TempDir(), "next")
+	if res := runEnvoy(t, e, runArgs(prompt, next, "--with", "@"+bare)...); res.code != 0 {
+		t.Fatalf("bare continuation exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	meta := readMeta(t, next)
+	if _, ok := meta["instructionsSha256"]; ok || slices.Contains(stringsFromMeta(t, meta, "providerArgv"), "--append-system-prompt-file") {
+		t.Fatalf("a conversation without instructions gains none: %v", meta["providerArgv"])
+	}
+	if _, err := os.Stat(filepath.Join(next, "instructions.md")); !os.IsNotExist(err) {
+		t.Fatal("a conversation without instructions archives none")
+	}
+}
+
+// An instructions file is checked like a prompt, before anything is reserved,
+// and refused when it carries nothing a conversation could keep.
+func TestInstructionsFileIsValidatedBeforeReserving(t *testing.T) {
+	e := newEnv(t)
+	prompt := writePrompt(t, t.TempDir())
+	invalid := filepath.Join(t.TempDir(), "latin1.md")
+	if err := os.WriteFile(invalid, []byte{'c', 'a', 'f', 0xe9, '\n'}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct{ file, want string }{
+		{filepath.Join(t.TempDir(), "absent.md"), "instructions file not found"},
+		{t.TempDir(), "instructions file is a directory, not a file"},
+		{writeInstructions(t, " \n\t\n"), "instructions file is empty"},
+		{invalid, "instructions file is not UTF-8 text"},
+	}
+	for _, c := range cases {
+		dir := filepath.Join(t.TempDir(), "job")
+		res := runEnvoy(t, e, runArgs(prompt, dir, "--with", "claude", "--instructions-file", c.file)...)
+		if res.code != 3 {
+			t.Fatalf("%s: exit = %d, want 3\nstderr:\n%s", c.file, res.code, res.stderr)
+		}
+		mustContain(t, "stderr", res.stderr, c.want)
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("%s: a refused run must leave no job dir", c.file)
+		}
+	}
+}
+
+// A record that names instructions continues only with them. An archive that
+// was lost or edited cannot supply them, so the conversation is refused at
+// dispatch, and collect — whose resume line follows the same rule — offers
+// no continuation and says why, whatever the tier.
+func TestLostOrEditedArchiveBlocksTheConversation(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	prompt := writePrompt(t, t.TempDir())
+	rules := writeInstructions(t, "rule A\n")
+
+	for _, c := range []struct {
+		name    string
+		damage  func(path string) error
+		refusal string
+		line    string
+	}{
+		{"lost", os.Remove, "is missing or will not read", "missing or unreadable, so this conversation cannot continue"},
+		{"edited", func(p string) error { return os.WriteFile(p, []byte("rule A, softened\n"), 0o644) },
+			"no longer holds the text it was sent", "edited since it was sent, so this conversation cannot continue"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			src := filepath.Join(t.TempDir(), "src")
+			if res := runEnvoy(t, e, runArgs(prompt, src, "--with", "claude", "--instructions-file", rules)...); res.code != 0 {
+				t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
+			}
+			archive := filepath.Join(src, "instructions.md")
+			if err := c.damage(archive); err != nil {
+				t.Fatal(err)
+			}
+
+			dir := filepath.Join(t.TempDir(), "next")
+			res := runEnvoy(t, e, runArgs(prompt, dir, "--with", "@"+src)...)
+			if res.code != 3 {
+				t.Fatalf("exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
+			}
+			mustContain(t, "refusal", res.stderr, "--with @"+src+": ", archive, c.refusal, "start a new conversation")
+			if _, err := os.Stat(dir); !os.IsNotExist(err) {
+				t.Fatal("a refused run must leave no job dir")
+			}
+
+			col := runEnvoy(t, e, "collect", src).stdout
+			mustContain(t, "collect", col, "instructions: "+archive+" — "+c.line, "session: ")
+			mustNotContain(t, "collect", col, "resume:")
+		})
+	}
+}
+
+// A fan-out's cold members each start a conversation with the roster's
+// instructions, archived in their own directory and spelled in their own
+// provider's terms; a round continues every member with its own.
+func TestFanOutMembersCarryTheirOwnInstructions(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").
+		set("ENVOY_FAKE_SESSION_ID_CODEX", "codex-session").
+		set("ENVOY_FAKE_SESSION_ID_CLAUDE", "claude-session")
+	prompt := writePrompt(t, t.TempDir())
+	text := "rule A\n"
+	rules := writeInstructions(t, text)
+
+	fan := filepath.Join(t.TempDir(), "consult")
+	res := runEnvoy(t, e, runArgs(prompt, fan, "--with", "codex", "--with", "claude", "--instructions-file", rules)...)
+	if res.code != 0 {
+		t.Fatalf("fan exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	mustContain(t, "dispatch block", res.stdout, "member codex: ", "member claude: ", " · standing instructions")
+	var group map[string]any
+	if err := json.Unmarshal([]byte(readFile(t, filepath.Join(fan, "group.json"))), &group); err != nil {
+		t.Fatal(err)
+	}
+	for key := range group {
+		if strings.Contains(strings.ToLower(key), "instructions") {
+			t.Fatalf("group.json is a roster; a member's instructions live in the member's records, not %q", key)
+		}
+	}
+	members := func(dir string) {
+		t.Helper()
+		codex, claude := filepath.Join(dir, "codex"), filepath.Join(dir, "claude")
+		for _, m := range []string{codex, claude} {
+			if got := readFile(t, filepath.Join(m, "instructions.md")); got != text {
+				t.Fatalf("%s instructions.md = %q", m, got)
+			}
+		}
+		if !slices.Contains(stringsFromMeta(t, readMeta(t, codex), "providerArgv"), `developer_instructions="rule A\n"`) {
+			t.Fatalf("codex member argv = %v", readMeta(t, codex)["providerArgv"])
+		}
+		if got := argAfter(stringsFromMeta(t, readMeta(t, claude), "providerArgv"), "--append-system-prompt-file"); got != filepath.Join(claude, "instructions.md") {
+			t.Fatalf("claude member passes %q, want its own archive", got)
+		}
+	}
+	members(fan)
+
+	round := filepath.Join(t.TempDir(), "consult-r2")
+	if res := runEnvoy(t, e, runArgs(prompt, round, "--with", "@"+fan)...); res.code != 0 {
+		t.Fatalf("round exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	members(round)
+}
+
+// A roster seating a new conversation beside a continued one gives the
+// roster's instructions to the new one, and lets the continued one keep its
+// own — and only its own, so a file that differs from them is refused.
+func TestMixedRosterKeepsEachConversationsInstructions(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").
+		set("ENVOY_FAKE_SESSION_ID_CODEX", "codex-session").
+		set("ENVOY_FAKE_SESSION_ID_CLAUDE", "claude-session")
+	prompt := writePrompt(t, t.TempDir())
+	rules := writeInstructions(t, "rule A\n")
+
+	src := filepath.Join(t.TempDir(), "design")
+	if res := runEnvoy(t, e, runArgs(prompt, src, "--with", "claude", "--instructions-file", rules)...); res.code != 0 {
+		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+
+	plain := filepath.Join(t.TempDir(), "plain")
+	if res := runEnvoy(t, e, runArgs(prompt, plain, "--with", "@"+src, "--with", "codex")...); res.code != 0 {
+		t.Fatalf("mixed exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	}
+	if got := readFile(t, filepath.Join(plain, "claude", "instructions.md")); got != "rule A\n" {
+		t.Fatalf("the continued member keeps its own: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(plain, "codex", "instructions.md")); !os.IsNotExist(err) {
+		t.Fatal("a new conversation without the flag starts without instructions")
+	}
+
+	same := filepath.Join(t.TempDir(), "same")
+	if res := runEnvoy(t, e, runArgs(prompt, same, "--with", "@"+src, "--with", "codex", "--instructions-file", rules)...); res.code != 0 {
+		t.Fatalf("matching flag exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	for _, m := range []string{"claude", "codex"} {
+		if got := readFile(t, filepath.Join(same, m, "instructions.md")); got != "rule A\n" {
+			t.Fatalf("%s instructions.md = %q", m, got)
+		}
+	}
+
+	dir := filepath.Join(t.TempDir(), "differs")
+	res := runEnvoy(t, e, runArgs(prompt, dir, "--with", "@"+src, "--with", "codex", "--instructions-file", writeInstructions(t, "rule B\n"))...)
+	if res.code != 3 {
+		t.Fatalf("differing flag exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
+	}
+	mustContain(t, "refusal", res.stderr, "--instructions-file differs from the standing instructions")
+}
+
+// The identical retry repeats the dispatch it replaces: a turn that started
+// its conversation names its archived instructions again, while a retried
+// continuation takes them from its source as any continuation does.
+func TestRetryRepeatsTheArchivedInstructions(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").set("ENVOY_FAKE_SESSION_ID", "thread-1")
+	prompt := writePrompt(t, t.TempDir())
+	rules := writeInstructions(t, "rule A\n")
+
+	src := filepath.Join(t.TempDir(), "src")
+	if res := runEnvoy(t, e, runArgs(prompt, src, "--with", "codex", "--instructions-file", rules)...); res.code != 0 {
+		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+
+	// A launcher that is not there never spawns, so the prompt provably
+	// never reached the provider and the identical retry is offered.
+	e.set("ENVOY_CODEX_CMD", "no-such-launcher-on-path")
+	fresh := filepath.Join(t.TempDir(), "fresh")
+	if res := runEnvoy(t, e, runArgs(prompt, fresh, "--with", "codex", "--instructions-file", rules)...); res.code != 2 {
+		t.Fatalf("fresh exit = %d, want 2\nstderr:\n%s", res.code, res.stderr)
+	}
+	mustContain(t, "fresh retry", runEnvoy(t, e, "collect", fresh).stdout,
+		fmt.Sprintf("--prompt-file '%s' --instructions-file '%s'",
+			filepath.Join(fresh, "prompt.md"), filepath.Join(fresh, "instructions.md")))
+
+	continued := filepath.Join(t.TempDir(), "continued")
+	if res := runEnvoy(t, e, runArgs(prompt, continued, "--with", "@"+src)...); res.code != 2 {
+		t.Fatalf("continued exit = %d, want 2\nstderr:\n%s", res.code, res.stderr)
+	}
+	col := runEnvoy(t, e, "collect", continued).stdout
+	mustContain(t, "continued retry", col, "--with @'"+src+"'")
+	mustNotContain(t, "continued retry", col, "--instructions-file")
+}

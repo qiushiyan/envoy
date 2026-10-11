@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/qiushiyan/envoy/internal/job"
 	"github.com/qiushiyan/envoy/internal/text"
 )
 
@@ -25,6 +26,10 @@ const (
 	BlockerRunning        ResumeBlockerKind = "running"
 	BlockerNoSession      ResumeBlockerKind = "no-session"
 	BlockerLockConflict   ResumeBlockerKind = "lock-conflict"
+	// The record names standing instructions its archive no longer supplies:
+	// gone or unreadable, or edited since they were sent.
+	BlockerInstructionsMissing ResumeBlockerKind = "instructions-missing"
+	BlockerInstructionsChanged ResumeBlockerKind = "instructions-changed"
 )
 
 // ContinueNoTurn rejects an @<job> that holds no readable job. cause is the
@@ -82,6 +87,9 @@ func ContinueBlocked(dir string, kind ResumeBlockerKind) string {
 	case BlockerLockConflict:
 		return head + "this job's last turn ended in a session-lock conflict, so its session may belong to another job. " +
 			"Collect it first — " + collect + " — and follow its next line before continuing this conversation."
+	case BlockerInstructionsMissing, BlockerInstructionsChanged:
+		return head + instructionsLost(dir, kind) + " " + instructionsCarry + " " +
+			"Restore the file to what was sent — every job of this conversation archives the same text — or start a new conversation."
 	default: // BlockerNoSession
 		return head + "this job never published a session id, so it holds no conversation to continue. " +
 			"Collect it — " + collect + " — to see what recovery it licenses; a fresh dispatch may be the right move."
@@ -147,4 +155,49 @@ func BaselineMix(firstDir, firstBaseline, secondDir, secondBaseline string) stri
 	return fmt.Sprintf("the continued jobs recorded different baselines (%s recorded %s; %s recorded %s). "+
 		"A job reports one reviewed range — pass --baseline to choose the anchor.",
 		firstDir, firstBaseline, secondDir, secondBaseline)
+}
+
+// instructionsCarry is why a conversation's standing instructions cannot be
+// dropped or swapped on a continuation: what the providers do with them.
+const instructionsCarry = "Every turn of a conversation re-passes the standing instructions it started with, because the " +
+	"session keeps the first text until its context is compacted and then takes whatever that turn passed."
+
+// instructionsLost words what a turn's record and its instructions archive
+// say when the archive no longer supplies what the record names.
+func instructionsLost(dir string, kind ResumeBlockerKind) string {
+	path := job.Workspace{Dir: dir}.InstructionsPath()
+	if kind == BlockerInstructionsChanged {
+		return fmt.Sprintf("this job's standing instructions archive %s no longer holds the text it was sent (its digest differs from the record's).", path)
+	}
+	return fmt.Sprintf("this job was sent standing instructions, and their archive %s is missing or will not read.", path)
+}
+
+// InstructionsArchive words a turn's standing-instructions archive for the
+// collect block: where it is, and, when it no longer supplies what the record
+// names, that the conversation cannot continue.
+func InstructionsArchive(dir string, problem job.InstructionsProblem) string {
+	path := job.Workspace{Dir: dir}.InstructionsPath()
+	switch problem {
+	case job.InstructionsMissing:
+		return path + " — missing or unreadable, so this conversation cannot continue"
+	case job.InstructionsChanged:
+		return path + " — edited since it was sent, so this conversation cannot continue"
+	}
+	return path
+}
+
+// InstructionsAdded refuses --instructions-file on a conversation that
+// started without standing instructions.
+func InstructionsAdded(source string) string {
+	return fmt.Sprintf("--with @%s: that conversation started without standing instructions, and a conversation keeps the "+
+		"instructions it started with — the session would not see new ones until its context is next compacted. "+
+		"Continue it without --instructions-file, put the text in this turn's prompt, or start a new conversation with it.", source)
+}
+
+// InstructionsDiffer refuses --instructions-file that differs from the
+// standing instructions a continued conversation started with.
+func InstructionsDiffer(source string) string {
+	return fmt.Sprintf("--with @%s: --instructions-file differs from the standing instructions that conversation started with "+
+		"(%s). %s Leave --instructions-file off — the conversation carries its own on — and put a one-turn change in this "+
+		"turn's prompt, or start a new conversation.", source, job.Workspace{Dir: source}.InstructionsPath(), instructionsCarry)
 }
