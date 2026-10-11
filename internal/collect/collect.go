@@ -126,6 +126,7 @@ type rendered struct {
 	meta        *job.Meta
 	undelivered bool // ok status, but result.md could not be read
 	stamp       bool // deliverable complete: stamp once the block is written
+	resumable   bool // the conversation may continue, by the one rule
 }
 
 // renderJob writes one turn's block into w and reports what a fan-out needs
@@ -137,6 +138,9 @@ func renderJob(dir string, meta *job.Meta, mode Mode, w io.Writer, section bool)
 	state := classifyRunning(dir, meta)
 	meta = reconcileAbandoned(dir, meta, state)
 	state = classifyRunning(dir, meta)
+	// Like the payload, the continuation rule is read once: the archive line,
+	// the resume line and the recovery all describe that one read.
+	cont := continuationOf(dir, meta)
 
 	// The payload is read once, before anything is printed, because whether it
 	// reads is what the rest of the block is shaped around — not a detail
@@ -161,7 +165,7 @@ func renderJob(dir string, meta *job.Meta, mode Mode, w io.Writer, section bool)
 	// and must be given the paths, and --status-only delivers nothing at all.
 	// Nothing is lost either way: meta.json stays the authoritative record.
 	delivered := meta.Status == job.StatusOK && resultErr == nil
-	writePreamble(w, dir, meta, state, !delivered || mode == ModeStatusOnly, section)
+	writePreamble(w, dir, meta, state, cont, !delivered || mode == ModeStatusOnly, section)
 	if meta.GitBaseline != nil && !section {
 		printGitSinceBaseline(w, meta.Cwd, *meta.GitBaseline)
 	}
@@ -175,7 +179,7 @@ func renderJob(dir string, meta *job.Meta, mode Mode, w io.Writer, section bool)
 			fmt.Fprintln(w, "(no result.md yet)")
 		}
 	}
-	next, r := closing(dir, meta, state, mode, resultErr == nil)
+	next, r := closing(dir, meta, state, cont, mode, resultErr == nil)
 	fmt.Fprintf(w, "\nnext: %s\n", next)
 	return r
 }
@@ -183,7 +187,7 @@ func renderJob(dir string, meta *job.Meta, mode Mode, w io.Writer, section bool)
 // writePreamble writes everything above the payload: the coordinate and
 // status, then — when the block carries its diagnostic tier — the settings,
 // counts, evidence and log paths, and always the follow-up commands.
-func writePreamble(w io.Writer, dir string, meta *job.Meta, state prose.RunObservation, diagnostic, section bool) {
+func writePreamble(w io.Writer, dir string, meta *job.Meta, state prose.RunObservation, cont continuation, diagnostic, section bool) {
 	ws := job.Workspace{Dir: dir}
 	fmt.Fprintf(w, "job: %s\n", dir)
 	if meta.Status == job.StatusRunning {
@@ -214,10 +218,8 @@ func writePreamble(w io.Writer, dir string, meta *job.Meta, state prose.RunObser
 	// What the session was set up with is a setting like the model, held back
 	// with it — unless the archive no longer supplies it, which is why the
 	// block offers no resume: and so is printed whatever the tier.
-	if meta.InstructionsSha256 != nil {
-		if _, problem := job.ReadInstructions(dir, meta); diagnostic || problem != "" {
-			fmt.Fprintf(w, "instructions: %s\n", prose.InstructionsArchive(dir, problem))
-		}
+	if meta.InstructionsSha256 != nil && (diagnostic || cont.problem != "") {
+		fmt.Fprintf(w, "instructions: %s\n", prose.InstructionsArchive(dir, cont.problem))
 	}
 	if meta.DurationMs != nil {
 		costSuffix := ""
@@ -269,7 +271,7 @@ func writePreamble(w io.Writer, dir string, meta *job.Meta, state prose.RunObser
 		// continuation names the job, not the session, so a caller never
 		// hand-assembles a follow-up out of the id. A running turn's session
 		// still prints; its next line says to wait.
-		if resume := resumeCommand(dir, meta); resume == "" {
+		if resume := resumeCommand(dir, meta, cont); resume == "" {
 			fmt.Fprintf(w, "session: %s\n", *meta.SessionID)
 		} else {
 			fmt.Fprintf(w, "resume: %s\n", resume)
@@ -299,13 +301,13 @@ func writePreamble(w io.Writer, dir string, meta *job.Meta, state prose.RunObser
 // ok turn's deliverable is its payload; a non-ok turn's is the status and
 // recovery above it. Only a delivered deliverable stamps collection, so an ok
 // turn whose result.md cannot be read stays owed.
-func closing(dir string, meta *job.Meta, state prose.RunObservation, mode Mode, payloadRead bool) (string, rendered) {
-	r := rendered{meta: meta}
+func closing(dir string, meta *job.Meta, state prose.RunObservation, cont continuation, mode Mode, payloadRead bool) (string, rendered) {
+	r := rendered{meta: meta, resumable: cont.blocker == ""}
 	switch {
 	case state.State == prose.RunLive:
 		return prose.RunningNext(dir), r
 	case meta.Status == job.StatusRunning:
-		return recoveryForStale(dir, meta, state), r
+		return recoveryForStale(dir, meta, state, cont), r
 	case mode == ModeStatusOnly:
 		return prose.StatusOnlyNext(dir), r
 	case meta.Status == job.StatusOK && !payloadRead:
@@ -316,7 +318,7 @@ func closing(dir string, meta *job.Meta, state prose.RunObservation, mode Mode, 
 		return prose.CollectedOK(), r
 	}
 	r.stamp = true
-	return recoveryAction(dir, meta), r
+	return recoveryAction(dir, meta, cont), r
 }
 
 // stampCollected marks first terminal collection: the block has actually

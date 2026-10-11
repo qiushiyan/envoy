@@ -397,3 +397,173 @@ func TestRetryRepeatsTheArchivedInstructions(t *testing.T) {
 	mustContain(t, "continued retry", col, "--with @'"+src+"'")
 	mustNotContain(t, "continued retry", col, "--instructions-file")
 }
+
+// A record whose conversation carries standing instructions is a schema of
+// its own. An engine that reads only the schema before it would decode such a
+// record without the digest — and stamping a collect would then write it
+// back without one, turning "this conversation has instructions" into "it
+// never had any" for the next continuation. A record of an unknown version is
+// refused by name instead, so the older engine never reads it. A record
+// without instructions keeps the schema every engine since it reads alike.
+func TestARecordWithInstructionsIsASchemaOlderEnginesRefuse(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	prompt := writePrompt(t, t.TempDir())
+
+	ruled := filepath.Join(t.TempDir(), "ruled")
+	if res := runEnvoy(t, e, runArgs(prompt, ruled, "--with", "claude", "--instructions-file", writeInstructions(t, "rule A\n"))...); res.code != 0 {
+		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	bare := filepath.Join(t.TempDir(), "bare")
+	if res := runEnvoy(t, e, runArgs(prompt, bare, "--with", "claude")...); res.code != 0 {
+		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	if got := readMeta(t, ruled)["schemaVersion"]; got != float64(11) {
+		t.Fatalf("instructed record schemaVersion = %v, want 11", got)
+	}
+	if got := readMeta(t, bare)["schemaVersion"]; got != float64(10) {
+		t.Fatalf("record without instructions schemaVersion = %v, want 10", got)
+	}
+
+	// This engine reads both, and continues each as what it is.
+	for _, src := range []string{ruled, bare} {
+		next := filepath.Join(t.TempDir(), "next")
+		if res := runEnvoy(t, e, runArgs(prompt, next, "--with", "@"+src)...); res.code != 0 {
+			t.Fatalf("@%s exit = %d\nstderr:\n%s", src, res.code, res.stderr)
+		}
+	}
+	mustContain(t, "collect of an instructed job", runEnvoy(t, e, "collect", "--status-only", ruled).stdout, "status: ok")
+}
+
+// An archive edited after its turn never started is never handed to the
+// identical retry as if it were what was sent: the block says the archive no
+// longer holds the text, and the retry takes the caller's own copy in its
+// place, with the digest that copy must match.
+func TestRetryOfAnEditedArchiveTakesTheCallersOwnCopy(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").set("ENVOY_CODEX_CMD", "no-such-launcher-on-path")
+	prompt := writePrompt(t, t.TempDir())
+	fresh := filepath.Join(t.TempDir(), "fresh")
+	if res := runEnvoy(t, e, runArgs(prompt, fresh, "--with", "codex", "--instructions-file", writeInstructions(t, "rule A\n"))...); res.code != 2 {
+		t.Fatalf("exit = %d, want 2\nstderr:\n%s", res.code, res.stderr)
+	}
+	archive := filepath.Join(fresh, "instructions.md")
+	if err := os.WriteFile(archive, []byte("rule B\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	col := runEnvoy(t, e, "collect", fresh).stdout
+	mustContain(t, "collect", col, "no longer holds the text it was sent", "sha256 is "+digest("rule A\n"),
+		"--prompt-file '"+filepath.Join(fresh, "prompt.md")+"' --instructions-file <your-instructions.md>")
+	mustNotContain(t, "collect", col, "--instructions-file '"+archive+"'")
+}
+
+// A refusal over a damaged archive hands over the repair as a command: the
+// copy from an earlier turn of the conversation whose archive still holds the
+// text, or — when no turn does — the new conversation to start in its place.
+func TestADamagedArchiveRefusalNamesTheRepair(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
+	prompt := writePrompt(t, t.TempDir())
+	first := filepath.Join(t.TempDir(), "first")
+	if res := runEnvoy(t, e, runArgs(prompt, first, "--with", "claude:opus", "--instructions-file", writeInstructions(t, "rule A\n"))...); res.code != 0 {
+		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	second := filepath.Join(t.TempDir(), "second")
+	if res := runEnvoy(t, e, runArgs(prompt, second, "--with", "@"+first)...); res.code != 0 {
+		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+
+	if err := os.Remove(filepath.Join(second, "instructions.md")); err != nil {
+		t.Fatal(err)
+	}
+	res := runEnvoy(t, e, runArgs(prompt, filepath.Join(t.TempDir(), "x"), "--with", "@"+second)...)
+	mustContain(t, "refusal with an intact earlier turn", res.stderr,
+		"cp '"+filepath.Join(first, "instructions.md")+"' '"+filepath.Join(second, "instructions.md")+"'")
+
+	if err := os.Remove(filepath.Join(first, "instructions.md")); err != nil {
+		t.Fatal(err)
+	}
+	res = runEnvoy(t, e, runArgs(prompt, filepath.Join(t.TempDir(), "y"), "--with", "@"+second)...)
+	mustContain(t, "refusal with no intact turn", res.stderr, "sha256 is "+digest("rule A\n"),
+		"envoy run <new-job-name> --with claude:opus --instructions-file <your-instructions.md> --prompt-file <your-follow-up.md>")
+	mustNotContain(t, "refusal with no intact turn", res.stderr, "cp '")
+}
+
+// One member's damaged archive blocks the round and nothing else: the set's
+// resume line goes, the intact member keeps its own, and the round's refusal
+// names the member, its archive and the repair — not a condition the members
+// already meet.
+func TestADamagedMemberArchiveBlocksTheRoundOnly(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").
+		set("ENVOY_FAKE_SESSION_ID_CODEX", "codex-session").
+		set("ENVOY_FAKE_SESSION_ID_CLAUDE", "claude-session")
+	prompt := writePrompt(t, t.TempDir())
+	fan := filepath.Join(t.TempDir(), "consult")
+	if res := runEnvoy(t, e, runArgs(prompt, fan, "--with", "codex", "--with", "claude", "--instructions-file", writeInstructions(t, "rule A\n"))...); res.code != 0 {
+		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	codexArchive := filepath.Join(fan, "codex", "instructions.md")
+	if err := os.Remove(codexArchive); err != nil {
+		t.Fatal(err)
+	}
+
+	col := runEnvoy(t, e, "collect", "--status-only", fan).stdout
+	mustNotContain(t, "group block", col, "--with @'"+fan+"'")
+	mustContain(t, "group block", col, "resume: envoy run <new-job-name> --with @'"+filepath.Join(fan, "claude")+"'",
+		"instructions: "+codexArchive+" — missing")
+
+	res := runEnvoy(t, e, runArgs(prompt, filepath.Join(t.TempDir(), "r2"), "--with", "@"+fan)...)
+	if res.code != 3 {
+		t.Fatalf("round exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
+	}
+	mustContain(t, "round refusal", res.stderr, "member codex", codexArchive, "sha256 is "+digest("rule A\n"))
+	mustNotContain(t, "round refusal", res.stderr, "finished with a session")
+}
+
+// A round continues each member with its own conversation's instructions,
+// even when the members' conversations started with different ones.
+func TestARoundKeepsEachMembersOwnInstructions(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").
+		set("ENVOY_FAKE_SESSION_ID_CODEX", "codex-session").
+		set("ENVOY_FAKE_SESSION_ID_CLAUDE", "claude-session")
+	prompt := writePrompt(t, t.TempDir())
+	a := filepath.Join(t.TempDir(), "a")
+	if res := runEnvoy(t, e, runArgs(prompt, a, "--with", "claude", "--instructions-file", writeInstructions(t, "rule A\n"))...); res.code != 0 {
+		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	b := filepath.Join(t.TempDir(), "b")
+	if res := runEnvoy(t, e, runArgs(prompt, b, "--with", "codex", "--instructions-file", writeInstructions(t, "rule B\n"))...); res.code != 0 {
+		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	pair := filepath.Join(t.TempDir(), "pair")
+	if res := runEnvoy(t, e, runArgs(prompt, pair, "--with", "@"+a, "--with", "@"+b)...); res.code != 0 {
+		t.Fatalf("pair exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	round := filepath.Join(t.TempDir(), "round")
+	if res := runEnvoy(t, e, runArgs(prompt, round, "--with", "@"+pair)...); res.code != 0 {
+		t.Fatalf("round exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	for _, dir := range []string{pair, round} {
+		if got := readFile(t, filepath.Join(dir, "claude", "instructions.md")); got != "rule A\n" {
+			t.Fatalf("%s claude member = %q, want its own rule A", dir, got)
+		}
+		if got := readFile(t, filepath.Join(dir, "codex", "instructions.md")); got != "rule B\n" {
+			t.Fatalf("%s codex member = %q, want its own rule B", dir, got)
+		}
+	}
+}
+
+// A member that left no record has no archive of its own, so its re-send is
+// told to carry the standing instructions its new siblings were sent.
+func TestAMemberWithoutARecordIsResentWithItsSiblingsInstructions(t *testing.T) {
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").
+		set("ENVOY_FAKE_SESSION_ID_CODEX", "codex-session").
+		set("ENVOY_FAKE_SESSION_ID_CLAUDE", "claude-session")
+	prompt := writePrompt(t, t.TempDir())
+	fan := filepath.Join(t.TempDir(), "consult")
+	if res := runEnvoy(t, e, runArgs(prompt, fan, "--with", "codex", "--with", "claude", "--instructions-file", writeInstructions(t, "rule A\n"))...); res.code != 0 {
+		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
+	}
+	if err := os.Remove(filepath.Join(fan, "claude", "meta.json")); err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, "group block", runEnvoy(t, e, "collect", "--status-only", fan).stdout,
+		"--instructions-file '"+filepath.Join(fan, "codex", "instructions.md")+"'")
+}

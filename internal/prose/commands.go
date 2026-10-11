@@ -50,10 +50,12 @@ func voiceSpec(provider, model, effort string) string {
 // cold voice would start a different one), the recorded tree, anchor, write
 // intent, cap and spend cap, and the prompt exactly as the job archived it —
 // with the standing instructions as archived too when the turn started its
-// conversation; a continuation carries its own on from the source.
+// conversation, or the caller's own copy in their place when problem says the
+// archive no longer holds them; a continuation carries its own on from the
+// source.
 // The new dispatch reads its own environment, including the launcher prefix;
 // CommandPrefix is an observation, not a setting this command replays.
-func RedispatchCommand(dir string, m *job.Meta) string {
+func RedispatchCommand(dir string, m *job.Meta, problem job.InstructionsProblem) string {
 	voice := voiceSpec(m.Provider, job.Deref(m.Model), job.Deref(m.Effort))
 	if m.ResumedFrom != nil {
 		voice = "@" + text.ShellQuote(*m.ResumedFrom)
@@ -61,7 +63,11 @@ func RedispatchCommand(dir string, m *job.Meta) string {
 	parts := []string{"envoy run", jobPlaceholder, "--with " + voice,
 		"--prompt-file " + text.ShellQuote(job.Workspace{Dir: dir}.PromptPath())}
 	if m.InstructionsSha256 != nil && m.ResumedFrom == nil {
-		parts = append(parts, "--instructions-file "+text.ShellQuote(job.Workspace{Dir: dir}.InstructionsPath()))
+		instructions := text.ShellQuote(job.Workspace{Dir: dir}.InstructionsPath())
+		if problem != "" {
+			instructions = instructionsPlaceholder
+		}
+		parts = append(parts, "--instructions-file "+instructions)
 	}
 	if m.AllowWrite {
 		parts = append(parts, "--allow-write")

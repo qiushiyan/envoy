@@ -10,14 +10,17 @@ import (
 // Recovery prescribes the next move from the prompt state alone — the only
 // thing the engine can actually prove about a turn that did not return a
 // result. resumeCmd continues the session, redispatchCmd re-sends the prompt
-// as a new job; either is "" when the records cannot render it. The record's
-// failure supplies any cause-specific remedy, and its launcher any configured
-// command the caller must check before following that prescription.
+// as a new job; either is "" when the records cannot render it.
+// instructionsNote says why the re-send takes the caller's own copy of the
+// standing instructions instead of the job's archive (InstructionsRetryNote),
+// "" when the archive holds what was sent. The record's failure supplies any
+// cause-specific remedy, and its launcher any configured command the caller
+// must check before following that prescription.
 //
 // The three states carry different licenses, and confusing them is the
 // expensive mistake: re-sending a prompt the provider already accepted
 // duplicates work that may already have changed the tree.
-func Recovery(m *job.Meta, resumeCmd, redispatchCmd string) string {
+func Recovery(m *job.Meta, resumeCmd, redispatchCmd, instructionsNote string) string {
 	fix := ""
 	if remedy := remedy(m.Failure); remedy != "" {
 		fix = " " + remedy
@@ -45,6 +48,9 @@ func Recovery(m *job.Meta, resumeCmd, redispatchCmd string) string {
 
 	case job.PromptNotStarted:
 		body := "The provider never started, so this prompt did not run and nothing was changed." + fix
+		if instructionsNote != "" {
+			body += " " + instructionsNote
+		}
 		if redispatchCmd == "" {
 			return body + " Dispatch it once more under a new job name; if it fails the same way, " + retryFailure
 		}
@@ -240,8 +246,8 @@ func PendingUnreadableNext(dir string) string {
 // PendingOtherSchema is why an uncollected job written by another engine
 // version is listed: its record — meta.json, or a fan-out's group.json — is
 // intact, and this engine will not reinterpret it.
-func PendingOtherSchema(record string, version, reads int) string {
-	return fmt.Sprintf("its %s is schema %d, written by another envoy version; this one reads schema %d only and will not reinterpret it, so it cannot deliver the job", record, version, reads)
+func PendingOtherSchema(record string, version int, reads []int) string {
+	return fmt.Sprintf("its %s is schema %d, written by another envoy version; this one reads schema %s only and will not reinterpret it, so it cannot deliver the job", record, version, job.SchemaList(reads))
 }
 
 // PendingOtherSchemaNext is the one action for another version's job: its

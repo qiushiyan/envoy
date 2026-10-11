@@ -100,7 +100,7 @@ func TestTimeoutCarriesTheStreamItObserved(t *testing.T) {
 func TestRedispatchRepeatsTheDispatch(t *testing.T) {
 	warm := &job.Meta{Provider: "claude", Model: job.Ptr("opus"), ResumedFrom: job.Ptr("/jobs/consult-r1"),
 		Cwd: "/repo", GitBaseline: job.Ptr("abc123"), MaxBudgetUSD: job.Ptr(0.25), TimeoutMin: 9}
-	got := RedispatchCommand("/jobs/review", warm)
+	got := RedispatchCommand("/jobs/review", warm, "")
 	for _, want := range []string{
 		"envoy run <new-job-name>", "--with @'/jobs/consult-r1'", "--prompt-file '/jobs/review/prompt.md'",
 		"--baseline abc123", "--cwd '/repo'", "--max-budget-usd 0.25", "--timeout-min 9",
@@ -113,7 +113,7 @@ func TestRedispatchRepeatsTheDispatch(t *testing.T) {
 		t.Fatalf("a continuation's retry must not become a cold voice: %q", got)
 	}
 	cold := &job.Meta{Provider: "codex", Effort: job.Ptr("xhigh"), AllowWrite: true, TimeoutMin: 180}
-	got = RedispatchCommand("/jobs/delegate", cold)
+	got = RedispatchCommand("/jobs/delegate", cold, "")
 	for _, want := range []string{"--with codex::xhigh", "--allow-write", "--timeout-min 180"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("redispatch command %q is missing %q", got, want)
@@ -161,7 +161,7 @@ func TestRecoveryCoversEveryPromptState(t *testing.T) {
 		{job.PromptUnknown, true, false, []string{"unproven", "silence is not proof"}},
 	}
 	for _, c := range cases {
-		got := Recovery(&job.Meta{PromptState: c.state}, resume, redispatch)
+		got := Recovery(&job.Meta{PromptState: c.state}, resume, redispatch, "")
 		if strings.TrimSpace(got) == "" {
 			t.Fatalf("%s: no prescription", c.state)
 		}
@@ -179,11 +179,11 @@ func TestRecoveryCoversEveryPromptState(t *testing.T) {
 	}
 
 	// A cause-specific fix rides along with the prescription.
-	if got := Recovery(&job.Meta{PromptState: job.PromptAccepted, Failure: &job.Failure{Cause: job.CauseBudgetCap}}, resume, redispatch); !strings.Contains(got, "Raise the budget cap before continuing.") {
+	if got := Recovery(&job.Meta{PromptState: job.PromptAccepted, Failure: &job.Failure{Cause: job.CauseBudgetCap}}, resume, redispatch, ""); !strings.Contains(got, "Raise the budget cap before continuing.") {
 		t.Fatalf("remedy dropped: %s", got)
 	}
 	// Without a session, the prescriptions stay honest about what is possible.
-	if got := Recovery(&job.Meta{PromptState: job.PromptUnknown}, "", ""); strings.Contains(got, "envoy run") {
+	if got := Recovery(&job.Meta{PromptState: job.PromptUnknown}, "", "", ""); strings.Contains(got, "envoy run") {
 		t.Fatalf("no session must mean no resume command: %s", got)
 	}
 }
@@ -268,10 +268,43 @@ func TestContinueVocabulary(t *testing.T) {
 		BlockerNoSession:    {"never published a session id", "no conversation to continue", "fresh dispatch"},
 	}
 	for kind, wants := range blocked {
-		got := ContinueBlocked("/jobs/j1", kind)
+		got := ContinueBlocked("/jobs/j1", kind, "")
 		for _, want := range append(wants, "--with @/jobs/j1", "envoy collect '/jobs/j1'") {
 			if !strings.Contains(got, want) {
 				t.Fatalf("%s: %q is missing %q", kind, got, want)
+			}
+		}
+	}
+
+	// A damaged archive's refusal ends in the repair, which is a command
+	// either way: the copy from an intact earlier turn, or the new
+	// conversation that starts over from the caller's own copy.
+	m := &job.Meta{Provider: "claude", Model: job.Ptr("opus"), InstructionsSha256: job.Ptr("abc123")}
+	fromSource := InstructionsRepair("/jobs/j2", m, "/jobs/j1/instructions.md")
+	if want := "cp '/jobs/j1/instructions.md' '/jobs/j2/instructions.md'"; !strings.Contains(fromSource, want) {
+		t.Fatalf("repair from an intact turn %q is missing %q", fromSource, want)
+	}
+	fresh := InstructionsRepair("/jobs/j2", m, "")
+	for _, want := range []string{"sha256 is abc123",
+		"envoy run <new-job-name> --with claude:opus --instructions-file <your-instructions.md> --prompt-file <your-follow-up.md>"} {
+		if !strings.Contains(fresh, want) {
+			t.Fatalf("repair with no intact turn %q is missing %q", fresh, want)
+		}
+	}
+	for kind, want := range map[ResumeBlockerKind]string{
+		BlockerInstructionsMissing: "/jobs/j2/instructions.md is missing or will not read",
+		BlockerInstructionsChanged: "/jobs/j2/instructions.md no longer holds the text it was sent",
+	} {
+		got := ContinueBlocked("/jobs/j2", kind, fromSource)
+		for _, w := range []string{"--with @/jobs/j2", want, "takes whatever that turn passed", fromSource} {
+			if !strings.Contains(got, w) {
+				t.Fatalf("%s: %q is missing %q", kind, got, w)
+			}
+		}
+		line := FanResumeBlockerLine(FanMemberCandidate{Name: "codex", Dir: "/jobs/j2", Kind: kind, Detail: fromSource})
+		for _, w := range []string{"member codex", want, fromSource} {
+			if !strings.Contains(line, w) {
+				t.Fatalf("%s member line %q is missing %q", kind, line, w)
 			}
 		}
 	}

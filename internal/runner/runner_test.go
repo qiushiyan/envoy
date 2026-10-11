@@ -1,8 +1,10 @@
 package runner
 
 import (
+	"bytes"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
@@ -153,5 +155,37 @@ func TestAStopEscalatesOnceAndKeepsItsReason(t *testing.T) {
 	r.escalationTimer.Stop()
 	if r.term.reason != stopTimeout || diskUsage(t, r).InterruptionSignal != nil {
 		t.Fatalf("the stop keeps the reason it started with: %+v", r.term)
+	}
+}
+
+// A turn whose standing instructions cannot be archived never spawns: every
+// later turn of its conversation passes them again from that archive, so a
+// turn run without one would leave the next turn nothing to pass.
+func TestATurnWhoseInstructionsCannotBeArchivedNeverSpawns(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	marker := filepath.Join(t.TempDir(), "spawned")
+	launcher := filepath.Join(t.TempDir(), "launcher")
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\ntouch '"+marker+"'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ENVOY_CODEX_CMD", launcher)
+	prompt := filepath.Join(t.TempDir(), "prompt.md")
+	if err := os.WriteFile(prompt, []byte("the turn\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := t.TempDir()
+	// A directory where the archive goes: the write fails, nothing else does.
+	if err := os.Mkdir(job.Workspace{Dir: out}.InstructionsPath(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	res := Run(Options{Provider: "codex", PromptFile: prompt, Cwd: t.TempDir(), OutDir: out,
+		Turn: provider.Options{Instructions: "rule A\n"}, Stdout: &stdout, Stderr: &stderr})
+	if res.ExitCode != job.ExitInfra || !strings.Contains(stderr.String(), "cannot prepare job dir") {
+		t.Fatalf("Run = %+v, stderr %q; want infra before anything ran", res, stderr.String())
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("the provider was launched without its instructions archive")
 	}
 }

@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"slices"
+	"strconv"
+	"strings"
 )
 
 // ConnectionErrors is the observed tally of a provider's connection-error
@@ -136,14 +139,36 @@ type Meta struct {
 	ReconciledAt *string  `json:"reconciledAt,omitempty"`
 }
 
-// MetaSchemaVersion is the only schema this engine reads or writes. Records
-// from another version are refused rather than reinterpreted: a job store
-// holds one engine's records at a time.
+// MetaSchemaVersion is the schema of a turn record; MetaSchemaInstructed is
+// the same record for a conversation with standing instructions. They are the
+// only schemas this engine reads or writes. Records from another version are
+// refused rather than reinterpreted: a job store holds one engine's records
+// at a time.
 // Optional additive observations (such as usage) retain this version; absence
 // means unavailable, and existing fields keep their semantics. Schema 10
 // replaced the worded error, remedy and lock-conflict strings with the
 // failure and lock-conflict observations they were worded from.
 const MetaSchemaVersion = 10
+
+// MetaSchemaInstructed is MetaSchemaVersion with instructionsSha256 required.
+// Its absence is not unavailable but a meaning — the conversation has no
+// instructions — so an engine that reads only schema 10 would misread such a
+// record: decode it without the digest, write it back that way when a collect
+// stamps it, and continue the conversation without its instructions. A version
+// of its own makes that engine refuse the record by name instead. A record
+// without instructions keeps schema 10, which every engine since reads alike.
+const MetaSchemaInstructed = 11
+
+// MetaSchemas are the turn-record schemas this engine reads.
+var MetaSchemas = []int{MetaSchemaVersion, MetaSchemaInstructed}
+
+// MetaSchemaFor is the schema a turn record is written in.
+func MetaSchemaFor(instructed bool) int {
+	if instructed {
+		return MetaSchemaInstructed
+	}
+	return MetaSchemaVersion
+}
 
 // UsesLauncher reports whether a non-bare command was recorded.
 // Absent and bare prefixes both leave nothing to report about a launcher.
@@ -198,12 +223,22 @@ type Stamp struct {
 // file (meta.json or group.json), Version what it carries, and Reads the one
 // version this engine reads for it.
 type SchemaError struct {
-	Record         string
-	Version, Reads int
+	Record  string
+	Version int
+	Reads   []int
 }
 
 func (e *SchemaError) Error() string {
-	return fmt.Sprintf("%s is schema %d and this engine reads schema %d only", e.Record, e.Version, e.Reads)
+	return fmt.Sprintf("%s is schema %d and this engine reads schema %s only", e.Record, e.Version, SchemaList(e.Reads))
+}
+
+// SchemaList spells the versions an engine reads: "10", "10 or 11".
+func SchemaList(versions []int) string {
+	words := make([]string, len(versions))
+	for i, v := range versions {
+		words[i] = strconv.Itoa(v)
+	}
+	return strings.Join(words, " or ")
 }
 
 // ReadRecord reads the turn record in dir once. Its stamp comes back from a
@@ -252,8 +287,8 @@ func readRecordFile(path string) (*Stamp, *Meta, error) {
 	if err := json.Unmarshal(data, &stamp); err != nil {
 		return nil, nil, err
 	}
-	if stamp.SchemaVersion != MetaSchemaVersion {
-		return &stamp, nil, &SchemaError{Record: "meta.json", Version: stamp.SchemaVersion, Reads: MetaSchemaVersion}
+	if !slices.Contains(MetaSchemas, stamp.SchemaVersion) {
+		return &stamp, nil, &SchemaError{Record: "meta.json", Version: stamp.SchemaVersion, Reads: MetaSchemas}
 	}
 	var meta Meta
 	if err := json.Unmarshal(data, &meta); err != nil {

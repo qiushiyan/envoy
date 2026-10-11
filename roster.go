@@ -130,7 +130,7 @@ func seatVoices(seat string, req RunRequest, invocationCwd, caller string) ([]vo
 		return nil, prose.ContinueNoTurn(ref, err)
 	}
 	if blocker != "" {
-		return nil, prose.ContinueBlocked(ref, blocker)
+		return nil, prose.ContinueBlocked(ref, blocker, collect.InstructionsRepair(ref))
 	}
 	v := continuedVoice(ref, cont, "")
 	v.promptFile = promptFile
@@ -279,7 +279,7 @@ func inspectFan(dir string) ([]fanMember, error) {
 		case err != nil:
 			c.Kind, c.Detail = prose.BlockerUnreadableMeta, err.Error()
 		case blocker != "":
-			c.Kind = blocker
+			c.Kind, c.Detail = blocker, collect.InstructionsRepair(m.Dir)
 		}
 		members[i] = fanMember{c, cont}
 	}
@@ -302,7 +302,7 @@ func fanMembers(dir, promptFile string) ([]voice, string) {
 	var reasons []string
 	for _, m := range members {
 		if m.Kind != "" {
-			reasons = append(reasons, prose.FanResumeBlockerLine(m.Name, m.Kind, m.Detail))
+			reasons = append(reasons, prose.FanResumeBlockerLine(m.FanMemberCandidate))
 			continue
 		}
 		v := continuedVoice(m.Dir, m.cont, m.Name)

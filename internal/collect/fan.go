@@ -39,13 +39,14 @@ func collectGroup(dir, note string, mode Mode, w, errW io.Writer) int {
 	}
 	var stamps []stampable
 	resumable := len(fan.Members) > 0
+	instructions := rosterInstructions(fan.Members)
 	for _, m := range fan.Members {
 		fmt.Fprintf(&sections, "\n=== member %s ===\n", m.Name)
 		// A member with no record is the roster's observation, not the
 		// member's: it gets its own section here, worded to what the directory
 		// shows, rather than the single-turn error a turn with no record earns.
 		if errors.Is(m.Err, job.ErrNoRecord) {
-			fmt.Fprintf(&sections, "status: %s\nnext: %s\n", prose.FanMemberNoRecord(), prose.FanMemberNoRecordNext(m.Dir))
+			fmt.Fprintf(&sections, "status: %s\nnext: %s\n", prose.FanMemberNoRecord(), prose.FanMemberNoRecordNext(m.Dir, instructions))
 			statuses = append(statuses, "")
 			labels = append(labels, m.Name+" no status")
 			resumable = false
@@ -65,7 +66,7 @@ func collectGroup(dir, note string, mode Mode, w, errW io.Writer) int {
 			if r.stamp {
 				stamps = append(stamps, stampable{m.Dir, r.meta})
 			}
-			if _, blocked := continuationBlocker(m.Dir, r.meta); blocked {
+			if !r.resumable {
 				resumable = false
 			}
 		}
@@ -143,4 +144,21 @@ func collectGroup(dir, note string, mode Mode, w, errW io.Writer) int {
 		stampCollected(s.dir, s.meta)
 	}
 	return 0
+}
+
+// rosterInstructions is the archive of a member that started its
+// conversation with the fan-out's standing instructions — a new member, with
+// an intact archive — or "" when none did. The manifest records no
+// instructions of its own, so this is how a member without a record is re-sent
+// with the ones its siblings were.
+func rosterInstructions(members []job.Member) string {
+	for _, m := range members {
+		if m.Meta == nil || m.Meta.ResumedFrom != nil {
+			continue
+		}
+		if text, problem := job.ReadInstructions(m.Dir, m.Meta); text != "" && problem == "" {
+			return job.Workspace{Dir: m.Dir}.InstructionsPath()
+		}
+	}
+	return ""
 }

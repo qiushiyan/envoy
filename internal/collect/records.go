@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/qiushiyan/envoy/internal/job"
@@ -15,41 +16,49 @@ import (
 // whether it still holds its name, what its processes show while it is
 // recorded as running, and the recovery its record prescribes.
 
-// continuationBlocker is the single definition of "this job's session may
-// not be continued", consulted by every surface that advertises or dispatches
-// a continuation: collect's resume line, the fan-out's set-level resume line,
-// and the @<job> inspection at dispatch. One definition means no surface can
-// advertise a follow-up that dispatch would refuse. A recorded session-lock
-// conflict blocks because the session may belong to another job.
-func continuationBlocker(dir string, meta *job.Meta) (prose.ResumeBlockerKind, bool) {
-	_, kind, blocked := continuation(dir, meta)
-	return kind, blocked
+// continuation is what the one continuation rule says about a turn, read
+// once wherever a surface needs it: whether its conversation may continue,
+// and the state of its standing-instructions archive, which a surface reports
+// and a retry repairs whatever else blocks the continuation.
+type continuation struct {
+	// blocker is why the conversation may not continue; "" = it may.
+	blocker prose.ResumeBlockerKind
+	// instructions is the text a continuation carries on ("" = none), read and
+	// verified against the record; problem is what keeps the archive from
+	// supplying it, "" when nothing does.
+	instructions string
+	problem      job.InstructionsProblem
 }
 
-// continuation is continuationBlocker's definition, which also hands back the
-// standing instructions a continuation carries on. A conversation whose
-// record names instructions continues only with them: every launch re-passes
-// them, so one without them would leave the session bare after its next
-// compaction — and an archive that is gone or edited cannot supply them.
-func continuation(dir string, meta *job.Meta) (string, prose.ResumeBlockerKind, bool) {
+// continuationOf is the single definition of "this job's conversation may
+// not be continued", consulted by every surface that advertises or
+// dispatches a continuation: collect's resume line, the fan-out's set-level
+// resume line, and the @<job> inspection at dispatch. One definition means no
+// surface can advertise a follow-up that dispatch would refuse. A recorded
+// session-lock conflict blocks because the session may belong to another job.
+// A conversation whose record names standing instructions continues only with
+// them: every launch passes them again, so one without them would leave the
+// session bare after its next compaction — and an archive that is gone or
+// edited cannot supply them.
+func continuationOf(dir string, meta *job.Meta) continuation {
+	if meta == nil {
+		return continuation{blocker: prose.BlockerUnreadableMeta}
+	}
+	c := continuation{}
+	c.instructions, c.problem = job.ReadInstructions(dir, meta)
 	switch {
-	case meta == nil:
-		return "", prose.BlockerUnreadableMeta, true
 	case meta.Status == job.StatusRunning:
-		return "", prose.BlockerRunning, true
+		c.blocker = prose.BlockerRunning
 	case meta.SessionLockConflict != nil:
-		return "", prose.BlockerLockConflict, true
+		c.blocker = prose.BlockerLockConflict
 	case meta.SessionID == nil:
-		return "", prose.BlockerNoSession, true
+		c.blocker = prose.BlockerNoSession
+	case c.problem == job.InstructionsMissing:
+		c.blocker = prose.BlockerInstructionsMissing
+	case c.problem == job.InstructionsChanged:
+		c.blocker = prose.BlockerInstructionsChanged
 	}
-	instructions, problem := job.ReadInstructions(dir, meta)
-	switch problem {
-	case job.InstructionsMissing:
-		return "", prose.BlockerInstructionsMissing, true
-	case job.InstructionsChanged:
-		return "", prose.BlockerInstructionsChanged, true
-	}
-	return instructions, "", false
+	return c
 }
 
 // Continuation is what a continuable turn hands the voice that continues it:
@@ -81,11 +90,11 @@ func Continuable(dir string, meta *job.Meta, err error) (*Continuation, prose.Re
 	if !job.KnownStatus(meta.Status) || meta.Provider == "" {
 		return nil, "", fmt.Errorf("meta.json is not a job this engine wrote (status %q)", meta.Status)
 	}
-	instructions, kind, blocked := continuation(dir, meta)
-	if blocked {
-		return nil, kind, nil
+	c := continuationOf(dir, meta)
+	if c.blocker != "" {
+		return nil, c.blocker, nil
 	}
-	return &Continuation{Meta: meta, Instructions: instructions}, "", nil
+	return &Continuation{Meta: meta, Instructions: c.instructions}, "", nil
 }
 
 // NameHold is the single definition of "this job still holds its name": it
@@ -170,7 +179,7 @@ func stampHold(dir string, stamp *job.Stamp) (prose.NameHold, bool) {
 	switch {
 	case stamp == nil:
 		return prose.NameHold{Kind: prose.HoldUnreadable}, true
-	case stamp.SchemaVersion != job.MetaSchemaVersion:
+	case !slices.Contains(job.MetaSchemas, stamp.SchemaVersion):
 		if stamp.Status == job.StatusRunning && proc.RunnerLiveness(dir, stamp.RunnerPid, stamp.RunnerLock) != proc.Gone {
 			return prose.NameHold{Kind: prose.HoldOtherVersion}, true
 		}
@@ -220,28 +229,48 @@ func classifyRunning(dir string, meta *job.Meta) prose.RunObservation {
 // "" when continuing it is not licensed — the same eligibility an @<job>
 // voice applies, so collect can never offer a continuation dispatch would
 // refuse.
-func resumeCommand(dir string, meta *job.Meta) string {
-	if _, blocked := continuationBlocker(dir, meta); blocked {
+func resumeCommand(dir string, meta *job.Meta, c continuation) string {
+	if c.blocker != "" {
 		return ""
 	}
 	return prose.ContinueCommand(dir, meta.TimeoutMin)
+}
+
+// InstructionsRepair is how the archive in dir can be made to supply its
+// conversation's standing instructions again, "" when it already does or the
+// record names none: a copy from an earlier turn of the conversation whose
+// archive still holds the text, else the digest a restored file must match.
+func InstructionsRepair(dir string) string {
+	meta, err := job.ReadMeta(dir)
+	if err != nil || continuationOf(dir, meta).problem == "" {
+		return ""
+	}
+	return prose.InstructionsRepair(dir, meta, job.IntactInstructionsSource(meta))
 }
 
 // recoveryAction is the prescription for a terminal job that did not
 // deliver, rendered from its records: the lock refusal when the session was
 // held, otherwise what the prompt state licenses, the remedy its recorded
 // failure calls for, and the commands that continue or repeat the dispatch.
-func recoveryAction(dir string, meta *job.Meta) string {
+func recoveryAction(dir string, meta *job.Meta, c continuation) string {
 	if meta.SessionLockConflict != nil {
 		return prose.LockedSession(meta.SessionLockConflict, false)
 	}
-	return prose.Recovery(meta, resumeCommand(dir, meta), prose.RedispatchCommand(dir, meta))
+	// The identical retry of a turn that started its conversation sends the
+	// archive as the new conversation's instructions, so an archive that no
+	// longer holds what was sent is never offered as what was sent. A retried
+	// continuation takes its instructions from its source, never from here.
+	note := ""
+	if meta.ResumedFrom == nil && c.problem != "" {
+		note = prose.InstructionsRetryNote(meta)
+	}
+	return prose.Recovery(meta, resumeCommand(dir, meta, c), prose.RedispatchCommand(dir, meta, c.problem), note)
 }
 
 // recoveryForStale prescribes the next move for a job whose runner is gone.
 // A live orphan provider outranks the prompt state: acting alongside it would
 // put two turns in one tree.
-func recoveryForStale(dir string, meta *job.Meta, state prose.RunObservation) string {
+func recoveryForStale(dir string, meta *job.Meta, state prose.RunObservation, c continuation) string {
 	if meta.SessionLockConflict != nil {
 		return prose.LockedSession(meta.SessionLockConflict, state.State == prose.RunOrphaned)
 	}
@@ -249,7 +278,7 @@ func recoveryForStale(dir string, meta *job.Meta, state prose.RunObservation) st
 	case prose.RunOrphaned:
 		return prose.Orphaned()
 	case prose.RunAbandoned:
-		return recoveryAction(dir, meta)
+		return recoveryAction(dir, meta, c)
 	default:
 		return prose.Unprovable()
 	}

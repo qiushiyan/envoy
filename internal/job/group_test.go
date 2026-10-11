@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -103,7 +104,7 @@ func TestAnotherSchemasFanOutKeepsItsStamp(t *testing.T) {
 	}
 	stamp, group, err := ReadGroupRecord(dir)
 	var other *SchemaError
-	if !errors.As(err, &other) || other.Record != "group.json" || other.Version != 1 || other.Reads != GroupSchemaVersion {
+	if !errors.As(err, &other) || other.Record != "group.json" || other.Version != 1 || !slices.Equal(other.Reads, []int{GroupSchemaVersion}) {
 		t.Fatalf("ReadGroupRecord err = %v, want group.json's *SchemaError", err)
 	}
 	if stamp == nil || stamp.RunnerPid != 42 || group != nil {

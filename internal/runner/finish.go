@@ -31,7 +31,7 @@ func (r *run) initMeta() {
 	// Compute native argv once; record its launch prefix alongside it before spawn.
 	r.argv = r.driver.Argv()
 	r.meta = &job.Meta{
-		SchemaVersion:      job.MetaSchemaVersion,
+		SchemaVersion:      job.MetaSchemaFor(instructions != nil),
 		ConnectionErrors:   connectionTally(r.driver),
 		Usage:              r.driver.Usage(),
 		Status:             job.StatusRunning,

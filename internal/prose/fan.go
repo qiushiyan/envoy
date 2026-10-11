@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/qiushiyan/envoy/internal/job"
+	"github.com/qiushiyan/envoy/internal/text"
 )
 
 // A fan-out is several turns, each on its own prompt, supervised as a single
@@ -140,10 +141,17 @@ func FanMemberUnreadableNext(dir string) string {
 }
 
 // FanMemberNoRecordNext is the one action for a member without a record.
-func FanMemberNoRecordNext(dir string) string {
+// instructions is the archive of a sibling that started its conversation with
+// the fan-out's standing instructions, "" when none did: a member without a
+// record has no archive of its own, and a re-send without them starts bare.
+func FanMemberNoRecordNext(dir, instructions string) string {
 	ws := job.Workspace{Dir: dir}
-	return fmt.Sprintf("read %s, %s and %s before retrying this member; a member whose logs show nothing ran is re-sent as its own job with its prompt.md",
+	next := fmt.Sprintf("read %s, %s and %s before retrying this member; a member whose logs show nothing ran is re-sent as its own job with its prompt.md",
 		ws.ProgressLogPath(), ws.RawLogPath(), ws.StderrLogPath())
+	if instructions != "" {
+		next += " and the fan-out's standing instructions, which its other new members were sent: --instructions-file " + text.ShellQuote(instructions)
+	}
+	return next
 }
 
 // FanDispatchNext is the nudge printed the moment a fan-out starts, when the
@@ -208,20 +216,19 @@ func FanCollected(groupDir string, statuses []string) string {
 }
 
 // FanResumeBlockerLine words one member's blocker as an observation, in the
-// shared ResumeBlockerKind vocabulary. detail carries the read error for an
-// unreadable meta and is ignored otherwise.
-func FanResumeBlockerLine(member string, kind ResumeBlockerKind, detail string) string {
-	switch kind {
+// shared ResumeBlockerKind vocabulary, with the member's Detail where its
+// kind carries one.
+func FanResumeBlockerLine(c FanMemberCandidate) string {
+	member, detail := c.Name, c.Detail
+	switch c.Kind {
 	case BlockerUnreadableMeta:
 		return fmt.Sprintf("member %s has no readable meta.json (%s)", member, detail)
 	case BlockerRunning:
 		return fmt.Sprintf("member %s is still running", member)
 	case BlockerLockConflict:
 		return fmt.Sprintf("member %s's last turn ended in a session-lock conflict, so its session may belong to another job", member)
-	case BlockerInstructionsMissing:
-		return fmt.Sprintf("member %s was sent standing instructions, and their archive is missing or will not read", member)
-	case BlockerInstructionsChanged:
-		return fmt.Sprintf("member %s's standing instructions archive no longer holds the text it was sent", member)
+	case BlockerInstructionsMissing, BlockerInstructionsChanged:
+		return fmt.Sprintf("member %s: %s %s", member, instructionsLost(c.Dir, c.Kind), detail)
 	default: // BlockerNoSession
 		return fmt.Sprintf("member %s never published a session id, so it has no conversation to continue", member)
 	}
@@ -231,11 +238,11 @@ func FanResumeBlockerLine(member string, kind ResumeBlockerKind, detail string) 
 // is continued together or not at all, because dispatching the ready ones now
 // would leave the blocked voices out of the round with no record of why.
 func FanContinueBlocked(dir string, reasons []string) string {
-	return fmt.Sprintf("--with @%s: this fan-out cannot be continued as a set yet — %s. A resumed fan-out continues every member "+
+	return fmt.Sprintf("--with @%s: this fan-out cannot be continued as a set yet. A resumed fan-out continues every member "+
 		"together. Collect it first (%s): that reconciles members that died without a status, and each section carries "+
-		"its own recovery; once every member is finished with a session, continue the set — or continue just the ready "+
-		"members individually with the command their sections print.",
-		dir, strings.Join(reasons, "; "), CollectCommand(dir))
+		"its own recovery; once every member can continue, continue the set — or continue just the ready "+
+		"members individually with the command their sections print.\nNot continuable:\n  %s",
+		dir, CollectCommand(dir), strings.Join(reasons, "\n  "))
 }
 
 // FanContinueUnreadableManifest rejects a fan-out whose manifest cannot be

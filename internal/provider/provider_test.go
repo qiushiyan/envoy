@@ -175,6 +175,21 @@ func TestTOMLStringRoundTrips(t *testing.T) {
 		if strings.ContainsFunc(got, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
 			t.Fatalf("tomlString(%q) = %q carries a raw control character", s, got)
 		}
+		// Go's unquote also accepts escapes TOML lacks (\a, \x07), so the
+		// round trip alone cannot tell a valid TOML string from a Go one.
+		body := got[1 : len(got)-1]
+		for i := 0; i < len(body); i++ {
+			if body[i] != '\\' {
+				continue
+			}
+			if i+1 == len(body) || !strings.ContainsRune(`btnfr"\u`, rune(body[i+1])) {
+				t.Fatalf("tomlString(%q) = %s uses an escape TOML does not define", s, got)
+			}
+			i++
+		}
+	}
+	if got := tomlString("bell\a nul\x00 del\x7f"); got != `"bell\u0007 nul\u0000 del\u007F"` {
+		t.Fatalf("control characters = %s, want TOML's \\uXXXX spelling", got)
 	}
 }
 

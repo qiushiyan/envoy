@@ -50,3 +50,27 @@ func ReadInstructions(dir string, m *Meta) (string, InstructionsProblem) {
 	}
 	return string(data), ""
 }
+
+// IntactInstructionsSource is the archive of an earlier turn of m's
+// conversation that still holds the text m's record names — what a repair of
+// m's own archive can copy from — or "" when no turn back to the
+// conversation's first does. Every turn of a conversation archives the same
+// text, so the lineage its records name is where an intact copy can be found.
+func IntactInstructionsSource(m *Meta) string {
+	if m == nil || m.InstructionsSha256 == nil {
+		return ""
+	}
+	seen := map[string]bool{}
+	for from := m.ResumedFrom; from != nil && !seen[*from]; {
+		seen[*from] = true
+		src, err := ReadMeta(*from)
+		if err != nil || src.InstructionsSha256 == nil || *src.InstructionsSha256 != *m.InstructionsSha256 {
+			return ""
+		}
+		if _, problem := ReadInstructions(*from, src); problem == "" {
+			return Workspace{Dir: *from}.InstructionsPath()
+		}
+		from = src.ResumedFrom
+	}
+	return ""
+}

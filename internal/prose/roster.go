@@ -42,7 +42,8 @@ func ContinueNoTurn(dir string, cause error) string {
 // the coordinate the caller can name instead of the group, with the
 // eligibility observation still structured so rendering happens here, once.
 // Kind is "" for a member that can continue; Detail carries the read error
-// of an unreadable record.
+// of an unreadable record, and the repair (InstructionsRepair) of an archive
+// that no longer supplies the member's standing instructions.
 type FanMemberCandidate struct {
 	Name   string
 	Dir    string
@@ -58,7 +59,7 @@ func GroupRefMustStandAlone(dir string, members []FanMemberCandidate) string {
 	var offered, blocked []string
 	for _, m := range members {
 		if m.Kind != "" {
-			blocked = append(blocked, "  "+FanResumeBlockerLine(m.Name, m.Kind, m.Detail))
+			blocked = append(blocked, "  "+FanResumeBlockerLine(m))
 			continue
 		}
 		offered = append(offered, fmt.Sprintf("  --with @%s  (%s)", text.ShellQuote(m.Dir), m.Name))
@@ -76,7 +77,9 @@ func GroupRefMustStandAlone(dir string, members []FanMemberCandidate) string {
 
 // ContinueBlocked refuses to continue a job whose session is not provably
 // free to continue, naming the observation and the one safe next step.
-func ContinueBlocked(dir string, kind ResumeBlockerKind) string {
+// repair is that step for an archive that no longer supplies the
+// conversation's standing instructions (InstructionsRepair); "" otherwise.
+func ContinueBlocked(dir string, kind ResumeBlockerKind, repair string) string {
 	collect := CollectCommand(dir)
 	head := fmt.Sprintf("--with @%s: ", dir)
 	switch kind {
@@ -88,8 +91,7 @@ func ContinueBlocked(dir string, kind ResumeBlockerKind) string {
 		return head + "this job's last turn ended in a session-lock conflict, so its session may belong to another job. " +
 			"Collect it first — " + collect + " — and follow its next line before continuing this conversation."
 	case BlockerInstructionsMissing, BlockerInstructionsChanged:
-		return head + instructionsLost(dir, kind) + " " + instructionsCarry + " " +
-			"Restore the file to what was sent — every job of this conversation archives the same text — or start a new conversation."
+		return head + instructionsLost(dir, kind) + " " + instructionsCarry + " " + repair
 	default: // BlockerNoSession
 		return head + "this job never published a session id, so it holds no conversation to continue. " +
 			"Collect it — " + collect + " — to see what recovery it licenses; a fresh dispatch may be the right move."
@@ -172,6 +174,36 @@ func instructionsLost(dir string, kind ResumeBlockerKind) string {
 	return fmt.Sprintf("this job was sent standing instructions, and their archive %s is missing or will not read.", path)
 }
 
+// instructionsPlaceholder is the slot a new conversation's command leaves
+// for the caller's own copy of its standing instructions.
+const instructionsPlaceholder = "<your-instructions.md>"
+
+// InstructionsRepair is the step that makes the archive in dir hold the
+// standing instructions m names again: a copy from source, an earlier turn of
+// the conversation whose archive still holds the text, or — when no turn does
+// — the digest a file put back must match, and the new conversation that
+// starts over with the caller's own copy.
+func InstructionsRepair(dir string, m *job.Meta, source string) string {
+	archive := job.Workspace{Dir: dir}.InstructionsPath()
+	if source != "" {
+		return "Copy the text back from an earlier turn of this conversation, whose archive still holds it:\n  cp " +
+			text.ShellQuote(source) + " " + text.ShellQuote(archive)
+	}
+	return fmt.Sprintf("No earlier turn of this conversation still holds it. Put the text back from your own copy — "+
+		"a file whose sha256 is %s — or start a new conversation with it:\n  envoy run %s --with %s --instructions-file %s --prompt-file %s",
+		job.Deref(m.InstructionsSha256), jobPlaceholder, voiceSpec(m.Provider, job.Deref(m.Model), job.Deref(m.Effort)),
+		instructionsPlaceholder, promptPlaceholder)
+}
+
+// InstructionsRetryNote says why the identical retry of a turn that started its
+// conversation takes the caller's own copy of the standing instructions: its
+// archive no longer holds what was sent, and the digest is how to tell a copy
+// that does.
+func InstructionsRetryNote(m *job.Meta) string {
+	return fmt.Sprintf("Its standing instructions archive no longer holds the text it was sent, so the retry below takes "+
+		"your own copy of that file in its place — one whose sha256 is %s.", job.Deref(m.InstructionsSha256))
+}
+
 // InstructionsArchive words a turn's standing-instructions archive for the
 // collect block: where it is, and, when it no longer supplies what the record
 // names, that the conversation cannot continue.
@@ -191,13 +223,14 @@ func InstructionsArchive(dir string, problem job.InstructionsProblem) string {
 func InstructionsAdded(source string) string {
 	return fmt.Sprintf("--with @%s: that conversation started without standing instructions, and a conversation keeps the "+
 		"instructions it started with — the session would not see new ones until its context is next compacted. "+
-		"Continue it without --instructions-file, put the text in this turn's prompt, or start a new conversation with it.", source)
+		"Continue it without --instructions-file, with what this turn needs in its prompt, or start a new conversation with them.", source)
 }
 
 // InstructionsDiffer refuses --instructions-file that differs from the
 // standing instructions a continued conversation started with.
 func InstructionsDiffer(source string) string {
 	return fmt.Sprintf("--with @%s: --instructions-file differs from the standing instructions that conversation started with "+
-		"(%s). %s Leave --instructions-file off — the conversation carries its own on — and put a one-turn change in this "+
-		"turn's prompt, or start a new conversation.", source, job.Workspace{Dir: source}.InstructionsPath(), instructionsCarry)
+		"(%s). %s Leave --instructions-file off — the conversation carries its own on. This turn's prompt can add to them "+
+		"but not reliably lift one, since the provider weighs system-level text above the prompt; a changed rule needs "+
+		"a new conversation.", source, job.Workspace{Dir: source}.InstructionsPath(), instructionsCarry)
 }

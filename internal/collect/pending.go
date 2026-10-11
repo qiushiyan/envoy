@@ -107,7 +107,7 @@ func pendingTurn(dir string, stamp *job.Stamp, meta *job.Meta, err error, caller
 		}
 		next := prose.CollectCommand(dir)
 		if state.State != prose.RunAbandoned {
-			next = recoveryForStale(dir, meta, state)
+			next = recoveryForStale(dir, meta, state, continuationOf(dir, meta))
 		}
 		return pendingItem{label: string(state.State), dir: dir, why: prose.RunDetail(state), next: next}, true
 	case meta.CollectedAt == nil:

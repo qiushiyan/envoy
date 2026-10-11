@@ -176,7 +176,9 @@ FACTS THE FLAGS CANNOT TELL YOU
   started with: a continuation accepts --instructions-file only when the file
   matches them, and refuses a different one, or any for a conversation that
   started without, because the session would go on holding its first text.
-  A one-turn exception belongs in that turn's prompt.
+  A turn's prompt can add to them for that turn, but not reliably lift one:
+  the model weighs system-level text above the prompt, so a changed rule
+  takes a new conversation.
 
   The cap bounds wall-clock time as a safety net, not a stall detector — it
   counts healthy work, so reaching it never proves a hang.

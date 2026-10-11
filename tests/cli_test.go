@@ -79,6 +79,7 @@ func TestHelpIsSelfSufficient(t *testing.T) {
 		"so the session keeps them after its context is compacted", // why they ride every turn
 		"never needs to repeat them",
 		"and refuses a different one",
+		"but not reliably lift one",
 		"replacing any in its own config", // codex's developer_instructions
 		"RUNNING PROVIDERS THROUGH A LAUNCHER",
 		"ENVOY_CODEX_CMD=\"headroom launch --vendor codex --\"",

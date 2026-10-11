@@ -136,7 +136,7 @@ func ReadGroupRecord(dir string) (*GroupStamp, *Group, error) {
 		return nil, nil, err
 	}
 	if stamp.SchemaVersion != GroupSchemaVersion {
-		return &stamp, nil, &SchemaError{Record: "group.json", Version: stamp.SchemaVersion, Reads: GroupSchemaVersion}
+		return &stamp, nil, &SchemaError{Record: "group.json", Version: stamp.SchemaVersion, Reads: []int{GroupSchemaVersion}}
 	}
 	var g Group
 	if err := json.Unmarshal(data, &g); err != nil {
