@@ -286,10 +286,25 @@ func TestContinueVocabulary(t *testing.T) {
 	}
 	fresh := InstructionsRepair("/jobs/j2", m, "")
 	for _, want := range []string{"sha256 is abc123",
-		"envoy run <new-job-name> --with claude:opus --instructions-file <your-instructions.md> --prompt-file <your-follow-up.md>"} {
+		"envoy run <new-job-name> --with claude:opus --prompt-file <your-follow-up.md> --instructions-file <your-instructions.md>"} {
 		if !strings.Contains(fresh, want) {
 			t.Fatalf("repair with no intact turn %q is missing %q", fresh, want)
 		}
+	}
+	// Starting over keeps everything else the job was dispatched with: the
+	// tree, its write intent and anchor, the cap and the spend cap.
+	budget := 0.25
+	settled := &job.Meta{Provider: "claude", InstructionsSha256: job.Ptr("abc123"), ResumedFrom: job.Ptr("/jobs/j1"),
+		Cwd: "/work tree", AllowWrite: true, GitBaseline: job.Ptr("deadbeef"), TimeoutMin: 7, MaxBudgetUSD: &budget}
+	over := InstructionsRepair("/jobs/j2", settled, "")
+	for _, want := range []string{"--with claude --prompt-file <your-follow-up.md> --instructions-file <your-instructions.md>",
+		"--allow-write", "--baseline deadbeef", "--cwd '/work tree'", "--max-budget-usd 0.25", "--timeout-min 7"} {
+		if !strings.Contains(over, want) {
+			t.Fatalf("start-over command %q is missing %q", over, want)
+		}
+	}
+	if strings.Contains(over, "@") {
+		t.Fatalf("starting over is a new conversation, never a continuation: %q", over)
 	}
 	for kind, want := range map[ResumeBlockerKind]string{
 		BlockerInstructionsMissing: "/jobs/j2/instructions.md is missing or will not read",

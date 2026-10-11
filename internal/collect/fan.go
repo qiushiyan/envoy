@@ -39,14 +39,13 @@ func collectGroup(dir, note string, mode Mode, w, errW io.Writer) int {
 	}
 	var stamps []stampable
 	resumable := len(fan.Members) > 0
-	instructions := rosterInstructions(fan.Members)
 	for _, m := range fan.Members {
 		fmt.Fprintf(&sections, "\n=== member %s ===\n", m.Name)
 		// A member with no record is the roster's observation, not the
 		// member's: it gets its own section here, worded to what the directory
 		// shows, rather than the single-turn error a turn with no record earns.
 		if errors.Is(m.Err, job.ErrNoRecord) {
-			fmt.Fprintf(&sections, "status: %s\nnext: %s\n", prose.FanMemberNoRecord(), prose.FanMemberNoRecordNext(m.Dir, instructions))
+			fmt.Fprintf(&sections, "status: %s\nnext: %s\n", prose.FanMemberNoRecord(), prose.FanMemberNoRecordNext(m.Dir, rosterInstructions(fan.Members)))
 			statuses = append(statuses, "")
 			labels = append(labels, m.Name+" no status")
 			resumable = false

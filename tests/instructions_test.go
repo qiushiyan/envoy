@@ -482,7 +482,8 @@ func TestADamagedArchiveRefusalNamesTheRepair(t *testing.T) {
 	}
 	res = runEnvoy(t, e, runArgs(prompt, filepath.Join(t.TempDir(), "y"), "--with", "@"+second)...)
 	mustContain(t, "refusal with no intact turn", res.stderr, "sha256 is "+digest("rule A\n"),
-		"envoy run <new-job-name> --with claude:opus --instructions-file <your-instructions.md> --prompt-file <your-follow-up.md>")
+		"envoy run <new-job-name> --with claude:opus --prompt-file <your-follow-up.md> --instructions-file <your-instructions.md>",
+		"--cwd ", "--timeout-min 30")
 	mustNotContain(t, "refusal with no intact turn", res.stderr, "cp '")
 }
 
@@ -513,7 +514,10 @@ func TestADamagedMemberArchiveBlocksTheRoundOnly(t *testing.T) {
 	if res.code != 3 {
 		t.Fatalf("round exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
 	}
-	mustContain(t, "round refusal", res.stderr, "member codex", codexArchive, "sha256 is "+digest("rule A\n"))
+	// The members started their conversations together, so the sibling's
+	// archive holds the same text by the digest: the repair is a copy.
+	mustContain(t, "round refusal", res.stderr, "member codex", codexArchive,
+		"cp '"+filepath.Join(fan, "claude", "instructions.md")+"' '"+codexArchive+"'")
 	mustNotContain(t, "round refusal", res.stderr, "finished with a session")
 }
 

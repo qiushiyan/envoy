@@ -179,20 +179,19 @@ func instructionsLost(dir string, kind ResumeBlockerKind) string {
 const instructionsPlaceholder = "<your-instructions.md>"
 
 // InstructionsRepair is the step that makes the archive in dir hold the
-// standing instructions m names again: a copy from source, an earlier turn of
-// the conversation whose archive still holds the text, or — when no turn does
-// — the digest a file put back must match, and the new conversation that
+// standing instructions m names again: a copy from source, another turn's
+// archive that holds the same text by the record's digest, or — when no turn
+// does — the digest a file put back must match, and the new conversation that
 // starts over with the caller's own copy.
 func InstructionsRepair(dir string, m *job.Meta, source string) string {
 	archive := job.Workspace{Dir: dir}.InstructionsPath()
 	if source != "" {
-		return "Copy the text back from an earlier turn of this conversation, whose archive still holds it:\n  cp " +
+		return "Copy the text back from another turn whose archive holds the same text, by this record's digest:\n  cp " +
 			text.ShellQuote(source) + " " + text.ShellQuote(archive)
 	}
-	return fmt.Sprintf("No earlier turn of this conversation still holds it. Put the text back from your own copy — "+
-		"a file whose sha256 is %s — or start a new conversation with it:\n  envoy run %s --with %s --instructions-file %s --prompt-file %s",
-		job.Deref(m.InstructionsSha256), jobPlaceholder, voiceSpec(m.Provider, job.Deref(m.Model), job.Deref(m.Effort)),
-		instructionsPlaceholder, promptPlaceholder)
+	return fmt.Sprintf("No other turn's archive still holds it. Put the text back from your own copy — "+
+		"a file whose sha256 is %s — or start a new conversation with it:\n  %s",
+		job.Deref(m.InstructionsSha256), NewConversationCommand(m))
 }
 
 // InstructionsRetryNote says why the identical retry of a turn that started its

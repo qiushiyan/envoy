@@ -152,7 +152,7 @@ func renderJob(dir string, meta *job.Meta, mode Mode, w io.Writer, section bool)
 	// block, which diagnoses the missing payload and leaves the job owed.
 	if mode == ModeResultOnly && meta.Status == job.StatusOK && resultErr == nil {
 		fmt.Fprintln(w, string(resultBody))
-		return rendered{meta: meta, stamp: true}
+		return rendered{meta: meta, stamp: true, resumable: cont.blocker == ""}
 	}
 
 	// What the block holds back is decided by delivery, not by status. A turn

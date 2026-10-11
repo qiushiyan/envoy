@@ -60,14 +60,32 @@ func RedispatchCommand(dir string, m *job.Meta, problem job.InstructionsProblem)
 	if m.ResumedFrom != nil {
 		voice = "@" + text.ShellQuote(*m.ResumedFrom)
 	}
-	parts := []string{"envoy run", jobPlaceholder, "--with " + voice,
-		"--prompt-file " + text.ShellQuote(job.Workspace{Dir: dir}.PromptPath())}
+	instructions := ""
 	if m.InstructionsSha256 != nil && m.ResumedFrom == nil {
-		instructions := text.ShellQuote(job.Workspace{Dir: dir}.InstructionsPath())
+		instructions = text.ShellQuote(job.Workspace{Dir: dir}.InstructionsPath())
 		if problem != "" {
 			instructions = instructionsPlaceholder
 		}
-		parts = append(parts, "--instructions-file "+instructions)
+	}
+	return dispatchCommand(m, voice, text.ShellQuote(job.Workspace{Dir: dir}.PromptPath()), instructions)
+}
+
+// NewConversationCommand starts over in place of this job's conversation: a
+// cold voice of the same provider, model and effort on a NEW prompt and the
+// caller's own copy of the standing instructions, with everything else the
+// job was dispatched with — tree, anchor, write intent, cap and spend cap.
+func NewConversationCommand(m *job.Meta) string {
+	return dispatchCommand(m, voiceSpec(m.Provider, job.Deref(m.Model), job.Deref(m.Effort)),
+		promptPlaceholder, instructionsPlaceholder)
+}
+
+// dispatchCommand renders a dispatch that repeats the settings m was
+// dispatched with, for voice, promptFile and instructionsFile ("" = none),
+// each already spelled for the shell.
+func dispatchCommand(m *job.Meta, voice, promptFile, instructionsFile string) string {
+	parts := []string{"envoy run", jobPlaceholder, "--with " + voice, "--prompt-file " + promptFile}
+	if instructionsFile != "" {
+		parts = append(parts, "--instructions-file "+instructionsFile)
 	}
 	if m.AllowWrite {
 		parts = append(parts, "--allow-write")

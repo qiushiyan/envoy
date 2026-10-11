@@ -245,7 +245,7 @@ func InstructionsRepair(dir string) string {
 	if err != nil || continuationOf(dir, meta).problem == "" {
 		return ""
 	}
-	return prose.InstructionsRepair(dir, meta, job.IntactInstructionsSource(meta))
+	return prose.InstructionsRepair(dir, meta, job.IntactInstructionsSource(dir, meta))
 }
 
 // recoveryAction is the prescription for a terminal job that did not

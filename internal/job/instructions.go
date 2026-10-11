@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
+	"path/filepath"
 )
 
 // Standing instructions are the system-level text a conversation was started
@@ -51,26 +52,44 @@ func ReadInstructions(dir string, m *Meta) (string, InstructionsProblem) {
 	return string(data), ""
 }
 
-// IntactInstructionsSource is the archive of an earlier turn of m's
-// conversation that still holds the text m's record names — what a repair of
-// m's own archive can copy from — or "" when no turn back to the
-// conversation's first does. Every turn of a conversation archives the same
-// text, so the lineage its records name is where an intact copy can be found.
-func IntactInstructionsSource(m *Meta) string {
+// IntactInstructionsSource is another turn's archive that still holds the
+// text the record m read from dir names — what a repair of dir's archive can
+// copy from — or "" when none does. Every turn of a conversation archives the
+// same text, so its lineage (resumedFrom, back to the first turn) is searched
+// first; then, for a fan-out member, its siblings, whose new conversations were
+// started with the same instructions. A candidate counts only when its record
+// carries the same digest and its archive verifies against it.
+func IntactInstructionsSource(dir string, m *Meta) string {
 	if m == nil || m.InstructionsSha256 == nil {
 		return ""
 	}
-	seen := map[string]bool{}
+	intact := func(candidate string, cm *Meta) bool {
+		if cm == nil || cm.InstructionsSha256 == nil || *cm.InstructionsSha256 != *m.InstructionsSha256 {
+			return false
+		}
+		_, problem := ReadInstructions(candidate, cm)
+		return problem == ""
+	}
+	seen := map[string]bool{dir: true}
 	for from := m.ResumedFrom; from != nil && !seen[*from]; {
 		seen[*from] = true
 		src, err := ReadMeta(*from)
-		if err != nil || src.InstructionsSha256 == nil || *src.InstructionsSha256 != *m.InstructionsSha256 {
-			return ""
+		if err != nil {
+			break
 		}
-		if _, problem := ReadInstructions(*from, src); problem == "" {
+		if intact(*from, src) {
 			return Workspace{Dir: *from}.InstructionsPath()
 		}
 		from = src.ResumedFrom
+	}
+	if group := filepath.Dir(dir); IsGroupDir(group) {
+		if fan, err := ReadFan(group); err == nil {
+			for _, sibling := range fan.Members {
+				if !seen[sibling.Dir] && intact(sibling.Dir, sibling.Meta) {
+					return Workspace{Dir: sibling.Dir}.InstructionsPath()
+				}
+			}
+		}
 	}
 	return ""
 }
