@@ -23,6 +23,11 @@ type Options struct {
 	Effort       string   // "" = the provider's own configured default
 	Resume       string   // session id to continue, "" = fresh session
 	MaxBudgetUSD *float64 // claude only
+	// Instructions is the conversation's standing instructions, "" = none:
+	// system-level text the provider receives beside the turn's message, on
+	// every launch of the conversation. Each driver spells it natively; the
+	// runner has archived the same text in the job directory before Argv.
+	Instructions string
 }
 
 // EventKind classifies the semantic events a driver emits from raw stream
@@ -165,7 +170,7 @@ type spec struct {
 
 var registry = map[string]spec{
 	"claude": {
-		driver:      func(o Options, _ job.Workspace, startedAt time.Time) Driver { return newClaude(o, startedAt) },
+		driver:      func(o Options, ws job.Workspace, startedAt time.Time) Driver { return newClaude(o, ws, startedAt) },
 		efforts:     []string{"low", "medium", "high", "xhigh", "max"},
 		belowLowest: []string{"none", "minimal"},
 		spendCap:    true,

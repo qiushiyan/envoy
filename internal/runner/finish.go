@@ -24,32 +24,37 @@ func (r *run) initMeta() {
 	if !r.deadline.IsZero() {
 		deadlineAt = job.Ptr(job.ISO(r.deadline))
 	}
+	var instructions *string
+	if r.opts.Turn.Instructions != "" {
+		instructions = job.Ptr(job.Digest(r.opts.Turn.Instructions))
+	}
 	// Compute native argv once; record its launch prefix alongside it before spawn.
 	r.argv = r.driver.Argv()
 	r.meta = &job.Meta{
-		SchemaVersion:    job.MetaSchemaVersion,
-		ConnectionErrors: connectionTally(r.driver),
-		Usage:            r.driver.Usage(),
-		Status:           job.StatusRunning,
-		Provider:         r.opts.Provider,
-		Model:            job.PtrIfNonEmpty(r.opts.Turn.Model),
-		Effort:           job.PtrIfNonEmpty(r.opts.Turn.Effort),
-		Cwd:              r.opts.Cwd,
-		AllowWrite:       r.opts.AllowWrite,
-		GitBaseline:      job.PtrIfNonEmpty(baseline),
-		MaxBudgetUSD:     r.opts.Turn.MaxBudgetUSD,
-		ResumedFrom:      job.PtrIfNonEmpty(r.opts.ResumedFrom),
-		Caller:           job.PtrIfNonEmpty(r.opts.Caller),
-		StartedAt:        job.ISO(r.startedAt),
-		TimeoutMin:       r.opts.TimeoutMin,
-		DeadlineAt:       deadlineAt,
-		ProviderArgv:     append([]string{r.opts.Provider}, r.argv...),
-		CommandPrefix:    commandPrefix(r.opts.Provider),
-		RunnerPid:        os.Getpid(),
-		RunnerLock:       r.claimed,
-		RunnerInstanceID: r.instance,
-		PromptState:      job.PromptUnknown,
-		ResultKind:       job.ResultNone,
+		SchemaVersion:      job.MetaSchemaVersion,
+		ConnectionErrors:   connectionTally(r.driver),
+		Usage:              r.driver.Usage(),
+		Status:             job.StatusRunning,
+		Provider:           r.opts.Provider,
+		Model:              job.PtrIfNonEmpty(r.opts.Turn.Model),
+		Effort:             job.PtrIfNonEmpty(r.opts.Turn.Effort),
+		Cwd:                r.opts.Cwd,
+		AllowWrite:         r.opts.AllowWrite,
+		GitBaseline:        job.PtrIfNonEmpty(baseline),
+		MaxBudgetUSD:       r.opts.Turn.MaxBudgetUSD,
+		ResumedFrom:        job.PtrIfNonEmpty(r.opts.ResumedFrom),
+		Caller:             job.PtrIfNonEmpty(r.opts.Caller),
+		InstructionsSha256: instructions,
+		StartedAt:          job.ISO(r.startedAt),
+		TimeoutMin:         r.opts.TimeoutMin,
+		DeadlineAt:         deadlineAt,
+		ProviderArgv:       append([]string{r.opts.Provider}, r.argv...),
+		CommandPrefix:      commandPrefix(r.opts.Provider),
+		RunnerPid:          os.Getpid(),
+		RunnerLock:         r.claimed,
+		RunnerInstanceID:   r.instance,
+		PromptState:        job.PromptUnknown,
+		ResultKind:         job.ResultNone,
 	}
 	r.setSession(r.driver.PreflightSessionID())
 }
@@ -81,6 +86,9 @@ func (r *run) printStartupBlock() {
 	}
 	if r.opts.ResumedFrom != "" {
 		fmt.Fprintf(w, "resumed-from: %s\n", r.opts.ResumedFrom)
+	}
+	if r.meta.InstructionsSha256 != nil {
+		fmt.Fprintf(w, "instructions: %s\n", r.ws.InstructionsPath())
 	}
 	// The turn runs in this process, which the caller's own stop does not
 	// reach, so the dispatch says from its first lines how to stop it.

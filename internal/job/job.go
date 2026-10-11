@@ -168,22 +168,32 @@ type Workspace struct {
 	Dir string
 }
 
-func (w Workspace) PromptPath() string      { return filepath.Join(w.Dir, "prompt.md") }
-func (w Workspace) ResultPath() string      { return filepath.Join(w.Dir, "result.md") }
-func (w Workspace) MetaPath() string        { return filepath.Join(w.Dir, "meta.json") }
-func (w Workspace) RawLogPath() string      { return filepath.Join(w.Dir, "raw.log") }
-func (w Workspace) StderrLogPath() string   { return filepath.Join(w.Dir, "stderr.log") }
-func (w Workspace) ProgressLogPath() string { return filepath.Join(w.Dir, "progress.log") }
-func (w Workspace) LastMessagePath() string { return filepath.Join(w.Dir, "last-message.txt") }
+func (w Workspace) PromptPath() string       { return filepath.Join(w.Dir, "prompt.md") }
+func (w Workspace) InstructionsPath() string { return filepath.Join(w.Dir, "instructions.md") }
+func (w Workspace) ResultPath() string       { return filepath.Join(w.Dir, "result.md") }
+func (w Workspace) MetaPath() string         { return filepath.Join(w.Dir, "meta.json") }
+func (w Workspace) RawLogPath() string       { return filepath.Join(w.Dir, "raw.log") }
+func (w Workspace) StderrLogPath() string    { return filepath.Join(w.Dir, "stderr.log") }
+func (w Workspace) ProgressLogPath() string  { return filepath.Join(w.Dir, "progress.log") }
+func (w Workspace) LastMessagePath() string  { return filepath.Join(w.Dir, "last-message.txt") }
 
 // Prepare archives the prompt exactly as it will be sent and truncates the
 // log files, so a crashed job still leaves a complete, self-describing
 // directory. It takes the bytes, not the file: the runner reads the caller's
 // file once and both sends and archives that one read, so prompt.md cannot
 // differ from what the provider received by a write that landed in between.
-func (w Workspace) Prepare(prompt []byte) error {
+// Standing instructions, when the conversation has them, are archived the
+// same way, from the text the provider is handed; a turn whose archive
+// cannot be written does not run, since a later continuation re-passes the
+// conversation's instructions from it.
+func (w Workspace) Prepare(prompt []byte, instructions string) error {
 	if err := os.WriteFile(w.PromptPath(), prompt, 0o644); err != nil {
 		return err
+	}
+	if instructions != "" {
+		if err := os.WriteFile(w.InstructionsPath(), []byte(instructions), 0o644); err != nil {
+			return err
+		}
 	}
 	for _, p := range []string{w.RawLogPath(), w.StderrLogPath(), w.ProgressLogPath()} {
 		if err := os.WriteFile(p, nil, 0o644); err != nil {

@@ -42,7 +42,7 @@ func feedUsage(t *testing.T, c *claude, record map[string]any) []Event {
 }
 
 func TestClaudeUsageCapture(t *testing.T) {
-	c := newClaude(Options{}, time.Now())
+	c := newClaude(Options{}, job.Workspace{}, time.Now())
 	if u := c.Usage(); u.State != "unmeasured" || u.LatestContextTokens != nil || u.OutputTokens != nil || u.ContextWindowTokens != nil || u.Final {
 		t.Fatalf("initial measurement = %+v", u)
 	}
@@ -87,7 +87,7 @@ func TestClaudeUsageCapture(t *testing.T) {
 }
 
 func TestClaudeUsageAttributionAndCompaction(t *testing.T) {
-	c := newClaude(Options{}, time.Now())
+	c := newClaude(Options{}, job.Workspace{}, time.Now())
 	records := usageCapture(t)
 	feedUsage(t, c, records[0])
 	feedUsage(t, c, records[1])
@@ -155,7 +155,7 @@ func TestClaudeUsageTerminalEvidence(t *testing.T) {
 		{"failed with complete usage", func(e map[string]any) { e["subtype"], e["is_error"] = "error_max_turns", true }, "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := newClaude(Options{}, time.Now())
+			c := newClaude(Options{}, job.Workspace{}, time.Now())
 			records := usageCapture(t)
 			for _, e := range records[:5] {
 				feedUsage(t, c, e)
@@ -204,7 +204,7 @@ func TestClaudeUsageMissingSampleEvidence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := usageCapture(t)
 			tc.change(r)
-			c := newClaude(Options{}, time.Now())
+			c := newClaude(Options{}, job.Workspace{}, time.Now())
 			feedUsage(t, c, r[0])
 			feedUsage(t, c, r[1])
 			u := c.Usage()
@@ -220,7 +220,7 @@ func TestClaudeUsageMissingSampleEvidence(t *testing.T) {
 }
 
 func TestClaudeUsageResumeStartsNewTurn(t *testing.T) {
-	c := newClaude(Options{Resume: "previous-session"}, time.Now())
+	c := newClaude(Options{Resume: "previous-session"}, job.Workspace{}, time.Now())
 	if c.Usage().Responses != 0 || c.Usage().PeakContextTokens != nil {
 		t.Fatal("continuation inherited earlier turn accounting")
 	}

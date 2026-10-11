@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 
@@ -71,6 +72,15 @@ func (c *codex) Argv() []string {
 	if c.opts.Effort != "" {
 		args = append(args, "-c", "model_reasoning_effort="+c.opts.Effort)
 	}
+	// On every launch, a resume included: codex keeps the first launch's
+	// developer message in the thread and rebuilds it from the current
+	// launch's config after a compaction. The setting has no file form that
+	// adds to codex's own prompt (model_instructions_file replaces it), so the
+	// text rides inline, as a TOML string so codex cannot read it as another
+	// type.
+	if c.opts.Instructions != "" {
+		args = append(args, "-c", "developer_instructions="+tomlString(c.opts.Instructions))
+	}
 	args = append(args, "-o", c.ws.LastMessagePath())
 	if c.opts.Resume != "" {
 		args = append(args, c.opts.Resume)
@@ -79,6 +89,40 @@ func (c *codex) Argv() []string {
 }
 
 func (c *codex) ExtraEnv() []string { return nil }
+
+// tomlString renders s as a TOML basic string: quotes, backslashes and every
+// control character escaped, everything else literal, so codex's -c parser
+// reads back exactly s.
+func tomlString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			b.WriteString(`\"`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\b':
+			b.WriteString(`\b`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\f':
+			b.WriteString(`\f`)
+		case '\r':
+			b.WriteString(`\r`)
+		default:
+			if r < 0x20 || r == 0x7f {
+				fmt.Fprintf(&b, `\u%04X`, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
 
 func (c *codex) Feed(line string) []Event {
 	if strings.TrimSpace(line) == "" {

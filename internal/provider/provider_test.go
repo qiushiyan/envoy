@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -58,7 +59,7 @@ func TestTheRegistryNamesEveryProvider(t *testing.T) {
 }
 
 func TestClaudeArgv(t *testing.T) {
-	fresh := newClaude(Options{}, time.Now())
+	fresh := newClaude(Options{}, job.Workspace{}, time.Now())
 	argv := fresh.Argv()
 	want := []string{"-p", "--output-format", "stream-json", "--verbose", "--session-id", fresh.sessionID,
 		"--permission-mode", "bypassPermissions"}
@@ -73,7 +74,7 @@ func TestClaudeArgv(t *testing.T) {
 	full := newClaude(Options{
 		Model: "opus", Effort: "xhigh",
 		Resume: "abc", MaxBudgetUSD: &budget,
-	}, time.Now())
+	}, job.Workspace{}, time.Now())
 	argv = full.Argv()
 	want = []string{
 		"-p", "--output-format", "stream-json", "--verbose",
@@ -115,8 +116,70 @@ func TestCodexArgv(t *testing.T) {
 	}
 }
 
+// Standing instructions ride on every launch of a conversation, a resume
+// included: each provider re-renders its system-level text from the launch
+// after a compaction, so a launch without them would leave the session bare.
+// Claude reads the job's own archive; codex takes the text as a TOML string.
+func TestStandingInstructionsArgv(t *testing.T) {
+	ws := job.Workspace{Dir: "/tmp/x"}
+	text := "stay read-only\n"
+
+	for _, resume := range []string{"", "abc"} {
+		argv := newClaude(Options{Resume: resume, Instructions: text}, ws, time.Now()).Argv()
+		if !slices.Contains(argv, "--append-system-prompt-file") ||
+			argv[slices.Index(argv, "--append-system-prompt-file")+1] != ws.InstructionsPath() {
+			t.Fatalf("claude argv (resume %q) = %v, want the archive passed", resume, argv)
+		}
+	}
+	if argv := newClaude(Options{}, ws, time.Now()).Argv(); slices.Contains(argv, "--append-system-prompt-file") {
+		t.Fatalf("a conversation without instructions passes none: %v", argv)
+	}
+
+	resumed := newCodex(Options{Resume: "tid", Instructions: text}, ws).Argv()
+	want := []string{
+		"exec", "resume", "--json", "-c", `developer_instructions="stay read-only\n"`,
+		"-o", ws.LastMessagePath(), "tid", "-",
+	}
+	if !reflect.DeepEqual(resumed, want) {
+		t.Fatalf("codex resume argv = %v, want %v", resumed, want)
+	}
+	if argv := newCodex(Options{}, ws).Argv(); slices.ContainsFunc(argv, func(a string) bool {
+		return strings.HasPrefix(a, "developer_instructions=")
+	}) {
+		t.Fatalf("a conversation without instructions passes none: %v", argv)
+	}
+}
+
+// codex parses the -c value as TOML, so the text must arrive as a string that
+// decodes to exactly the bytes archived — quotes, backslashes, newlines and
+// control characters included, and a text that would itself parse as another
+// TOML type (true, 12, [a]) kept a string.
+func TestTOMLStringRoundTrips(t *testing.T) {
+	for _, s := range []string{
+		"plain", "true", "12", "[a]", "a = b",
+		"quote \" and backslash \\ here",
+		"lines\nand\ttabs\r\nand a form feed\f and a bell\a",
+		"nul \x00 and del \x7f",
+		"unicode: 中文 — ✓",
+	} {
+		got := tomlString(s)
+		if !strings.HasPrefix(got, `"`) || !strings.HasSuffix(got, `"`) {
+			t.Fatalf("tomlString(%q) = %s, want a basic string", s, got)
+		}
+		// TOML's basic-string escapes are a subset of Go's, so a Go unquote
+		// reads the value back the way codex's parser does.
+		back, err := strconv.Unquote(got)
+		if err != nil || back != s {
+			t.Fatalf("tomlString(%q) = %s, decodes to %q (%v)", s, got, back, err)
+		}
+		if strings.ContainsFunc(got, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+			t.Fatalf("tomlString(%q) = %q carries a raw control character", s, got)
+		}
+	}
+}
+
 func TestClaudeStreamParsing(t *testing.T) {
-	c := newClaude(Options{}, time.Now())
+	c := newClaude(Options{}, job.Workspace{}, time.Now())
 
 	events := c.Feed(`{"type":"system","subtype":"init","session_id":"s1","model":"claude-opus-5"}`)
 	if len(events) != 4 || events[1].Kind != KindModelReported || events[1].Model != "claude-opus-5" ||
@@ -125,7 +188,7 @@ func TestClaudeStreamParsing(t *testing.T) {
 	}
 
 	// An init without a model field must not fabricate a report.
-	quiet := newClaude(Options{}, time.Now())
+	quiet := newClaude(Options{}, job.Workspace{}, time.Now())
 	for _, e := range quiet.Feed(`{"type":"system","subtype":"init","session_id":"s1"}`) {
 		if e.Kind == KindModelReported {
 			t.Fatal("no model in init must mean no KindModelReported event")
@@ -170,7 +233,7 @@ func TestClaudeStreamParsing(t *testing.T) {
 }
 
 func TestClaudeFailureExcludesErrorEcho(t *testing.T) {
-	c := newClaude(Options{}, time.Now())
+	c := newClaude(Options{}, job.Workspace{}, time.Now())
 	c.Feed(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"real partial work"}]}}`)
 	c.Feed(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"boom"}]}}`)
 	c.Feed(`{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s1","errors":["boom"]}`)
@@ -210,7 +273,7 @@ func TestClaudeRefusalIsItsOwnCause(t *testing.T) {
 		{"the synthetic message alone", []string{synthetic, envelope}},
 	}
 	for _, tc := range cases {
-		c := newClaude(Options{}, time.Now())
+		c := newClaude(Options{}, job.Workspace{}, time.Now())
 		c.Feed(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"work before the refusal"}]}}`)
 		for _, line := range tc.lines {
 			c.Feed(line)
@@ -230,7 +293,7 @@ func TestClaudeRefusalIsItsOwnCause(t *testing.T) {
 
 	// An error envelope with no refusal in the stream stays a verdict, even
 	// when its words mention one: the cause is what the stream named.
-	c := newClaude(Options{}, time.Now())
+	c := newClaude(Options{}, job.Workspace{}, time.Now())
 	c.Feed(envelope)
 	if f := c.Conclude(ExitInfo{Code: job.Ptr(1)}).Failure; f.Cause != job.CauseProviderVerdict || job.Deref(f.Message) != terminal {
 		t.Fatalf("an unnamed refusal must stay a verdict, got %+v", f)
@@ -255,7 +318,7 @@ func TestClaudeFailureExcludesErrorEchoFromTheTranscript(t *testing.T) {
 			config := t.TempDir()
 			t.Setenv("CLAUDE_CONFIG_DIR", config)
 			writeClaudeTranscript(t, config, "s1", tc.transcript...)
-			c := newClaude(Options{}, time.Now().Add(-time.Minute))
+			c := newClaude(Options{}, job.Workspace{}, time.Now().Add(-time.Minute))
 			c.Feed(`{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s1","errors":["boom"]}`)
 
 			out := c.Conclude(ExitInfo{Code: job.Ptr(1)})
@@ -272,7 +335,7 @@ func TestClaudeFailureExcludesErrorEchoFromTheTranscript(t *testing.T) {
 // Recovered work keeps every assistant message as its own paragraph, with
 // one message's text blocks run together as the provider split them.
 func TestClaudeRecoversWorkAcrossMessages(t *testing.T) {
-	c := newClaude(Options{}, time.Now())
+	c := newClaude(Options{}, job.Workspace{}, time.Now())
 	c.Feed(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"first"}]}}`)
 	c.Feed(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"second "},{"type":"tool_use","name":"Read"},{"type":"text","text":"half"}]}}`)
 	c.Feed(`{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s1","errors":["boom"]}`)
@@ -286,7 +349,7 @@ func TestClaudeRecoversWorkAcrossMessages(t *testing.T) {
 // A verdict the provider gave no words for is recorded as exactly that: the
 // provider's own code where it gave one, and no message the engine made up.
 func TestAVerdictWithoutWordsRecordsNoMessage(t *testing.T) {
-	c := newClaude(Options{}, time.Now())
+	c := newClaude(Options{}, job.Workspace{}, time.Now())
 	c.Feed(`{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s1"}`)
 	if f := c.Conclude(ExitInfo{Code: job.Ptr(1)}).Failure; f.Cause != job.CauseProviderVerdict || f.Message != nil ||
 		job.Deref(f.Code) != "error_during_execution" {
@@ -325,7 +388,7 @@ func writeClaudeTranscript(t *testing.T, config, sessionID string, texts ...stri
 
 func TestClaudeBudgetStop(t *testing.T) {
 	budget := 0.25
-	c := newClaude(Options{MaxBudgetUSD: &budget}, time.Now())
+	c := newClaude(Options{MaxBudgetUSD: &budget}, job.Workspace{}, time.Now())
 	c.Feed(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"partial"}]}}`)
 	c.Feed(`{"type":"result","subtype":"error_max_budget_usd","session_id":"s1","usage":{"input_tokens":1}}`)
 
@@ -341,7 +404,7 @@ func TestClaudeBudgetStop(t *testing.T) {
 }
 
 func TestClaudeArrayAndNoiseTolerance(t *testing.T) {
-	c := newClaude(Options{}, time.Now())
+	c := newClaude(Options{}, job.Workspace{}, time.Now())
 	if events := c.Feed("not json at all"); events != nil {
 		t.Fatalf("noise must yield no events, got %+v", events)
 	}

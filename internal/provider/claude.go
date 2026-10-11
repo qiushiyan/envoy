@@ -19,6 +19,7 @@ import (
 // multiplying log size with one record per generated chunk.
 type claude struct {
 	opts      Options
+	ws        job.Workspace
 	startedAt time.Time
 	sessionID string
 	// evidence is how acceptance was first proven; "" while it is unproven.
@@ -38,14 +39,14 @@ type claude struct {
 // transcriptEvidence labels acceptance read from the session transcript.
 const transcriptEvidence = "claude session transcript"
 
-func newClaude(opts Options, startedAt time.Time) *claude {
+func newClaude(opts Options, ws job.Workspace, startedAt time.Time) *claude {
 	sessionID := opts.Resume
 	if sessionID == "" {
 		// Claude accepts a caller-minted session id, so the lock and the
 		// coordinates exist before spawn.
 		sessionID = job.UUID4()
 	}
-	return &claude{opts: opts, startedAt: startedAt, sessionID: sessionID,
+	return &claude{opts: opts, ws: ws, startedAt: startedAt, sessionID: sessionID,
 		usage: claudeUsage{value: job.NewUsage(), seen: make(map[string]struct{})}}
 }
 
@@ -63,6 +64,14 @@ func (c *claude) Argv() []string {
 		args = append(args, "--resume", c.opts.Resume)
 	} else {
 		args = append(args, "--session-id", c.sessionID)
+	}
+	// On every launch, a resume included. Claude records the system prompt on
+	// a conversation's first request and reuses it until a compaction; the
+	// first request after one re-renders it from that launch's flags, so a
+	// launch without them leaves the session without its instructions.
+	// The file is the job's own archive, so what was sent is what it holds.
+	if c.opts.Instructions != "" {
+		args = append(args, "--append-system-prompt-file", c.ws.InstructionsPath())
 	}
 	// Every turn, whatever its write intent. An inherited mode depends on the
 	// project's settings, the model and the auto classifier; where it lands on

@@ -282,7 +282,7 @@ func TestProjectSlugDistinguishesSameName(t *testing.T) {
 func TestWorkspacePrepareAndProgress(t *testing.T) {
 	dir := t.TempDir()
 	ws := Workspace{Dir: dir}
-	if err := ws.Prepare([]byte("do the thing")); err != nil {
+	if err := ws.Prepare([]byte("do the thing"), ""); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(ws.PromptPath())
@@ -343,4 +343,46 @@ func run(t *testing.T, dir string, name string, args ...string) {
 func resolveDir(arg, cwd, caller string) (string, error) {
 	ref, err := ResolveRef(arg, cwd, caller)
 	return ref.Dir, err
+}
+
+// A turn's standing instructions are archived from the text it was sent, and
+// read back only as what its record names: a record without a digest had
+// none, and one whose archive was lost or edited is a problem, never an empty
+// text a continuation would carry on as "no instructions".
+func TestInstructionsArchiveIsReadAgainstItsRecord(t *testing.T) {
+	ws := Workspace{Dir: t.TempDir()}
+	if err := ws.Prepare([]byte("the turn"), "stay read-only\n"); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(ws.InstructionsPath()); string(data) != "stay read-only\n" {
+		t.Fatalf("instructions.md = %q", data)
+	}
+	recorded := &Meta{InstructionsSha256: Ptr(Digest("stay read-only\n"))}
+	if text, problem := ReadInstructions(ws.Dir, recorded); text != "stay read-only\n" || problem != "" {
+		t.Fatalf("intact archive = %q, %q", text, problem)
+	}
+	if text, problem := ReadInstructions(ws.Dir, &Meta{}); text != "" || problem != "" {
+		t.Fatalf("a record without a digest had none: %q, %q", text, problem)
+	}
+
+	if err := os.WriteFile(ws.InstructionsPath(), []byte("edited\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, problem := ReadInstructions(ws.Dir, recorded); problem != InstructionsChanged {
+		t.Fatalf("edited archive problem = %q, want %q", problem, InstructionsChanged)
+	}
+	if err := os.Remove(ws.InstructionsPath()); err != nil {
+		t.Fatal(err)
+	}
+	if _, problem := ReadInstructions(ws.Dir, recorded); problem != InstructionsMissing {
+		t.Fatalf("lost archive problem = %q, want %q", problem, InstructionsMissing)
+	}
+
+	bare := Workspace{Dir: t.TempDir()}
+	if err := bare.Prepare([]byte("the turn"), ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(bare.InstructionsPath()); !os.IsNotExist(err) {
+		t.Fatalf("a conversation without instructions archives none: %v", err)
+	}
 }

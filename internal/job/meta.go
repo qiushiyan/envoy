@@ -79,7 +79,12 @@ type Meta struct {
 	// Caller is the dispatching session's identity as its harness exported
 	// it; absent when none was exported, and in older records. It scopes what
 	// a job name means to that caller and is never inherited by a continuation.
-	Caller              *string       `json:"caller,omitempty"`
+	Caller *string `json:"caller,omitempty"`
+	// InstructionsSha256 is the digest of the standing instructions this turn
+	// was sent, archived beside it as instructions.md; absent when the
+	// conversation has none, and in older records. It is what tells an archive
+	// that was lost from one that never existed.
+	InstructionsSha256  *string       `json:"instructionsSha256,omitempty"`
 	SessionLockConflict *LockConflict `json:"sessionLockConflict"`
 	StartedAt           string        `json:"startedAt"`
 	EndedAt             *string       `json:"endedAt"`
