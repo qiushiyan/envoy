@@ -14,7 +14,9 @@ observed, never a rendered command or prescription. Every `resume:`, retry and
 the record was read from, so:
 
 - the identical retry repeats the dispatch it replaces — the same source
-  conversation, the archived prompt, the spend cap — under a new name;
+  conversation, the archived prompt, the spend cap, and for a turn that
+  started its conversation the archived instructions, or the caller's own copy
+  when the archive does not hold them — under a new name;
 - the resume line can never disagree with what dispatch would accept
   (`docs/turn-lifecycle-and-recovery.md` § Continuation).
 
@@ -29,7 +31,12 @@ be repaired without a compatibility layer, and a lock refusal carries an
 the verb changed.
 
 The archive is what was sent: `prompt.md` is written from the one read that
-feeds the provider's stdin, never from a second read of the caller's file.
+feeds the provider's stdin, never from a second read of the caller's file, and
+`instructions.md` from the standing-instructions text handed the driver —
+claude reads that very file. The record keeps the instructions' digest
+(`instructionsSha256`), which is what tells an archive that was lost or edited
+from one that never existed: absence is no instructions, loss blocks the
+conversation.
 
 A record is also what makes a directory a job — `meta.json` for a turn,
 `group.json` for a fan-out — so discovery keys on records, and a reserved name
@@ -68,6 +75,14 @@ callers to change their schema pins; the engine version (`envoy version`)
 identifies feature availability. `TestUsageSchemaCompatibility` pins this
 boundary.
 
+A field whose absence means something moves the schema of the records that
+carry it. A record with standing instructions is schema 11 — schema 10 with a
+required `instructionsSha256` — because an engine that reads only 10 decodes it
+without the digest: a collect writes it back that way, and the next
+continuation runs without the instructions (`EVIDENCE.md`, 2026-10-11). This
+engine reads both; a record without instructions stays 10, so an older engine
+reads those as before and refuses an instructed one by name.
+
 ## Collection: delivery, not display
 
 `collectedAt` means one thing: *the return value reached a caller*. The stamp
@@ -97,7 +112,10 @@ not exist.
 
 **The block is tiered on a narrower question than status: did the payload
 land?** Settings, token counts, context usage, prompt-state evidence, result
-kind and log paths form the diagnostic tier. A turn that reports ok *and*
+kind and log paths form the diagnostic tier. The standing-instructions archive
+is a setting, held back with them, except when it does not supply the
+record's text: then it prints whatever the tier, as the reason no `resume:` is
+offered. A turn that reports ok *and*
 whose `result.md` reads holds that tier back and prints what remains to act on
 — coordinate, status, duration, follow-up commands, payload, next action.
 Everything else prints the whole preamble, and `--status-only` prints it on

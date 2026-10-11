@@ -3,7 +3,8 @@
 A turn is one provider process supervised to a terminal record. This doc is
 why the lifecycle observes what it does, why a turn outlives the caller that
 dispatched it, why recovery follows prompt state alone, why session locks are
-never reclaimed, and how a finished turn's conversation continues.
+never reclaimed, and how a finished turn's conversation continues with the
+standing instructions it started with.
 `internal/runner` owns the lifecycle as a single-threaded state machine;
 `internal/detach` runs it outside the caller's processes; `internal/collect`
 owns the eligibility, liveness and recovery reads.
@@ -157,8 +158,9 @@ on the job's records rather than a remembered session id: a resumed claude
 conversation continues under a fresh id, so a remembered id silently forks the
 conversation at a stale point, while the records always name the current head.
 The continued voice reads its provider, session, model, effort, tree, baseline
-and write intent from the job's `meta.json`; explicit `--cwd` and
-`--baseline` win, and every continued turn records `resumedFrom`.
+and write intent from the job's `meta.json`, and its standing instructions
+from the job's `instructions.md`; explicit `--cwd` and `--baseline` win, and
+every continued turn records `resumedFrom`.
 
 What carries over, and why (`EVIDENCE.md`, 2026-07-29):
 
@@ -168,14 +170,45 @@ What carries over, and why (`EVIDENCE.md`, 2026-07-29):
   continues alone, since fan-out members are read-only.
 - **The provider and model come from the record.** Carrying context to another
   model family is prompt authorship, not continuation.
+- **Standing instructions belong to the conversation.** They are set once, when
+  it starts (`--instructions-file`), and every continued turn passes the source
+  job's archived text again; a turn's prompt carries only that turn's job.
 
-Eligibility has one definition, `continuationBlocker` in `internal/collect`,
+Both providers keep the first launch's system-level text only until a
+compaction, and the first launch after one takes whatever text that launch
+passed: a launch without the rules leaves the session without them, and later
+launches passing them cannot restore them until the next compaction
+(`EVIDENCE.md`, 2026-10-11). So the engine, not the caller, passes them on
+every launch, from the records. The same rule makes the text fixed: a
+continuation accepts `--instructions-file` only when it matches the inherited
+text, and refuses a different one, or any for a conversation that started
+without, since the session would go on holding its first text while the
+record named another. A turn's prompt can add to the rules for that turn but
+not reliably lift one; a changed rule is a new conversation.
+
+Rejected:
+
+- **The caller re-passing them every turn**, by a flag or a generic native-argv
+  pass-through: one forgotten launch after a compaction loses them silently,
+  and nothing the caller can observe says when that happened.
+- **Rules in the first turn's prompt:** a compaction summarises them with the
+  rest of the transcript, and one probe's summary dropped them.
+- **Accepting a changed text and recording it:** the record would name text the
+  session does not hold, until a compaction no one can predict.
+
+Eligibility has one definition, `continuationOf` in `internal/collect`,
 consulted by collect's `resume:` line, the fan-out's set-level line and
 dispatch's `@<job>` inspection, so collect never advertises a continuation
 dispatch would refuse. A running turn, a recorded lock conflict and a turn
-with no session cannot continue, and a conversation may appear once per
-roster. Continuing every member of a fan-out is a round
-(`docs/fan-out.md` § Recovery stays per member; a round addresses the set).
+with no session cannot continue, nor a turn whose record names standing
+instructions its archive does not supply — lost, or edited since it was
+sent — because continuing it is the bare launch above. Its refusal names the
+repair: a copy from another turn whose archive holds the same digest (the
+conversation's earlier turns, then a fan-out member's siblings), else the
+digest a restored file must match and the new conversation that starts over.
+A conversation may appear once per roster. Continuing every member of a
+fan-out is a round (`docs/fan-out.md` § Recovery stays per member; a round
+addresses the set).
 
 **No live steering.** No provider accepts input into a running turn: claude's
 streaming input queues each message as a new turn — a multi-turn job in

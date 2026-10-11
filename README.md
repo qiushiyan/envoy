@@ -18,6 +18,8 @@ envoy run review-r1 --prompt-file brief.md --with codex --timeout-min 30
 envoy run consult-r1 --prompt-file brief.md --with codex --with claude:opus   # one prompt, N voices
 envoy run consult-r1 --with codex=survey.md --with claude:opus=critique.md    # a prompt per voice, still one job
 envoy run review-r2 --prompt-file next.md --with @review-r1                  # continue a finished job's conversation
+envoy run design --prompt-file step.md --with claude --instructions-file rules.md
+                              # standing rules for the whole conversation, stated once
 envoy run review-r1 --prompt-file brief.md --with @consult-r1/codex --with codex
                               # a continued conversation beside a cold voice
 envoy collect review-r1       # print one job and mark it collected
@@ -41,7 +43,10 @@ sharing a checkout reuse the same names without colliding. A voice is
 hands the choice to the provider's own configuration, and the engine never
 substitutes one of its own. `@<job>` continues a finished job's conversation
 with the session and settings read from its records, and `@<job>/<member>`
-names one member of a fan-out. `envoy -h` is the full contract, written for
+names one member of a fan-out. `--instructions-file` gives a new conversation
+standing instructions — rules that hold for every turn — which the provider
+receives as system-level text, and every continuation passes them again from
+the job's records, so each turn's prompt carries only that turn's job. `envoy -h` is the full contract, written for
 the agent that drives the engine.
 
 Stdout is written for the agent driving it: every status carries what it
@@ -53,6 +58,8 @@ and log paths that diagnosis needs (`--status-only` prints that preamble on
 demand). The durable files in the job dir are authoritative:
 
 - **`prompt.md`:** the exact dispatched prompt.
+- **`instructions.md`:** the standing instructions the turn was sent, when its
+  conversation has them.
 - **`result.md`:** final provider text, or failure + recovered partial output.
 - **`meta.json`:** machine-readable lifecycle and recovery facts, atomically
   replaced, plus supported usage measurements. It holds observations only — a

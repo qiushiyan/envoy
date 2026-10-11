@@ -86,10 +86,12 @@ envoy is **not a sandbox**: `--allow-write` is intent, not enforcement
   delivers a job:** `docs/records-and-collection.md`
 - **A turn's lifecycle, outliving its caller, waiting for and stopping a turn,
   runner liveness, the timeout, recovery by prompt state, session locks,
-  continuing a conversation:** `docs/turn-lifecycle-and-recovery.md`
+  continuing a conversation and the standing instructions it carries:**
+  `docs/turn-lifecycle-and-recovery.md`
 - **Several voices as one job:** `docs/fan-out.md`
-- **Provider drivers, models and effort, permissions, transient errors,
-  refusals, launchers:** `docs/providers.md`
+- **Provider drivers, models and effort, permissions, how standing
+  instructions reach each provider, transient errors, refusals, launchers:**
+  `docs/providers.md`
 - **Claude primary-turn context and token measurements (`meta.json.usage`):**
   `docs/primary-turn-usage.md`
 

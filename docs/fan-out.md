@@ -86,13 +86,21 @@ Rejected shapes:
   no `=` ambiguity: a quoting tax on every dispatch for a path corner the
   engine's slug-sanitized store never produces.
 
+Standing instructions do not attach to a voice. `--instructions-file` is the
+job's, given to every conversation the roster starts, while each continued
+member keeps its own conversation's — matched by the flag when one is passed,
+or refused (`docs/turn-lifecycle-and-recovery.md` § Continuation). A round
+therefore continues every member with the instructions its own conversation
+started with.
+
 What the rule admits next is bounded by the same test: a per-member cap would
 be supervision; a per-member tree contradicts the one-tree roster; per-member
 write intent stays refused.
 
 ## The fan-out directory holds no prompt
 
-Each member archives the one it was sent. A group copy kept only while the
+Each member archives the prompt it was sent, and its standing instructions
+when it has them. A group copy kept only while the
 prompts match would add a second concept (does this group share a prompt?)
 plus an equality rule. It follows that:
 

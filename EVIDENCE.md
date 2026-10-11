@@ -465,3 +465,27 @@ each workaround.
   pass: whether a restarted caller runs `envoy wait` or re-dispatches, whether
   `stop:` replaces `TaskStop` as the cancel, and whether a script expecting
   exit 5 from a SIGTERM appears.
+- **2026-10-11 — standing rules re-sent every turn, and what keeps them across
+  a compaction.** planlab's steward drove one Claude conversation over six
+  turns (session `8972abdc…`, its `turn_receipt` rows and each turn's
+  `prompt.md`, read 2026-10-11): later turns repeated 33–87% of their prompt
+  characters from earlier turns, and 17 paragraphs (5,514 characters, about
+  1.4K tokens) stood in every turn, 25–34% of each prompt — the rest was earlier
+  steps' outputs delivered again. Probes on Claude Code 2.1.296 (haiku): the
+  appended system prompt is recorded on the first request and reused until a
+  compaction; the first launch after one re-renders it from its own flags — a
+  launch without them answered NONE, and a later launch passing them could not
+  restore them. codex-cli 0.160.0: a resume ignores a changed
+  `developer_instructions`, and after a compaction, at the next launch and four
+  times mid-turn, the developer context is rebuilt from the current launch's
+  config. What stands (0.14.0): `--instructions-file`, archived per job and
+  passed by the engine on every launch (`docs/turn-lifecycle-and-recovery.md`
+  § Continuation, `docs/providers.md` § Standing instructions ride every
+  launch). Review caught a 0.13.1 collect stamping an instructed record back
+  without its digest, after which the next continuation ran bare; such a record
+  is schema 11. A secret-word probe answered NONE after four mid-turn claude
+  compactions while the transcript's system prompt still held the secret — the
+  summary said it "has not been revealed" — and a visible rule held 2 of 2.
+  Compare next pass: whether steward's turns carry only their job once it
+  passes the flag, whether any instructed conversation is refused for a lost
+  archive, and whether a caller asks to change a conversation's rules.

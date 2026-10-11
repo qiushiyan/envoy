@@ -2,9 +2,10 @@
 
 A provider is the CLI a turn runs: `claude` or `codex`. This doc is why the
 provider seam is shaped the way it is — what a driver owns, how the engine
-treats models, effort and permissions, why a transient error never fails a
-turn, why a refusal is recorded apart from other failures, and how launchers
-keep account choice outside the engine.
+treats models, effort and permissions, how standing instructions reach each
+provider, why a transient error never fails a turn, why a refusal is recorded
+apart from other failures, and how launchers keep account choice outside the
+engine.
 
 ## The driver seam
 
@@ -50,6 +51,35 @@ diff, and "analyse only" is a prompt convention.
 There are no allow-lists and no `--add-dir`. The signal to revisit this is a
 read-only claude turn whose `git status` changed under it: the prompt was not
 enough.
+
+## Standing instructions ride every launch
+
+A conversation's standing instructions cross the seam as text, and each
+driver spells them natively on every launch, a resume included
+(`docs/turn-lifecycle-and-recovery.md` § Continuation says why every launch):
+
+- **claude** gets `--append-system-prompt-file` naming the job's own
+  `instructions.md`, so the file the provider read is the archive of what was
+  sent. The runner archives it before the driver computes argv.
+- **codex** gets `-c developer_instructions=` with the text as a TOML basic
+  string, so codex's `-c` parser cannot read it as another type. The setting
+  has no file form that adds to codex's prompt — `model_instructions_file`
+  replaces it — so the text rides inline and `providerArgv` holds it. It
+  replaces any `developer_instructions` in the user's own codex config.
+
+What makes every launch necessary was read from both providers
+(`EVIDENCE.md`, 2026-10-11). Claude records the system prompt on a
+conversation's first request and reuses it until a compaction
+(`--system-prompt-snapshot`, on by default); the first request after one
+re-renders it from that launch's flags. codex keeps the first launch's
+developer message in the thread, ignores a resumed launch's changed text, and
+rebuilds its developer context from the current launch's config after a
+compaction, at the next launch and mid-turn alike.
+
+The engine stops at passing the text. Whether a model follows a rule after a
+compaction summary reframes it is the model's: one probe answered as if its
+secret had never been given when the summary said it "has not been
+revealed", while the system prompt still held it.
 
 ## A transient error is an observation; only the verdict fails a turn
 
