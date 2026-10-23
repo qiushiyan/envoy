@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -84,6 +85,88 @@ func TestCodexSuccess(t *testing.T) {
 	locks, _ := os.ReadDir(filepath.Join(e.home, ".local", "state", "envoy", "locks"))
 	if len(locks) != 0 {
 		t.Fatalf("session lock must be released, found %d", len(locks))
+	}
+}
+
+// A codex turn dispatched from a directory no git repository contains — a
+// scratchpad, a new project — runs, as a claude turn from there does, and so
+// does its continuation: a caller dispatches from wherever its shell stands.
+// The fake refuses such a cwd as codex-cli 0.162.1 does unless the launch
+// carries the flag, and the control first shows that refusal is live.
+func TestCodexRunsOutsideACheckout(t *testing.T) {
+	project, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for d := project; ; d = filepath.Dir(d) {
+		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
+			t.Fatalf("%s sits inside a git repository at %s, so it cannot witness a turn outside one", project, d)
+		}
+		if filepath.Dir(d) == d {
+			break
+		}
+	}
+
+	control := exec.Command(filepath.Join(fakeBin, "codex"), "exec", "--json", "-")
+	control.Dir = project
+	control.Env = newEnv(t).build()
+	control.Stdin = strings.NewReader("fake prompt body\n")
+	out, err := control.CombinedOutput()
+	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 1 ||
+		!strings.Contains(string(out), "--skip-git-repo-check was not specified") {
+		t.Fatalf("the fake must refuse this cwd without the flag, as codex does: err %v\n%s", err, out)
+	}
+
+	for _, intent := range []string{"read", "write"} {
+		t.Run(intent, func(t *testing.T) {
+			capture := filepath.Join(t.TempDir(), "provider.json")
+			e := newEnv(t).
+				set("ENVOY_FAKE_SCENARIO", "success").
+				set("ENVOY_FAKE_SESSION_ID", "sess-outside").
+				set("ENVOY_FAKE_INVOCATION_FILE", capture)
+			prompt := writePrompt(t, t.TempDir())
+
+			// The consult's own dispatch: a name, and no --cwd.
+			args := []string{"run", "consult-r1", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5"}
+			if intent == "write" {
+				args = append(args, "--allow-write")
+			}
+			first := runEnvoyIn(t, e, project, args...)
+			if first.code != 0 {
+				t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", first.code, first.stdout, first.stderr)
+			}
+			source := jobLineOf(first.stdout)
+			if got := readFile(t, filepath.Join(source, "result.md")); got != "fake provider result" {
+				t.Fatalf("result.md = %q", got)
+			}
+			meta := readMeta(t, source)
+			if meta["cwd"] != project || meta["allowWrite"] != (intent == "write") || meta["gitBaseline"] != nil {
+				t.Fatalf("recorded cwd %v, allowWrite %v, baseline %v", meta["cwd"], meta["allowWrite"], meta["gitBaseline"])
+			}
+			received := readInvocation(t, capture)
+			if received.Cwd != project || !slices.Contains(received.Argv, "--skip-git-repo-check") ||
+				!slices.Contains(stringsFromMeta(t, meta, "providerArgv"), "--skip-git-repo-check") {
+				t.Fatalf("provider ran in %s with argv %q; recorded %q", received.Cwd, received.Argv, meta["providerArgv"])
+			}
+
+			followUp := filepath.Join(t.TempDir(), "follow-up.md")
+			if err := os.WriteFile(followUp, []byte("follow-up prompt body\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			next := runEnvoyIn(t, e, project, "run", "consult-r2", "--prompt-file", followUp, "--with", "@consult-r1", "--timeout-min", "5")
+			if next.code != 0 {
+				t.Fatalf("continuation exit = %d\nstdout:\n%s\nstderr:\n%s", next.code, next.stdout, next.stderr)
+			}
+			meta = readMeta(t, jobLineOf(next.stdout))
+			if meta["resumedFrom"] != source || meta["cwd"] != project || meta["allowWrite"] != (intent == "write") {
+				t.Fatalf("continuation resumedFrom %v, cwd %v, allowWrite %v", meta["resumedFrom"], meta["cwd"], meta["allowWrite"])
+			}
+			received = readInvocation(t, capture)
+			if received.Cwd != project || !slices.Contains(received.Argv, "resume") ||
+				!slices.Contains(received.Argv, "sess-outside") || !slices.Contains(received.Argv, "--skip-git-repo-check") {
+				t.Fatalf("continuation ran in %s with argv %q", received.Cwd, received.Argv)
+			}
+		})
 	}
 }
 

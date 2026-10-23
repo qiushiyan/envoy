@@ -97,7 +97,7 @@ func TestCodexArgv(t *testing.T) {
 
 	fresh := newCodex(Options{}, ws)
 	argv := fresh.Argv()
-	want := []string{"exec", "--json", "-o", ws.LastMessagePath(), "-"}
+	want := []string{"exec", "--json", "--skip-git-repo-check", "-o", ws.LastMessagePath(), "-"}
 	if !reflect.DeepEqual(argv, want) {
 		t.Fatalf("fresh argv = %v, want %v", argv, want)
 	}
@@ -108,7 +108,7 @@ func TestCodexArgv(t *testing.T) {
 	resumed := newCodex(Options{Model: "gpt-5.3", Effort: "xhigh", Resume: "tid"}, ws)
 	argv = resumed.Argv()
 	want = []string{
-		"exec", "resume", "--json", "-m", "gpt-5.3",
+		"exec", "resume", "--json", "--skip-git-repo-check", "-m", "gpt-5.3",
 		"-c", "model_reasoning_effort=xhigh", "-o", ws.LastMessagePath(), "tid", "-",
 	}
 	if !reflect.DeepEqual(argv, want) {
@@ -137,7 +137,7 @@ func TestStandingInstructionsArgv(t *testing.T) {
 
 	resumed := newCodex(Options{Resume: "tid", Instructions: text}, ws).Argv()
 	want := []string{
-		"exec", "resume", "--json", "-c", `developer_instructions="stay read-only\n"`,
+		"exec", "resume", "--json", "--skip-git-repo-check", "-c", `developer_instructions="stay read-only\n"`,
 		"-o", ws.LastMessagePath(), "tid", "-",
 	}
 	if !reflect.DeepEqual(resumed, want) {

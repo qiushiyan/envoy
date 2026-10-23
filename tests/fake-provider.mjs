@@ -22,7 +22,7 @@ if (invocationFile) {
   const appendedSystemPrompt = appendAt >= 0 ? fs.readFileSync(providerArgs[appendAt + 1], 'utf8') : null;
   fs.writeFileSync(
     invocationFile,
-    JSON.stringify({ argv: providerArgs, env: process.env, pid: process.pid, appendedSystemPrompt }),
+    JSON.stringify({ argv: providerArgs, env: process.env, pid: process.pid, cwd: process.cwd(), appendedSystemPrompt }),
   );
 }
 
@@ -53,6 +53,23 @@ for await (const chunk of process.stdin) prompt += chunk;
 const promptFile = perProvider('ENVOY_FAKE_PROMPT_FILE', '');
 if (promptFile) {
   fs.writeFileSync(promptFile, prompt);
+}
+
+// codex-cli 0.162.1's gate, on every scenario: with the prompt read and
+// before the thread starts, exec refuses a cwd with no `.git` entry in it or
+// any ancestor unless one of these flags is on its argv. Its config's trust
+// entries play no part.
+function insideGitRepo(dir) {
+  for (let d = path.resolve(dir); ; d = path.dirname(d)) {
+    if (fs.existsSync(path.join(d, '.git'))) return true;
+    if (path.dirname(d) === d) return false;
+  }
+}
+if (provider === 'codex' && !insideGitRepo(process.cwd()) &&
+  !providerArgs.includes('--skip-git-repo-check') &&
+  !providerArgs.includes('--dangerously-bypass-approvals-and-sandbox')) {
+  process.stderr.write('Not inside a trusted directory and --skip-git-repo-check was not specified.\n');
+  process.exit(1);
 }
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const emit = (event) => process.stdout.write(`${JSON.stringify(event)}\n`);

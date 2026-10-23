@@ -13,7 +13,8 @@ import (
 // last-message file is retained as a recovery surface.
 //
 // No sandbox/permission flag EVER: the provider's own configuration governs.
-// A derived read-only sandbox breaks the session's own tooling.
+// A derived read-only sandbox breaks the session's own tooling. The one fixed
+// flag, --skip-git-repo-check, is a launch precondition, not a permission.
 type codex struct {
 	opts          Options
 	ws            job.Workspace
@@ -66,6 +67,12 @@ func (c *codex) Argv() []string {
 	} else {
 		args = []string{"exec", "--json"}
 	}
+	// On every launch, a resume included, whatever the write intent: codex
+	// exec refuses a cwd with no git root above it before the thread starts
+	// — trust entries in its config do not count — and a caller's cwd is
+	// wherever its shell stands, a scratchpad or a new project as often as a
+	// checkout. Inside a repository the flag changes nothing.
+	args = append(args, "--skip-git-repo-check")
 	if c.opts.Model != "" {
 		args = append(args, "-m", c.opts.Model)
 	}

@@ -44,6 +44,7 @@ type invocation struct {
 	Argv []string          `json:"argv"`
 	Env  map[string]string `json:"env"`
 	Pid  int               `json:"pid"`
+	Cwd  string            `json:"cwd"`
 	// AppendedSystemPrompt is what the file a claude launch named with
 	// --append-system-prompt-file held when it launched; nil when none.
 	AppendedSystemPrompt *string `json:"appendedSystemPrompt"`
