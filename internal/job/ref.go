@@ -225,6 +225,16 @@ func CallerOf(dir string) (string, error) {
 	return Deref(s.Caller), nil
 }
 
+// SharesName reports whether caller ("" = no identity) shares the meaning of
+// a name with the job owner dispatched under it: the same caller, or either
+// side without an identity. Only against such a caller does a job hold its
+// name, and only such a caller can have been waiting on it. Two callers that
+// both have an identity never contend: each name keeps meaning each caller's
+// own job.
+func SharesName(caller, owner string) bool {
+	return caller == "" || owner == "" || owner == caller
+}
+
 // CallerEnvKeys are the variables a harness exports its session identity in,
 // in precedence order: ENVOY_CALLER is the explicit form any harness can set,
 // and Claude Code exports its session id on its own.

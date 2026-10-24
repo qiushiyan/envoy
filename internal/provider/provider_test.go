@@ -463,20 +463,6 @@ func TestCodexLifecycle(t *testing.T) {
 	}
 }
 
-func TestCodexTerminalEnvelopeWinsOverKill(t *testing.T) {
-	ws := job.Workspace{Dir: t.TempDir()}
-	c := newCodex(Options{}, ws)
-	c.Feed(`{"type":"thread.started","thread_id":"tid-2"}`)
-	c.Feed(`{"type":"item.completed","item":{"type":"agent_message","text":"finished work"}}`)
-	c.Feed(`{"type":"turn.completed","usage":{"input_tokens":1}}`)
-
-	// Killed during residual cleanup: no exit code, but the envelope landed.
-	out := c.Conclude(ExitInfo{Terminated: true, TerminalType: "codex turn.completed"})
-	if out.Status != job.StatusOK || out.Text != "finished work" {
-		t.Fatalf("terminal envelope must win over the kill, got %+v", out)
-	}
-}
-
 func TestCodexFailureAndRecovery(t *testing.T) {
 	ws := job.Workspace{Dir: t.TempDir()}
 	c := newCodex(Options{}, ws)

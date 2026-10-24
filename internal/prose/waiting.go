@@ -1,10 +1,6 @@
 package prose
 
-import (
-	"fmt"
-
-	"github.com/qiushiyan/envoy/internal/text"
-)
+import "fmt"
 
 // A dispatch runs its turn in a process of its own, and the `envoy run` the
 // caller started only waits for it. These are the waiter's own sentences:
@@ -17,13 +13,13 @@ import (
 func StoppedWaiting(signalName, jobRef string, pid int) string {
 	msg := fmt.Sprintf("envoy: received %s, so this command stopped waiting; the turn keeps running in its own process, to its end or its cap.", signalName)
 	if jobRef != "" {
-		msg += " Wait for it again: envoy wait " + text.ShellQuote(jobRef) + "."
+		msg += " Wait for it again: envoy wait " + ShellQuote(jobRef) + "."
 	}
 	switch {
 	case pid > 0:
 		msg += " To stop the turn itself: " + StopCommand(pid) + "."
 	case jobRef != "":
-		msg += " To stop the turn itself, run the stop: command that envoy collect --status-only " + text.ShellQuote(jobRef) + " prints."
+		msg += " To stop the turn itself, run the stop: command that envoy collect --status-only " + ShellQuote(jobRef) + " prints."
 	}
 	return msg
 }
@@ -46,5 +42,5 @@ func DetachFailed(err error) string {
 // StopReachesEveryMember says what a member's stop reaches: every member of
 // its fan-out runs in one process, so none can be stopped alone.
 func StopReachesEveryMember(groupDir string) string {
-	return "this member runs in its fan-out's one process, so that stop interrupts every member of the fan-out " + text.ShellQuote(groupDir) + "; one member cannot be stopped alone"
+	return "this member runs in its fan-out's one process, so that stop interrupts every member of the fan-out " + ShellQuote(groupDir) + "; one member cannot be stopped alone"
 }

@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/qiushiyan/envoy/internal/job"
-	"github.com/qiushiyan/envoy/internal/text"
 )
 
 // promptPlaceholder is the slot every follow-up command leaves open: a resumed
@@ -27,7 +26,7 @@ const (
 // placeholder: a continuation needs a new prompt, never the original again.
 func ContinueCommand(dir string, timeoutMin float64) string {
 	return fmt.Sprintf("envoy run %s --with @%s --timeout-min %g --prompt-file %s",
-		jobPlaceholder, text.ShellQuote(dir), timeoutMin, promptPlaceholder)
+		jobPlaceholder, ShellQuote(dir), timeoutMin, promptPlaceholder)
 }
 
 // voiceSpec spells a member the way a caller types it: provider[:model[:effort]].
@@ -58,16 +57,16 @@ func voiceSpec(provider, model, effort string) string {
 func RedispatchCommand(dir string, m *job.Meta, problem job.InstructionsProblem) string {
 	voice := voiceSpec(m.Provider, job.Deref(m.Model), job.Deref(m.Effort))
 	if m.ResumedFrom != nil {
-		voice = "@" + text.ShellQuote(*m.ResumedFrom)
+		voice = "@" + ShellQuote(*m.ResumedFrom)
 	}
 	instructions := ""
 	if m.InstructionsSha256 != nil && m.ResumedFrom == nil {
-		instructions = text.ShellQuote(job.Workspace{Dir: dir}.InstructionsPath())
+		instructions = ShellQuote(job.Workspace{Dir: dir}.InstructionsPath())
 		if problem != "" {
 			instructions = instructionsPlaceholder
 		}
 	}
-	return dispatchCommand(m, voice, text.ShellQuote(job.Workspace{Dir: dir}.PromptPath()), instructions)
+	return dispatchCommand(m, voice, ShellQuote(job.Workspace{Dir: dir}.PromptPath()), instructions)
 }
 
 // NewConversationCommand starts over in place of this job's conversation: a
@@ -94,7 +93,7 @@ func dispatchCommand(m *job.Meta, voice, promptFile, instructionsFile string) st
 		parts = append(parts, "--baseline "+*m.GitBaseline)
 	}
 	if m.Cwd != "" {
-		parts = append(parts, "--cwd "+text.ShellQuote(m.Cwd))
+		parts = append(parts, "--cwd "+ShellQuote(m.Cwd))
 	}
 	if m.MaxBudgetUSD != nil {
 		parts = append(parts, fmt.Sprintf("--max-budget-usd %g", *m.MaxBudgetUSD))
@@ -106,13 +105,13 @@ func dispatchCommand(m *job.Meta, voice, promptFile, instructionsFile string) st
 // CollectCommand prints one job as a single block; it is the caller's read
 // path for every turn, healthy or not.
 func CollectCommand(outDir string) string {
-	return "envoy collect " + text.ShellQuote(outDir)
+	return "envoy collect " + ShellQuote(outDir)
 }
 
 // WaitCommand blocks until a running job ends and says how it ended; it is
 // the completion signal for a caller that no longer holds the dispatch.
 func WaitCommand(outDir string) string {
-	return "envoy wait " + text.ShellQuote(outDir)
+	return "envoy wait " + ShellQuote(outDir)
 }
 
 // StopCommand stops a running turn — every member, for a fan-out — the way

@@ -20,6 +20,7 @@ type codex struct {
 	ws            job.Workspace
 	sessionID     string // learned from thread.started on a fresh thread
 	threadStarted bool
+	completed     bool // turn.completed arrived
 	finalText     *string
 	failed        bool    // turn.failed arrived: the provider's own verdict
 	failedText    *string // its message, when it gave one
@@ -176,6 +177,7 @@ func (c *codex) Feed(line string) []Event {
 				ReasoningOutput: job.Ptr(numOr(usage, "reasoning_output_tokens", 0)),
 			}
 		}
+		c.completed = true
 		events = append(events, Event{Kind: KindTerminal, Terminal: "codex turn.completed"})
 	case "turn.failed":
 		c.failed = true
@@ -239,7 +241,7 @@ func (c *codex) Conclude(exit ExitInfo) Outcome {
 	// The terminal envelope wins: if the hard cap fired only while the CLI or
 	// a residual descendant was draining, an observed turn.completed is still
 	// a success, not a timeout casualty.
-	if (exit.Code != nil && *exit.Code == 0) || (exit.Terminated && exit.TerminalType == "codex turn.completed") {
+	if (exit.Code != nil && *exit.Code == 0) || (exit.Terminated && c.completed) {
 		return Outcome{
 			Status:      job.StatusOK,
 			Text:        *ev.Partial,

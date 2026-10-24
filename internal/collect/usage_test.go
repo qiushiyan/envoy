@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/qiushiyan/envoy/internal/job"
-	"github.com/qiushiyan/envoy/internal/prose"
 )
 
 func TestAbandonedUsagePreservesTheLastObservation(t *testing.T) {
@@ -19,8 +18,8 @@ func TestAbandonedUsagePreservesTheLastObservation(t *testing.T) {
 		}
 		u.RefreshState()
 		m := &job.Meta{SchemaVersion: job.MetaSchemaVersion, Status: job.StatusRunning, Usage: u}
-		reconcileAbandoned(dir, m, prose.RunObservation{State: prose.RunAbandoned})
-		got, err := job.ReadMetaFile(job.Workspace{Dir: dir}.MetaPath())
+		reconcileAbandoned(dir, m)
+		got, err := job.ReadMeta(dir)
 		if err != nil {
 			t.Fatal(err)
 		}

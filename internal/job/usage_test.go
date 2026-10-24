@@ -18,7 +18,7 @@ func TestUsageSchemaCompatibility(t *testing.T) {
 	if err := os.WriteFile(p, []byte(`{"schemaVersion":10,"status":"ok","provider":"claude"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	m, err := ReadMetaFile(p)
+	m, err := ReadMeta(filepath.Dir(p))
 	if err != nil || m.Usage != nil {
 		t.Fatalf("a record without usage must read: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestUsageSchemaCompatibility(t *testing.T) {
 	if err := json.Unmarshal(data, &older); err != nil || older.SchemaVersion != MetaSchemaVersion || older.Status != "ok" {
 		t.Fatalf("existing fields changed: %v", err)
 	}
-	m, err = ReadMetaFile(p)
+	m, err = ReadMeta(filepath.Dir(p))
 	if err != nil || m.Usage.State != "unmeasured" || m.Usage.Issues == nil {
 		t.Fatalf("usage did not round-trip: %v", err)
 	}

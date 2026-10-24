@@ -56,7 +56,7 @@ func usageRun(t *testing.T) (*run, []string) {
 
 func diskUsage(t *testing.T, r *run) *job.Meta {
 	t.Helper()
-	m, err := job.ReadMetaFile(r.ws.MetaPath())
+	m, err := job.ReadMeta(r.ws.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}

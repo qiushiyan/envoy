@@ -10,7 +10,6 @@ import (
 	"github.com/qiushiyan/envoy/internal/job"
 	"github.com/qiushiyan/envoy/internal/prose"
 	"github.com/qiushiyan/envoy/internal/provider"
-	"github.com/qiushiyan/envoy/internal/text"
 )
 
 func (r *run) initMeta() {
@@ -77,7 +76,7 @@ func (r *run) printStartupBlock() {
 	w := r.opts.Stdout
 	fmt.Fprintf(w, "job: %s\n", r.ws.Dir)
 	fmt.Fprintf(w, "provider: %s · model %s · effort %s · hard cap %s\n",
-		r.opts.Provider, prose.Setting(r.opts.Turn.Model), prose.Setting(r.opts.Turn.Effort), text.HardCap(r.opts.TimeoutMin))
+		r.opts.Provider, prose.Setting(r.opts.Turn.Model), prose.Setting(r.opts.Turn.Effort), prose.HardCap(r.opts.TimeoutMin))
 	if line := prose.Launcher(r.meta); line != "" {
 		fmt.Fprintln(w, line)
 	}
@@ -162,7 +161,7 @@ func (r *run) finish(out provider.Outcome, exit exitResult) {
 }
 
 func elapsed(since time.Time) string {
-	return text.FormatDuration(time.Since(since))
+	return prose.FormatDuration(time.Since(since))
 }
 
 // connectionTally starts the connection-error tally only for a driver that

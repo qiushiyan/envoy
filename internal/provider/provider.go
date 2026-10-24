@@ -101,10 +101,9 @@ func (e Evidence) Outcome(status string, failure job.Failure) Outcome {
 
 // ExitInfo describes how the launched process ended.
 type ExitInfo struct {
-	Code         *int
-	Terminated   bool   // a stop (timeout/interrupt) was requested this turn
-	TerminalType string // observed provider terminal label, "" if none
-	StderrTail   string // last ~2000 chars of command stderr
+	Code       *int
+	Terminated bool   // a stop (timeout/interrupt) was requested this turn
+	StderrTail string // last ~2000 chars of command stderr
 }
 
 // Outcome is how a turn ended, as the runner publishes it: a driver's
@@ -243,8 +242,8 @@ func stderrLines(tail string) []string {
 	return lines
 }
 
-// firstText returns the first candidate with non-empty content, as a pointer,
-// or nil — mirroring JS's `a || b || c || undefined` chains over strings.
+// firstText returns the first candidate with non-empty content, or nil when
+// none has any.
 func firstText(candidates ...*string) *string {
 	for _, c := range candidates {
 		if c != nil && *c != "" {

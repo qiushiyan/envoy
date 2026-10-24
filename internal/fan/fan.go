@@ -25,7 +25,6 @@ import (
 	"github.com/qiushiyan/envoy/internal/proc"
 	"github.com/qiushiyan/envoy/internal/prose"
 	"github.com/qiushiyan/envoy/internal/runner"
-	"github.com/qiushiyan/envoy/internal/text"
 )
 
 // Turn is one member: its address inside the fan-out and the turn it runs.
@@ -174,7 +173,7 @@ func printDispatchBlock(opts Options, gw job.GroupWorkspace) {
 	w := opts.Stdout
 	shared := opts.shared()
 	fmt.Fprintf(w, "job: %s\n", gw.Dir)
-	fmt.Fprintf(w, "fan-out: %d turns · hard cap %s each\n", len(opts.Turns), text.HardCap(shared.TimeoutMin))
+	fmt.Fprintf(w, "fan-out: %d turns · hard cap %s each\n", len(opts.Turns), prose.HardCap(shared.TimeoutMin))
 	// The member name already carries its provider and model, so the line adds
 	// only what the name cannot: the resolved settings, where it writes, and
 	// which conversation it continues.

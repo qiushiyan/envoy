@@ -241,60 +241,66 @@ func SchemaList(versions []int) string {
 	return strings.Join(words, " or ")
 }
 
-// ReadRecord reads the turn record in dir once. Its stamp comes back from a
-// record of any schema version; the rest of it only from this engine's,
-// decoded after the version is known, so a field another schema shaped
-// differently is refused as that schema (*SchemaError) and never misread as
-// damage. ErrNoRecord when dir has none; any other error with no stamp is a
-// record that does not parse — damage, never a blank stamp.
-func ReadRecord(dir string) (*Stamp, *Meta, error) {
-	stamp, meta, err := readRecordFile(Workspace{Dir: dir}.MetaPath())
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil, ErrNoRecord
+// Record is one turn record as read once (ReadRecord), with what that read
+// could and could not establish kept apart: Stamp whenever the record parses,
+// from a record of any schema version; Meta only when it is this engine's
+// schema, decoded after the version is known, so a field another schema
+// shaped differently is refused as that schema (*SchemaError) and never
+// misread as damage; and Err whenever Meta is missing — ErrNoRecord, a
+// *SchemaError, or damage. A stamp beside an unreadable body is two facts,
+// not one verdict: naming reads the stamp, everything else the body. A record
+// that does not parse at all has no stamp — damage, never a blank one.
+type Record struct {
+	Dir   string
+	Stamp *Stamp
+	Meta  *Meta
+	Err   error
+}
+
+// ReadRecord reads the turn record in dir once.
+func ReadRecord(dir string) Record {
+	r := Record{Dir: dir}
+	data, err := os.ReadFile(Workspace{Dir: dir}.MetaPath())
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		r.Err = ErrNoRecord
+		return r
+	case err != nil:
+		r.Err = err
+		return r
 	}
-	return stamp, meta, err
+	var stamp Stamp
+	if r.Err = json.Unmarshal(data, &stamp); r.Err != nil {
+		return r
+	}
+	r.Stamp = &stamp
+	if !slices.Contains(MetaSchemas, stamp.SchemaVersion) {
+		r.Err = &SchemaError{Record: "meta.json", Version: stamp.SchemaVersion, Reads: MetaSchemas}
+		return r
+	}
+	var meta Meta
+	if r.Err = json.Unmarshal(data, &meta); r.Err != nil {
+		return r
+	}
+	r.Meta = &meta
+	return r
 }
 
 // ReadMeta reads the turn record in dir as this engine's schema, ErrNoRecord
 // when it has none.
 func ReadMeta(dir string) (*Meta, error) {
-	_, meta, err := ReadRecord(dir)
-	return meta, err
+	r := ReadRecord(dir)
+	return r.Meta, r.Err
 }
 
 // ReadStamp reads the stamp of the turn record in dir, from a record of any
 // schema version, ErrNoRecord when it has none.
 func ReadStamp(dir string) (*Stamp, error) {
-	stamp, _, err := ReadRecord(dir)
-	if stamp != nil {
-		return stamp, nil
+	r := ReadRecord(dir)
+	if r.Stamp == nil {
+		return nil, r.Err
 	}
-	return nil, err
-}
-
-// ReadMetaFile parses a meta.json this engine wrote.
-func ReadMetaFile(path string) (*Meta, error) {
-	_, meta, err := readRecordFile(path)
-	return meta, err
-}
-
-func readRecordFile(path string) (*Stamp, *Meta, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	var stamp Stamp
-	if err := json.Unmarshal(data, &stamp); err != nil {
-		return nil, nil, err
-	}
-	if !slices.Contains(MetaSchemas, stamp.SchemaVersion) {
-		return &stamp, nil, &SchemaError{Record: "meta.json", Version: stamp.SchemaVersion, Reads: MetaSchemas}
-	}
-	var meta Meta
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return &stamp, nil, err
-	}
-	return &stamp, &meta, nil
+	return r.Stamp, nil
 }
 
 // Ptr is a convenience for the schema's many nullable fields.

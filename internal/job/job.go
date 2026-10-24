@@ -18,16 +18,6 @@ import (
 	"github.com/qiushiyan/envoy/internal/gitx"
 )
 
-// Exit codes are part of the caller interface; see ENGINE contract.
-const (
-	ExitOK          = 0
-	ExitFailed      = 1
-	ExitInfra       = 2
-	ExitUsage       = 3
-	ExitTimeout     = 4
-	ExitInterrupted = 5
-)
-
 // Turn statuses that can appear in meta.json.
 const (
 	StatusRunning     = "running"
@@ -48,22 +38,6 @@ func KnownStatus(s string) bool {
 		return true
 	}
 	return false
-}
-
-// ExitCodeFor maps a terminal status to the process exit code.
-func ExitCodeFor(status string) int {
-	switch status {
-	case StatusOK:
-		return ExitOK
-	case StatusFailed:
-		return ExitFailed
-	case StatusTimeout:
-		return ExitTimeout
-	case StatusInterrupted:
-		return ExitInterrupted
-	default:
-		return ExitInfra
-	}
 }
 
 // Prompt states; "accepted" is the load-bearing one for recovery decisions.

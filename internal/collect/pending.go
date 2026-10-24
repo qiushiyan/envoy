@@ -55,8 +55,7 @@ func pendingJobs(dirs []string, caller string) []pendingItem {
 		if job.IsGroupDir(dir) {
 			item, ok = pendingGroup(dir, caller)
 		} else {
-			stamp, meta, err := job.ReadRecord(dir)
-			item, ok = pendingTurn(dir, stamp, meta, err, caller)
+			item, ok = pendingTurn(job.ReadRecord(dir), caller)
 		}
 		if ok {
 			pending = append(pending, item)
@@ -75,12 +74,13 @@ func pendingJobs(dirs []string, caller string) []pendingItem {
 // identity, as with a name hold — because that caller may have lost its
 // dispatch to a session that ended. Anyone else's healthy turn is not theirs
 // to wait on or collect.
-func pendingTurn(dir string, stamp *job.Stamp, meta *job.Meta, err error, caller string) (pendingItem, bool) {
+func pendingTurn(r job.Record, caller string) (pendingItem, bool) {
+	dir, stamp, meta := r.Dir, r.Stamp, r.Meta
 	var other *job.SchemaError
 	switch {
-	case errors.Is(err, job.ErrNoRecord):
+	case errors.Is(r.Err, job.ErrNoRecord):
 		return pendingItem{}, false
-	case errors.As(err, &other):
+	case errors.As(r.Err, &other):
 		// Another engine version's record is not damage. Its stamp says
 		// whether anything is still owed — skipped while its own engine is
 		// provably running it, like any live job — and this engine reads no
@@ -93,13 +93,13 @@ func pendingTurn(dir string, stamp *job.Stamp, meta *job.Meta, err error, caller
 		}
 		return pendingItem{label: "other-schema", dir: dir,
 			why: prose.PendingOtherSchema(other.Record, other.Version, other.Reads), next: prose.PendingOtherSchemaNext(dir)}, true
-	case err != nil:
+	case r.Err != nil:
 		return pendingItem{label: "corrupt", dir: dir,
-			why: prose.PendingUnreadable("meta.json", err), next: prose.PendingUnreadableNext(dir)}, true
+			why: prose.PendingUnreadable("meta.json", r.Err), next: prose.PendingUnreadableNext(dir)}, true
 	case meta.Status == job.StatusRunning:
 		state := classifyRunning(dir, meta)
 		if state.State == prose.RunLive {
-			if !mayAwait(caller, stamp.Caller) {
+			if !job.SharesName(caller, job.Deref(stamp.Caller)) {
 				return pendingItem{}, false
 			}
 			return pendingItem{label: "running", dir: dir, why: prose.PendingRunning(prose.RunDetail(state)), next: prose.PendingRunningNext(dir),
@@ -134,7 +134,7 @@ func pendingGroup(dir, caller string) (pendingItem, bool) {
 	// Every member runs in the fan-out's one process, so while it lives the
 	// fan-out is one running job, listed like a running turn.
 	if proc.RunnerLiveness(dir, group.RunnerPid, group.RunnerLock) == proc.Live {
-		if !mayAwait(caller, group.Caller) {
+		if !job.SharesName(caller, job.Deref(group.Caller)) {
 			return pendingItem{}, false
 		}
 		return pendingItem{label: "running", dir: dir, why: prose.PendingRunning(prose.PendingFanAlive()), next: prose.PendingRunningNext(dir),
@@ -150,7 +150,7 @@ func pendingGroup(dir, caller string) (pendingItem, bool) {
 			reasons = append(reasons, m.Name+": "+prose.PendingMemberNoRecord())
 			continue
 		}
-		if item, ok := pendingTurn(m.Dir, m.Stamp, m.Meta, m.Err, caller); ok {
+		if item, ok := pendingTurn(m.Record, caller); ok {
 			reasons = append(reasons, m.Name+": "+item.why)
 		}
 	}
@@ -178,7 +178,7 @@ func pendingOtherFan(dir string, stamp *job.GroupStamp, other *job.SchemaError, 
 		return item, true
 	}
 	for _, m := range members {
-		if _, owed := pendingTurn(m.Dir, m.Stamp, m.Meta, m.Err, caller); owed {
+		if _, owed := pendingTurn(m.Record, caller); owed {
 			return item, true
 		}
 	}
@@ -216,12 +216,4 @@ func Pending(base string, baseWasDerived bool, caller string, w, errW io.Writer)
 		}
 	}
 	return 0
-}
-
-// mayAwait is whether a caller could have been waiting on a job its owner
-// dispatched: the same caller, or either side without an identity — the
-// sharing rule a name hold binds by.
-func mayAwait(caller string, owner *string) bool {
-	o := job.Deref(owner)
-	return caller == "" || o == "" || o == caller
 }

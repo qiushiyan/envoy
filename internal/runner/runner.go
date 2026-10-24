@@ -25,8 +25,8 @@ import (
 	"github.com/qiushiyan/envoy/internal/job"
 	"github.com/qiushiyan/envoy/internal/lock"
 	"github.com/qiushiyan/envoy/internal/proc"
+	"github.com/qiushiyan/envoy/internal/prose"
 	"github.com/qiushiyan/envoy/internal/provider"
-	"github.com/qiushiyan/envoy/internal/text"
 )
 
 // Tunables, env-overridable so the integration suite can run the full
@@ -228,7 +228,7 @@ func (r *run) execute(promptText string) Result {
 	r.printStartupBlock()
 	r.progress.Append("starting",
 		job.KV{K: "provider", V: r.opts.Provider},
-		job.KV{K: "hard_cap", V: text.HardCap(r.opts.TimeoutMin)},
+		job.KV{K: "hard_cap", V: prose.HardCap(r.opts.TimeoutMin)},
 		job.KV{K: "prompt", V: job.PromptUnknown},
 	)
 	r.writeMeta(nil)
@@ -542,7 +542,7 @@ func (r *run) heartbeat() {
 	activityAge := "none"
 	if r.meta.LastProviderActivityAt != nil {
 		if t, err := time.Parse(time.RFC3339, *r.meta.LastProviderActivityAt); err == nil {
-			activityAge = text.FormatDuration(now.Sub(t)) + "_ago"
+			activityAge = prose.FormatDuration(now.Sub(t)) + "_ago"
 		}
 	}
 	providerAlive := "not_observed"
@@ -553,7 +553,7 @@ func (r *run) heartbeat() {
 		m.LastHeartbeatAt = job.Ptr(job.ISO(now))
 	})
 	r.progress.Append("running",
-		job.KV{K: "elapsed", V: text.FormatDuration(now.Sub(r.startedAt))},
+		job.KV{K: "elapsed", V: prose.FormatDuration(now.Sub(r.startedAt))},
 		job.KV{K: "provider_process", V: providerAlive},
 		job.KV{K: "last_provider_activity", V: activityAge},
 		job.KV{K: "prompt", V: r.meta.PromptState},

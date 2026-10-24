@@ -125,7 +125,7 @@ func (r *run) cleanupResidual() {
 	r.escalate(syscall.SIGTERM)
 }
 
-// onExit is process exit — the JS 'exit' event. Direct-child exit is not
+// onExit observes the provider process exiting. Direct-child exit is not
 // terminal by itself: a grandchild can keep running (or keep pipes open), so
 // full completion is judged by maybeStreamsClosed and the fallback timer.
 func (r *run) onExit(res exitResult) {
@@ -146,8 +146,8 @@ func (r *run) onExit(res exitResult) {
 	r.maybeStreamsClosed()
 }
 
-// maybeStreamsClosed is the JS 'close' event: process exited and both stream
-// pipes reached EOF (all writers gone).
+// maybeStreamsClosed observes the turn closing: the process has exited and
+// both stream pipes have reached EOF (all writers gone).
 func (r *run) maybeStreamsClosed() {
 	if !r.waitDone || !r.stdoutDone || !r.stderrDone || r.done {
 		return
@@ -198,10 +198,9 @@ func (r *run) onChildDone(exit exitResult) {
 	}
 
 	outcome := r.driver.Conclude(provider.ExitInfo{
-		Code:         exit.code,
-		Terminated:   r.term != nil,
-		TerminalType: job.Deref(r.meta.ProviderTerminalEventType),
-		StderrTail:   r.stderrTail,
+		Code:       exit.code,
+		Terminated: r.term != nil,
+		StderrTail: r.stderrTail,
 	})
 	// The driver reported what it observed; the failure, its fix and the
 	// prescription are worded from the records.

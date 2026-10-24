@@ -71,7 +71,7 @@ func TestWaitReportsARunnerThatLeftNoFinalRecord(t *testing.T) {
 	if !strings.Contains(out, "left no final record") || !strings.Contains(out, "envoy collect '"+dir+"'") {
 		t.Fatalf("block must say no final record was left and name the collect:\n%s", out)
 	}
-	if _, m, _ := job.ReadRecord(dir); m.Status != job.StatusRunning {
+	if m, _ := job.ReadMeta(dir); m.Status != job.StatusRunning {
 		t.Fatalf("a wait must not reconcile the record, status = %q", m.Status)
 	}
 }
@@ -198,7 +198,7 @@ func TestWaitPollsARunnerKnownOnlyByItsPID(t *testing.T) {
 func TestAClaimedFanOutHoldsForAnUnstartedMemberOnlyWhileClaimed(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "job")
 	writeClaimedGroup(t, dir, "codex")
-	if hold, held := NameHold(dir); held {
+	if hold, held := NameHold(dir, ""); held {
 		t.Fatalf("free claim, live PID: name held as %+v", hold)
 	}
 	claim, err := proc.LockDir(dir)
@@ -206,7 +206,7 @@ func TestAClaimedFanOutHoldsForAnUnstartedMemberOnlyWhileClaimed(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer claim.Release()
-	if hold, held := NameHold(dir); !held || hold.Kind != prose.HoldUnrecorded || hold.Member != "codex" {
+	if hold, held := NameHold(dir, ""); !held || hold.Kind != prose.HoldUnrecorded || hold.Member != "codex" {
 		t.Fatalf("held claim: hold = %+v, held = %v; want the unstarted member to hold", hold, held)
 	}
 }

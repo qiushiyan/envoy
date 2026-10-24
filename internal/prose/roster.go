@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/qiushiyan/envoy/internal/job"
-	"github.com/qiushiyan/envoy/internal/text"
 )
 
 // A voice spelled @<job> continues that job's conversation as a member of
@@ -41,14 +40,16 @@ func ContinueNoTurn(dir string, cause error) string {
 // FanMemberCandidate is one member of a fan-out named beside other voices:
 // the coordinate the caller can name instead of the group, with the
 // eligibility observation still structured so rendering happens here, once.
-// Kind is "" for a member that can continue; Detail carries the read error
-// of an unreadable record, and the repair (InstructionsRepair) of an archive
-// that no longer supplies the member's standing instructions.
+// Kind is "" for a member that can continue.
 type FanMemberCandidate struct {
-	Name   string
-	Dir    string
-	Kind   ResumeBlockerKind
-	Detail string
+	Name string
+	Dir  string
+	Kind ResumeBlockerKind
+	// ReadError is why an unreadable record would not read; Repair is the
+	// repair (InstructionsRepair) of an archive that no longer supplies the
+	// member's standing instructions.
+	ReadError string
+	Repair    string
 }
 
 // GroupRefMustStandAlone refuses @<fan-out> mixed with other voices: a
@@ -62,7 +63,7 @@ func GroupRefMustStandAlone(dir string, members []FanMemberCandidate) string {
 			blocked = append(blocked, "  "+FanResumeBlockerLine(m))
 			continue
 		}
-		offered = append(offered, fmt.Sprintf("  --with @%s  (%s)", text.ShellQuote(m.Dir), m.Name))
+		offered = append(offered, fmt.Sprintf("  --with @%s  (%s)", ShellQuote(m.Dir), m.Name))
 	}
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("--with @%s names a fan-out, which continues every member as one round and so stands alone as the only --with.", dir))
@@ -187,7 +188,7 @@ func InstructionsRepair(dir string, m *job.Meta, source string) string {
 	archive := job.Workspace{Dir: dir}.InstructionsPath()
 	if source != "" {
 		return "Copy the text back from another turn whose archive holds the same text, by this record's digest:\n  cp " +
-			text.ShellQuote(source) + " " + text.ShellQuote(archive)
+			ShellQuote(source) + " " + ShellQuote(archive)
 	}
 	return fmt.Sprintf("No other turn's archive still holds it. Put the text back from your own copy — "+
 		"a file whose sha256 is %s — or start a new conversation with it:\n  %s",

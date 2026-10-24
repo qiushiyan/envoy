@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"strconv"
 	"time"
 
 	"github.com/qiushiyan/envoy/internal/job"
@@ -15,13 +13,8 @@ import (
 
 // waitPoll is how often a wait re-reads a runner known only by its PID; a
 // runner that recorded its claim on the directory is waited on through the
-// claim itself, with no polling. Env-overridable for the integration suite.
-var waitPoll = func() time.Duration {
-	if ms, err := strconv.ParseFloat(os.Getenv("ENVOY_WAIT_POLL_MS"), 64); err == nil && ms > 0 {
-		return time.Duration(ms * float64(time.Millisecond))
-	}
-	return time.Second
-}()
+// claim itself, with no polling.
+var waitPoll = time.Second
 
 // Wait blocks while the process supervising a job is alive, then prints the
 // block the job's own dispatch prints when it ends and returns the dispatch's
@@ -61,16 +54,16 @@ func waitTurn(dir string, errW io.Writer) (string, int) {
 		}
 		return turnLive(dir, stamp), stamp.RunnerLock
 	})
-	end := readEnding(dir)
+	end := job.ReadRecord(dir)
 	switch {
-	case end.err != nil:
-		reportUnreadable(dir, end.err, errW)
+	case end.Err != nil:
+		reportUnreadable(dir, end.Err, errW)
 		return "", job.ExitUsage
-	case !end.final():
-		return fmt.Sprintf("\nstatus: %s\nnext: %s\n", prose.RunningStatus(classifyRunning(dir, end.meta)), prose.EndedUnrecorded(dir)),
+	case !ended(end):
+		return fmt.Sprintf("\nstatus: %s\nnext: %s\n", prose.RunningStatus(classifyRunning(dir, end.Meta)), prose.EndedUnrecorded(dir)),
 			job.ExitInfra
 	}
-	return prose.TurnEnded(dir, end.meta.Status, job.Deref(end.meta.SessionID)), job.ExitCodeFor(end.meta.Status)
+	return prose.TurnEnded(dir, end.Meta.Status, job.Deref(end.Meta.SessionID)), job.ExitCodeFor(end.Meta.Status)
 }
 
 // waitGroup waits for a fan-out's process, then reads each member's ending
@@ -88,8 +81,7 @@ func waitGroup(dir string, errW io.Writer) (string, int) {
 	})
 	fan, err := job.ReadFan(dir)
 	if err != nil {
-		fmt.Fprintf(errW, "wait error: %s could not be read (%s). Each member's job dir under %s is self-contained — collect one directly to see its result.\n",
-			job.GroupWorkspace{Dir: dir}.GroupPath(), err, dir)
+		reportUnreadableManifest("wait", dir, err, errW)
 		return "", job.ExitUsage
 	}
 	members := make([]prose.FanMemberEnd, len(fan.Members))
@@ -97,11 +89,11 @@ func waitGroup(dir string, errW io.Writer) (string, int) {
 	var unended []string
 	for i, m := range fan.Members {
 		members[i] = prose.FanMemberEnd{Name: m.Name, Dir: m.Dir}
-		switch end := (ending{meta: m.Meta, err: m.Err}); {
-		case end.final():
-			members[i].Status = end.meta.Status
-			codes[i] = job.ExitCodeFor(end.meta.Status)
-		case end.unstarted():
+		switch {
+		case ended(m.Record):
+			members[i].Status = m.Meta.Status
+			codes[i] = job.ExitCodeFor(m.Meta.Status)
+		case neverStarted(m.Record):
 			// Which refusal stopped it is not recorded, so its code is the
 			// dispatch's default for a member that published no status.
 			codes[i] = job.ExitInfra
@@ -115,25 +107,14 @@ func waitGroup(dir string, errW io.Writer) (string, int) {
 	return prose.FanEnded(dir, members), job.ExitCodeForGroup(codes)
 }
 
-// ending is a turn's record as a wait reads it once the turn's runner is
-// gone: the record, or why there is none to read.
-type ending struct {
-	meta *job.Meta
-	err  error
-}
+// ended is whether a turn's record, read once its runner is gone, says how
+// the turn ended.
+func ended(r job.Record) bool { return r.Err == nil && r.Meta.Status != job.StatusRunning }
 
-func readEnding(dir string) ending {
-	_, meta, err := job.ReadRecord(dir)
-	return ending{meta: meta, err: err}
-}
-
-// final is whether the record says how the turn ended.
-func (e ending) final() bool { return e.err == nil && e.meta.Status != job.StatusRunning }
-
-// unstarted is whether the turn never wrote a record. A runner writes its
+// neverStarted is whether the turn never wrote a record. A runner writes its
 // first record before it spawns a provider, so once its process is gone,
 // nothing ran for it.
-func (e ending) unstarted() bool { return errors.Is(e.err, job.ErrNoRecord) }
+func neverStarted(r job.Record) bool { return errors.Is(r.Err, job.ErrNoRecord) }
 
 // turnLive is whether a turn's runner is still running it. A claimed runner
 // is alive exactly while its claim is held — past its final record, until it

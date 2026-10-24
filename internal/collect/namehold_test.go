@@ -78,7 +78,7 @@ func TestAnotherSchemasFanOutHoldsOnItsStampAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chmod(dir, 0o755) })
-	if hold, held := NameHold(dir); held {
+	if hold, held := NameHold(dir, ""); held {
 		t.Fatalf("NameHold = %+v; a stamp recording no runner holds nothing, listable or not", hold)
 	}
 }
@@ -168,7 +168,7 @@ func TestNameHoldClassifiesWhatStillHoldsAName(t *testing.T) {
 	for _, c := range cases {
 		dir := filepath.Join(t.TempDir(), "job")
 		c.build(dir)
-		got, held := NameHold(dir)
+		got, held := NameHold(dir, "")
 		if held != c.held || got != c.want {
 			t.Errorf("%s: NameHold = %+v held=%v, want %+v held=%v", c.name, got, held, c.want, c.held)
 		}
@@ -192,7 +192,7 @@ func TestAClaimedRunnerIsLiveOnlyWhileItsClaimIsHeld(t *testing.T) {
 		t.Fatal(err)
 	}
 	read := func() prose.RunState {
-		_, m, err := job.ReadRecord(dir)
+		m, err := job.ReadMeta(dir)
 		if err != nil {
 			t.Fatal(err)
 		}

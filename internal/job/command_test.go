@@ -17,7 +17,7 @@ func TestCommandPrefixSchemaCompatibility(t *testing.T) {
 	if err := os.WriteFile(p, []byte(old), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	m, err := ReadMetaFile(p)
+	m, err := ReadMeta(filepath.Dir(p))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestCommandPrefixSchemaCompatibility(t *testing.T) {
 	if err := m.WriteFile(p); err != nil {
 		t.Fatal(err)
 	}
-	m, err = ReadMetaFile(p)
+	m, err = ReadMeta(filepath.Dir(p))
 	if err != nil || !slices.Equal(m.CommandPrefix, prefix) {
 		t.Fatalf("prefix did not round trip: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestCommandPrefixSchemaCompatibility(t *testing.T) {
 	if err := m.WriteFile(p); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadMetaFile(p); err == nil {
+	if _, err := ReadMeta(filepath.Dir(p)); err == nil {
 		t.Fatal("other schema version was accepted")
 	}
 }

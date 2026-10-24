@@ -316,7 +316,7 @@ func TestContinueVocabulary(t *testing.T) {
 				t.Fatalf("%s: %q is missing %q", kind, got, w)
 			}
 		}
-		line := FanResumeBlockerLine(FanMemberCandidate{Name: "codex", Dir: "/jobs/j2", Kind: kind, Detail: fromSource})
+		line := FanResumeBlockerLine(FanMemberCandidate{Name: "codex", Dir: "/jobs/j2", Kind: kind, Repair: fromSource})
 		for _, w := range []string{"member codex", want, fromSource} {
 			if !strings.Contains(line, w) {
 				t.Fatalf("%s member line %q is missing %q", kind, line, w)

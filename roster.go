@@ -1,6 +1,7 @@
 package envoy
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -125,12 +126,12 @@ func seatVoices(seat string, req RunRequest, invocationCwd, caller string) ([]vo
 		}
 		return fanMembers(ref, promptFile)
 	}
-	cont, blocker, err := collect.Inspect(ref)
+	cont, err := collect.Continuable(job.ReadRecord(ref))
+	if blocked, ok := errors.AsType[*collect.Blocked](err); ok {
+		return nil, prose.ContinueBlocked(ref, blocked.Kind, blocked.Repair)
+	}
 	if err != nil {
 		return nil, prose.ContinueNoTurn(ref, err)
-	}
-	if blocker != "" {
-		return nil, prose.ContinueBlocked(ref, blocker, collect.InstructionsRepair(ref))
 	}
 	v := continuedVoice(ref, cont, "")
 	v.promptFile = promptFile
@@ -274,12 +275,11 @@ func inspectFan(dir string) ([]fanMember, error) {
 	members := make([]fanMember, len(fan.Members))
 	for i, m := range fan.Members {
 		c := prose.FanMemberCandidate{Name: m.Name, Dir: m.Dir}
-		cont, blocker, err := collect.Continuable(m.Dir, m.Meta, m.Err)
-		switch {
-		case err != nil:
-			c.Kind, c.Detail = prose.BlockerUnreadableMeta, err.Error()
-		case blocker != "":
-			c.Kind, c.Detail = blocker, collect.InstructionsRepair(m.Dir)
+		cont, err := collect.Continuable(m.Record)
+		if blocked, ok := errors.AsType[*collect.Blocked](err); ok {
+			c.Kind, c.Repair = blocked.Kind, blocked.Repair
+		} else if err != nil {
+			c.Kind, c.ReadError = prose.BlockerUnreadableMeta, err.Error()
 		}
 		members[i] = fanMember{c, cont}
 	}

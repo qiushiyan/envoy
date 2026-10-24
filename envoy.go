@@ -229,10 +229,8 @@ func unresolvable(err error) (string, bool) {
 // What can still refuse it is a job this dispatch would take the name away
 // from while a caller may be waiting to collect by it: the job the name means
 // to this caller now, and the newest one, which is what the name means to
-// every caller without a generation of its own. Such a job holds the name
-// only against a caller it shares that meaning with — the same caller, or
-// either side having no identity. Two callers that both have one never
-// contend: each name keeps meaning each caller's own job. Losing the Mkdir to
+// every caller without a generation of its own — each refusing only when it
+// holds the name against this caller (collect.NameHold). Losing the Mkdir to
 // a concurrent dispatch re-reads the name.
 func reserve(arg, dir, caller string) (reserved, refusal string, err error) {
 	if job.IsPath(arg) {
@@ -251,13 +249,7 @@ func reserve(arg, dir, caller string) (reserved, refusal string, err error) {
 		}
 		if addr.Newest > 0 {
 			for _, holder := range []string{addr.Dir, addr.NewestDir} {
-				hold, held := collect.NameHold(holder)
-				if !held {
-					continue
-				}
-				// A holder whose record cannot say whose it is binds like one
-				// with no identity: NameHold has already called it unreadable.
-				if owner, _ := job.CallerOf(holder); caller == "" || owner == "" || owner == caller {
+				if hold, held := collect.NameHold(holder, caller); held {
 					return "", prose.NameHeld(name, holder, hold), nil
 				}
 			}

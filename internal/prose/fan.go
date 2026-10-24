@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/qiushiyan/envoy/internal/job"
-	"github.com/qiushiyan/envoy/internal/text"
 )
 
 // A fan-out is several turns, each on its own prompt, supervised as a single
@@ -109,6 +108,21 @@ func FanEnded(groupDir string, members []FanMemberEnd) string {
 	return b.String()
 }
 
+// FanEndedUnrecorded is the status a wait gives a fan-out whose process is
+// gone while some members left no final record, or one this envoy cannot
+// read: neither the dispatch's ending block nor a running status fits them,
+// and a member's provider may yet be alive, so nothing here calls it ended.
+func FanEndedUnrecorded(members []string) string {
+	return fmt.Sprintf("the fan-out's process is gone, and %s left no final record this envoy can read", strings.Join(members, ", "))
+}
+
+// FanEndedUnrecordedNext sends that wait's caller to collect, which reads
+// the rest of the evidence and gives each member its own action.
+func FanEndedUnrecordedNext(groupDir string) string {
+	return "What became of those members is not recorded here, and a member's provider may still be running. " +
+		"Collect the fan-out for what the evidence shows and each member's own action: " + CollectCommand(groupDir) + "."
+}
+
 // FanUndispatched glosses a member that never reached a turn of its own: the
 // one fan-out outcome where nothing ran and nothing was changed.
 func FanUndispatched() string {
@@ -149,7 +163,7 @@ func FanMemberNoRecordNext(dir, instructions string) string {
 	next := fmt.Sprintf("read %s, %s and %s before retrying this member; a member whose logs show nothing ran is re-sent as its own job with its prompt.md",
 		ws.ProgressLogPath(), ws.RawLogPath(), ws.StderrLogPath())
 	if instructions != "" {
-		next += " and the fan-out's standing instructions, which its other new members were sent: --instructions-file " + text.ShellQuote(instructions)
+		next += " and the fan-out's standing instructions, which its other new members were sent: --instructions-file " + ShellQuote(instructions)
 	}
 	return next
 }
@@ -216,19 +230,19 @@ func FanCollected(groupDir string, statuses []string) string {
 }
 
 // FanResumeBlockerLine words one member's blocker as an observation, in the
-// shared ResumeBlockerKind vocabulary, with the member's Detail where its
-// kind carries one.
+// shared ResumeBlockerKind vocabulary, with the read error or the repair its
+// kind carries.
 func FanResumeBlockerLine(c FanMemberCandidate) string {
-	member, detail := c.Name, c.Detail
+	member := c.Name
 	switch c.Kind {
 	case BlockerUnreadableMeta:
-		return fmt.Sprintf("member %s has no readable meta.json (%s)", member, detail)
+		return fmt.Sprintf("member %s has no readable meta.json (%s)", member, c.ReadError)
 	case BlockerRunning:
 		return fmt.Sprintf("member %s is still running", member)
 	case BlockerLockConflict:
 		return fmt.Sprintf("member %s's last turn ended in a session-lock conflict, so its session may belong to another job", member)
 	case BlockerInstructionsMissing, BlockerInstructionsChanged:
-		return fmt.Sprintf("member %s: %s %s", member, instructionsLost(c.Dir, c.Kind), detail)
+		return fmt.Sprintf("member %s: %s %s", member, instructionsLost(c.Dir, c.Kind), c.Repair)
 	default: // BlockerNoSession
 		return fmt.Sprintf("member %s never published a session id, so it has no conversation to continue", member)
 	}

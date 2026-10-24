@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/qiushiyan/envoy/internal/job"
-	"github.com/qiushiyan/envoy/internal/text"
 )
 
 // Failure says why a turn did not deliver, worded from its record alone: the
@@ -177,7 +176,7 @@ func timedOut(timeoutMin float64, provider string, stream job.StreamSample) stri
 	switch {
 	case stream.Events > 0 && stream.LastEvent != "":
 		return line + fmt.Sprintf(" When the cap arrived the stream had been quiet for %s, after %s (last: %s).",
-			text.FormatDuration(time.Duration(stream.QuietMs)*time.Millisecond), eventCount(stream.Events), stream.LastEvent)
+			FormatDuration(time.Duration(stream.QuietMs)*time.Millisecond), eventCount(stream.Events), stream.LastEvent)
 	case stream.Bytes > 0:
 		return line + fmt.Sprintf(" The provider wrote %d bytes before the cap but no event envoy could parse, so nothing here records what it was doing.",
 			stream.Bytes)

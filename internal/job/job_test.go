@@ -308,7 +308,7 @@ func TestMetaRoundTripAndSchemaRefusal(t *testing.T) {
 	if err := m.WriteFile(p); err != nil {
 		t.Fatal(err)
 	}
-	got, err := ReadMetaFile(p)
+	got, err := ReadMeta(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +325,7 @@ func TestMetaRoundTripAndSchemaRefusal(t *testing.T) {
 	if err := os.WriteFile(p, []byte(`{"schemaVersion":8,"status":"ok","provider":"codex"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadMetaFile(p); err == nil || !strings.Contains(err.Error(), "schema 8") {
+	if _, err := ReadMeta(dir); err == nil || !strings.Contains(err.Error(), "schema 8") {
 		t.Fatalf("another schema must be refused by name, got %v", err)
 	}
 }

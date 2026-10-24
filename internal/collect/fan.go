@@ -13,70 +13,68 @@ import (
 	"github.com/qiushiyan/envoy/internal/prose"
 )
 
+// member is one roster entry as the fan-out's block reads it: a turn, read
+// as a single turn's block reads it, or the record that kept it from being
+// one — none, or one that will not read.
+type member struct {
+	job.Member
+	turn *turn // nil when the member has no readable record
+}
+
+// status is the member's own status, "" for one with no readable record.
+func (m member) status() string {
+	if m.turn == nil {
+		return ""
+	}
+	return m.turn.meta.Status
+}
+
 // collectGroup prints a whole fan-out: the aggregate first, then one section
-// per member, split by member name. The member sections are rendered before
-// the header because collecting a member can change its status — reconciling
-// an abandoned turn — and an aggregate that disagreed with the sections below
-// it would be worse than no aggregate at all. Nothing is stamped until the
-// whole block has reached the caller.
+// per member, split by member name. Every member is read — and an abandoned
+// one reconciled — before anything is written, so the aggregate describes the
+// sections below it, and nothing is stamped until the whole block has reached
+// the caller.
 func collectGroup(dir, note string, mode Mode, w, errW io.Writer) int {
 	fan, err := job.ReadFan(dir)
 	if err != nil {
-		fmt.Fprintf(errW,
-			"collect error: %s could not be read (%s). Each member's job dir under %s is self-contained — collect one directly to see its result.\n",
-			job.GroupWorkspace{Dir: dir}.GroupPath(), err, dir)
+		reportUnreadableManifest("collect", dir, err, errW)
 		return job.ExitUsage
 	}
 	group := fan.Group
 
-	var sections bytes.Buffer
-	statuses := make([]string, 0, len(fan.Members))
-	labels := make([]string, 0, len(fan.Members))
-	var undelivered []string
-	type stampable struct {
-		dir  string
-		meta *job.Meta
-	}
-	var stamps []stampable
-	resumable := len(fan.Members) > 0
-	for _, m := range fan.Members {
-		fmt.Fprintf(&sections, "\n=== member %s ===\n", m.Name)
-		// A member with no record is the roster's observation, not the
-		// member's: it gets its own section here, worded to what the directory
-		// shows, rather than the single-turn error a turn with no record earns.
-		if errors.Is(m.Err, job.ErrNoRecord) {
-			fmt.Fprintf(&sections, "status: %s\nnext: %s\n", prose.FanMemberNoRecord(), prose.FanMemberNoRecordNext(m.Dir, rosterInstructions(fan.Members)))
-			statuses = append(statuses, "")
-			labels = append(labels, m.Name+" no status")
-			resumable = false
-			continue
-		}
-		status := ""
-		if m.Err != nil {
+	members := make([]member, len(fan.Members))
+	for i, m := range fan.Members {
+		members[i] = member{Member: m}
+		switch {
+		case m.Meta != nil:
+			t := readTurn(m.Dir, m.Meta)
+			members[i].turn = &t
+		case !errors.Is(m.Err, job.ErrNoRecord):
 			reportUnreadable(m.Dir, m.Err, errW)
-			fmt.Fprintf(&sections, "status: %s\nnext: %s\n", prose.FanMemberUnreadable(), prose.FanMemberUnreadableNext(m.Dir))
-			resumable = false
-		} else {
-			r := renderJob(m.Dir, m.Meta, mode, &sections, true)
-			status = r.meta.Status
-			if r.undelivered {
-				undelivered = append(undelivered, m.Name)
-			}
-			if r.stamp {
-				stamps = append(stamps, stampable{m.Dir, r.meta})
-			}
-			if !r.resumable {
-				resumable = false
-			}
 		}
-		statuses = append(statuses, status)
-		label := status
+	}
+	// A member with no record has no archive of its own, so it is re-sent with
+	// the standing instructions its new siblings were sent.
+	resend := rosterInstructions(fan.Members)
+
+	statuses := make([]string, len(members))
+	labels := make([]string, len(members))
+	var undelivered []string
+	resumable := len(members) > 0
+	for i, m := range members {
+		statuses[i] = m.status()
+		label := statuses[i]
 		if label == "" {
 			label = "no status"
 		}
-		labels = append(labels, m.Name+" "+label)
+		labels[i] = m.Name + " " + label
+		if m.turn == nil || !m.turn.resumable() {
+			resumable = false
+		}
+		if m.turn != nil && m.turn.undelivered(mode) {
+			undelivered = append(undelivered, m.Name)
+		}
 	}
-
 	// Every member runs in the fan-out's one process, so its liveness is the
 	// set's: what a stop reaches, and whether a member recorded as running
 	// can still be waited on.
@@ -104,7 +102,7 @@ func collectGroup(dir, note string, mode Mode, w, errW io.Writer) int {
 		// Result-only keeps the aggregate line and the member split —
 		// attribution is the point of a fan-out — and drops the preamble.
 		fmt.Fprintf(&body, "status: %s\n", prose.FanStatusLine(statuses))
-		body.Write(sections.Bytes())
+		writeSections(&body, members, mode, resend)
 		if len(undelivered) > 0 || prose.FanStatus(statuses) != prose.FanOK {
 			fmt.Fprintf(&body, "\nnext: %s\n", closing())
 		}
@@ -126,7 +124,7 @@ func collectGroup(dir, note string, mode Mode, w, errW io.Writer) int {
 		if group.GitBaseline != nil {
 			printGitSinceBaseline(&body, group.Cwd, *group.GitBaseline)
 		}
-		body.Write(sections.Bytes())
+		writeSections(&body, members, mode, resend)
 		// A fan-out with a member still recorded as running gets its closing
 		// whatever the mode, as a single turn does; a status check of a
 		// finished one says that it delivered nothing.
@@ -139,10 +137,31 @@ func collectGroup(dir, note string, mode Mode, w, errW io.Writer) int {
 	if !deliver(w, errW, withNote(body.Bytes(), note, mode, errW)) {
 		return job.ExitInfra
 	}
-	for _, s := range stamps {
-		stampCollected(s.dir, s.meta)
+	for _, m := range members {
+		if m.turn != nil && m.turn.stamps(mode) {
+			stampCollected(m.Dir, m.turn.meta)
+		}
 	}
 	return 0
+}
+
+// writeSections writes one section per member, headed by its name. A member
+// with no record is the roster's observation, not the member's: it gets a
+// section worded to what the directory shows, rather than the single-turn
+// error a turn with no record earns. resend is the standing instructions such
+// a member is re-sent with (rosterInstructions).
+func writeSections(w io.Writer, members []member, mode Mode, resend string) {
+	for _, m := range members {
+		fmt.Fprintf(w, "\n=== member %s ===\n", m.Name)
+		switch {
+		case m.turn != nil:
+			m.turn.write(w, mode, true)
+		case errors.Is(m.Err, job.ErrNoRecord):
+			fmt.Fprintf(w, "status: %s\nnext: %s\n", prose.FanMemberNoRecord(), prose.FanMemberNoRecordNext(m.Dir, resend))
+		default:
+			fmt.Fprintf(w, "status: %s\nnext: %s\n", prose.FanMemberUnreadable(), prose.FanMemberUnreadableNext(m.Dir))
+		}
+	}
 }
 
 // rosterInstructions is the archive of a member that started its

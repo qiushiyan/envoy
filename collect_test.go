@@ -35,7 +35,7 @@ func TestCollectStampsOnlyWhatReachedTheCaller(t *testing.T) {
 	if code := Collect(CollectRequest{Job: dir, Stdout: failingWriter{}, Stderr: &errBuf}); code == 0 {
 		t.Fatalf("collect into a dead writer reported success\nstderr:\n%s", errBuf.String())
 	}
-	got, err := job.ReadMetaFile(ws.MetaPath())
+	got, err := job.ReadMeta(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestCollectStampsOnlyWhatReachedTheCaller(t *testing.T) {
 	if code := Collect(CollectRequest{Job: dir, Stdout: &out, Stderr: &errBuf}); code != 0 {
 		t.Fatalf("collect = %d\n%s", code, errBuf.String())
 	}
-	if got, _ := job.ReadMetaFile(ws.MetaPath()); got.CollectedAt == nil {
+	if got, _ := job.ReadMeta(dir); got.CollectedAt == nil {
 		t.Fatal("a delivered result stamps collection")
 	}
 }

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/qiushiyan/envoy/internal/job"
-	"github.com/qiushiyan/envoy/internal/text"
 )
 
 // Launcher renders the recorded invocation, never the collector's environment.
@@ -14,7 +13,7 @@ func Launcher(m *job.Meta) string {
 	if !m.UsesLauncher() {
 		return ""
 	}
-	return fmt.Sprintf("launcher: %s=%s", launcherEnv(m.Provider), text.ShellQuote(strings.Join(m.CommandPrefix, " ")))
+	return fmt.Sprintf("launcher: %s=%s", launcherEnv(m.Provider), ShellQuote(strings.Join(m.CommandPrefix, " ")))
 }
 
 func launcherEnv(provider string) string { return "ENVOY_" + strings.ToUpper(provider) + "_CMD" }

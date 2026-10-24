@@ -6,48 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"slices"
 )
-
-// ExitPartial reports a fan-out where some members returned a result and
-// others did not. It exists because neither 0 nor any failure code licenses
-// the right move there: the results that landed are usable, and only the
-// members that failed need a decision. Only a fan-out can exit this way — a
-// single turn's codes are unchanged.
-const ExitPartial = 6
-
-// groupExitPrecedence orders the codes for a fan-out where no member returned
-// a result, worst first. A dispatch-side cause outranks a provider-side one:
-// rejected flags or a locked session, then an envoy/environment failure, then
-// a stopped turn, the cap, and last the provider's own verdict. The earlier
-// ones are fixed by changing the command, the later ones by waiting or
-// changing the prompt.
-var groupExitPrecedence = []int{ExitUsage, ExitInfra, ExitInterrupted, ExitTimeout, ExitFailed}
-
-// ExitCodeForGroup aggregates the members' exit codes into the fan-out's own.
-func ExitCodeForGroup(codes []int) int {
-	if len(codes) == 0 {
-		return ExitInfra
-	}
-	ok := 0
-	for _, c := range codes {
-		if c == ExitOK {
-			ok++
-		}
-	}
-	switch {
-	case ok == len(codes):
-		return ExitOK
-	case ok > 0:
-		return ExitPartial
-	}
-	for _, want := range groupExitPrecedence {
-		if slices.Contains(codes, want) {
-			return want
-		}
-	}
-	return ExitInfra
-}
 
 // GroupSchemaVersion is the only group.json schema this engine reads or
 // writes.
@@ -186,15 +145,10 @@ type Fan struct {
 	Members []Member
 }
 
-// Member is one roster entry and its record, read once (ReadRecord): Stamp
-// whenever the record parses, Meta when it is this engine's schema, and Err
-// when Meta is missing — ErrNoRecord, a *SchemaError, or damage.
+// Member is one roster entry and its record, read once (ReadRecord).
 type Member struct {
-	Name  string
-	Dir   string
-	Stamp *Stamp
-	Meta  *Meta
-	Err   error
+	Name string
+	Record
 }
 
 // ReadFan reads the fan-out in dir as this engine's schema: ErrNoRecord when
@@ -213,9 +167,7 @@ func ReadFan(dir string) (*Fan, error) {
 func ReadMembers(dir string, group *Group) []Member {
 	members := make([]Member, len(group.Members))
 	for i, name := range group.Members {
-		m := Member{Name: name, Dir: GroupWorkspace{Dir: dir}.Member(name).Dir}
-		m.Stamp, m.Meta, m.Err = ReadRecord(m.Dir)
-		members[i] = m
+		members[i] = Member{Name: name, Record: ReadRecord(GroupWorkspace{Dir: dir}.Member(name).Dir)}
 	}
 	return members
 }
@@ -235,8 +187,8 @@ func RecordedMembers(dir string) ([]Member, error) {
 		if !e.IsDir() {
 			continue
 		}
-		m := Member{Name: e.Name(), Dir: filepath.Join(dir, e.Name())}
-		if m.Stamp, m.Meta, m.Err = ReadRecord(m.Dir); errors.Is(m.Err, ErrNoRecord) {
+		m := Member{Name: e.Name(), Record: ReadRecord(filepath.Join(dir, e.Name()))}
+		if errors.Is(m.Err, ErrNoRecord) {
 			continue
 		}
 		members = append(members, m)
