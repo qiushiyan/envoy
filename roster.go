@@ -42,21 +42,23 @@ type voice struct {
 // decided before a directory is reserved or a session locked. A fan-out
 // reference expands into its members and each one is resolved exactly as a
 // member named directly would be, so there is one eligibility rule and one
-// set of roster checks whatever the caller spelled. errText is "" exactly
-// when the roster is dispatchable. instructions is the roster's standing
-// instructions, read from --instructions-file ("" = none).
-func resolveTurns(req RunRequest, instructions, invocationCwd, caller string, timeoutMin float64) ([]fan.Turn, string) {
+// set of roster checks whatever the caller spelled. An error is a refusal
+// worded for the caller — or, for a job named by a store that cannot be read,
+// the resolver's own error (unresolvable), which no change to the command
+// fixes. instructions is the roster's standing instructions, read from
+// --instructions-file ("" = none).
+func resolveTurns(req RunRequest, instructions, invocationCwd, caller string, timeoutMin float64) ([]fan.Turn, error) {
 	var voices []voice
 	for _, seat := range req.With {
-		seated, errText := seatVoices(seat, req, invocationCwd, caller)
-		if errText != "" {
-			return nil, errText
+		seated, err := seatVoices(seat, req, invocationCwd, caller)
+		if err != nil {
+			return nil, err
 		}
 		voices = append(voices, seated...)
 	}
-	shared, errText := shareRoster(voices, req, instructions, timeoutMin)
-	if errText != "" {
-		return nil, errText
+	shared, err := shareRoster(voices, req, instructions, timeoutMin)
+	if err != nil {
+		return nil, err
 	}
 	if shared.cwd == "" {
 		shared.cwd = invocationCwd
@@ -90,52 +92,57 @@ func resolveTurns(req RunRequest, instructions, invocationCwd, caller string, ti
 			},
 		}
 	}
-	return turns, ""
+	return turns, nil
 }
 
 // seatVoices resolves one --with seat into the voices it seats, each with
 // the prompt it is sent: one for a cold voice or a continued turn, every
 // member for a fan-out reference, which therefore stands alone.
-func seatVoices(seat string, req RunRequest, invocationCwd, caller string) ([]voice, string) {
-	spec, promptFile, errText := splitSeat(seat)
-	if errText != "" {
-		return nil, errText
+func seatVoices(seat string, req RunRequest, invocationCwd, caller string) ([]voice, error) {
+	spec, promptFile, err := splitSeat(seat)
+	if err != nil {
+		return nil, err
 	}
 	if promptFile == "" {
 		promptFile = req.PromptFile
 	}
 	if promptFile == "" {
-		return nil, prose.VoiceNeedsPrompt(spec)
+		return nil, errors.New(prose.VoiceNeedsPrompt(spec))
 	}
 	if !strings.HasPrefix(spec, "@") {
 		v, err := parseVoice(spec)
 		if err != nil {
-			return nil, err.Error()
+			return nil, err
 		}
 		v.promptFile = promptFile
-		return []voice{v}, ""
+		return []voice{v}, nil
 	}
+	// A store that cannot be read is no refusal of the caller's spelling: it
+	// stops the dispatch the way it stops the dispatch's own name.
 	resolved, err := job.ResolveRef(strings.TrimPrefix(spec, "@"), invocationCwd, caller)
+	if _, storeFailed := unresolvable(err); storeFailed {
+		return nil, err
+	}
 	if err != nil {
-		return nil, fmt.Sprintf("--with %s: %s", spec, err)
+		return nil, fmt.Errorf("--with %s: %s", spec, err)
 	}
 	ref := resolved.Dir
 	if job.IsGroupDir(ref) {
 		if len(req.With) > 1 {
-			return nil, prose.GroupRefMustStandAlone(ref, fanCandidates(ref))
+			return nil, errors.New(prose.GroupRefMustStandAlone(ref, fanCandidates(ref)))
 		}
 		return fanMembers(ref, promptFile)
 	}
 	cont, err := collect.Continuable(job.ReadRecord(ref))
 	if blocked, ok := errors.AsType[*collect.Blocked](err); ok {
-		return nil, prose.ContinueBlocked(ref, blocked.Kind, blocked.Repair)
+		return nil, errors.New(prose.ContinueBlocked(ref, blocked.Kind, blocked.Repair))
 	}
 	if err != nil {
-		return nil, prose.ContinueNoTurn(ref, err)
+		return nil, errors.New(prose.ContinueNoTurn(ref, err))
 	}
 	v := continuedVoice(ref, cont, "")
 	v.promptFile = promptFile
-	return []voice{v}, ""
+	return []voice{v}, nil
 }
 
 // roster is what every turn of a job shares: one tree, one anchor, and one
@@ -159,7 +166,7 @@ type roster struct {
 // the record naming one text while the session holds another until a moment
 // no one can observe. The same text again is no change, and a caller that
 // passes it on every turn is accepted.
-func shareRoster(voices []voice, req RunRequest, instructions string, timeoutMin float64) (roster, string) {
+func shareRoster(voices []voice, req RunRequest, instructions string, timeoutMin float64) (roster, error) {
 	shared := roster{cwd: req.Cwd, baseline: req.Baseline}
 	sessions := map[string]string{}
 	inheritedCwdFrom, inheritedBaselineFrom := "", ""
@@ -169,14 +176,14 @@ func shareRoster(voices []voice, req RunRequest, instructions string, timeoutMin
 			continue
 		}
 		if prev, dup := sessions[v.session]; dup {
-			return roster{}, prose.DuplicateConversation(v.session, prev, v.source)
+			return roster{}, errors.New(prose.DuplicateConversation(v.session, prev, v.source))
 		}
 		sessions[v.session] = v.source
 		if instructions != "" && v.instructions == "" {
-			return roster{}, prose.InstructionsAdded(v.source)
+			return roster{}, errors.New(prose.InstructionsAdded(v.source))
 		}
 		if instructions != "" && v.instructions != instructions {
-			return roster{}, prose.InstructionsDiffer(v.source)
+			return roster{}, errors.New(prose.InstructionsDiffer(v.source))
 		}
 		if v.allowWrite {
 			writeSources = append(writeSources, v.source)
@@ -185,14 +192,14 @@ func shareRoster(voices []voice, req RunRequest, instructions string, timeoutMin
 			if shared.cwd == "" {
 				shared.cwd, inheritedCwdFrom = v.cwd, v.source
 			} else if v.cwd != shared.cwd {
-				return roster{}, prose.CwdMix(inheritedCwdFrom, shared.cwd, v.source, v.cwd)
+				return roster{}, errors.New(prose.CwdMix(inheritedCwdFrom, shared.cwd, v.source, v.cwd))
 			}
 		}
 		if req.Baseline == "" && v.baseline != "" {
 			if shared.baseline == "" {
 				shared.baseline, inheritedBaselineFrom = v.baseline, v.source
 			} else if v.baseline != shared.baseline {
-				return roster{}, prose.BaselineMix(inheritedBaselineFrom, shared.baseline, v.source, v.baseline)
+				return roster{}, errors.New(prose.BaselineMix(inheritedBaselineFrom, shared.baseline, v.source, v.baseline))
 			}
 		}
 	}
@@ -200,11 +207,11 @@ func shareRoster(voices []voice, req RunRequest, instructions string, timeoutMin
 	case len(voices) == 1:
 		shared.allowWrite = req.AllowWrite || len(writeSources) == 1
 	case req.AllowWrite:
-		return roster{}, prose.AllowWriteNeedsOneVoice()
+		return roster{}, errors.New(prose.AllowWriteNeedsOneVoice())
 	case len(writeSources) > 0:
-		return roster{}, prose.WriteSourceInRoster(writeSources[0], timeoutMin)
+		return roster{}, errors.New(prose.WriteSourceInRoster(writeSources[0], timeoutMin))
 	}
-	return shared, ""
+	return shared, nil
 }
 
 // continuedVoice is the voice that continues a finished job's conversation,
@@ -237,23 +244,23 @@ func continuedVoice(dir string, cont *collect.Continuation, name string) voice {
 // could carry '=' legitimately, and there it is refused rather than guessed
 // at — but only when such a directory actually exists, since otherwise the
 // spelling can only have meant an attachment.
-func splitSeat(seat string) (spec, promptFile, errText string) {
+func splitSeat(seat string) (spec, promptFile string, err error) {
 	i := strings.IndexByte(seat, '=')
 	if i < 0 {
-		return seat, "", ""
+		return seat, "", nil
 	}
 	if strings.HasPrefix(seat, "@") {
 		if whole := strings.TrimPrefix(seat, "@"); job.IsPath(whole) {
 			if info, err := os.Stat(whole); err == nil && info.IsDir() {
-				return "", "", prose.JobPathHasEquals(seat)
+				return "", "", errors.New(prose.JobPathHasEquals(seat))
 			}
 		}
 	}
 	spec, promptFile = seat[:i], seat[i+1:]
 	if promptFile == "" {
-		return "", "", fmt.Sprintf("--with %s: give the prompt file after '=' (--with %s<file>), or drop the '=' to use --prompt-file", seat, seat)
+		return "", "", fmt.Errorf("--with %s: give the prompt file after '=' (--with %s<file>), or drop the '=' to use --prompt-file", seat, seat)
 	}
-	return spec, promptFile, ""
+	return spec, promptFile, nil
 }
 
 // fanMember is one member of a fan-out judged by the one eligibility
@@ -290,13 +297,13 @@ func inspectFan(dir string) ([]fanMember, error) {
 // voices, each keeping the name it had and each sent promptFile — the round's
 // one NEW prompt. The set is whole or refused: any member that cannot continue
 // refuses the round rather than being silently left out of it.
-func fanMembers(dir, promptFile string) ([]voice, string) {
+func fanMembers(dir, promptFile string) ([]voice, error) {
 	members, err := inspectFan(dir)
 	if err != nil {
-		return nil, prose.FanContinueUnreadableManifest(dir, err)
+		return nil, errors.New(prose.FanContinueUnreadableManifest(dir, err))
 	}
 	if len(members) == 0 {
-		return nil, prose.FanContinueEmptyManifest(dir)
+		return nil, errors.New(prose.FanContinueEmptyManifest(dir))
 	}
 	var voices []voice
 	var reasons []string
@@ -310,9 +317,9 @@ func fanMembers(dir, promptFile string) ([]voice, string) {
 		voices = append(voices, v)
 	}
 	if len(reasons) > 0 {
-		return nil, prose.FanContinueBlocked(dir, reasons)
+		return nil, errors.New(prose.FanContinueBlocked(dir, reasons))
 	}
-	return voices, ""
+	return voices, nil
 }
 
 // fanCandidates lists a fan-out's members in roster order, so a refusal never

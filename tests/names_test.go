@@ -61,8 +61,9 @@ func TestARefusedFanMemberDoesNotPinTheName(t *testing.T) {
 }
 
 // A store that exists but cannot be listed is not an empty one: resolving a
-// name there could serve an older generation as the latest, so collect and
-// dispatch both stop instead.
+// name there could serve an older generation as the latest, so collect,
+// dispatch and a continuation by name all stop instead, as the infra failure
+// it is (exit 2).
 func TestAnUnlistableStoreNeverServesAnOlderGeneration(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("permissions do not bind root")
@@ -97,10 +98,10 @@ func TestAnUnlistableStoreNeverServesAnOlderGeneration(t *testing.T) {
 		t.Fatalf("dispatch over an unlistable store = %d, want 2\n%s", run.code, run.stderr)
 	}
 	cont := runEnvoyIn(t, e, project, "run", "consult-r2", "--prompt-file", prompt, "--with", "@consult-r1", "--timeout-min", "5")
-	if cont.code == 0 {
-		t.Fatalf("a continuation must not resolve a name in an unlistable store\n%s", cont.stdout)
+	if cont.code != 2 {
+		t.Fatalf("a continuation by name over an unlistable store = %d, want 2\n%s", cont.code, cont.stderr)
 	}
-	mustContain(t, "stderr", cont.stderr, "could not be read")
+	mustContain(t, "stderr", cont.stderr, "could not be read", "not the same as an empty store")
 }
 
 // A fan-out member with no record has not thereby been refused: members start

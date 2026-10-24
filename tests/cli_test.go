@@ -132,6 +132,7 @@ func TestUsageErrors(t *testing.T) {
 		{[]string{"run", job, "--with", "codex", "--prompt-file", prompt, "--max-budget-usd", "1"}, "caps one claude voice"},
 		{[]string{"run", job, "--with", "claude", "--with", "codex", "--prompt-file", prompt, "--max-budget-usd", "1"}, "caps one claude voice"},
 		{[]string{"wait"}, "wait takes the job to wait for"},
+		{[]string{"pending", "job"}, "pending does not take a job"},
 		{[]string{"nonsense"}, "unknown command"},
 	}
 	for _, c := range cases {

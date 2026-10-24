@@ -27,7 +27,7 @@ import (
 )
 
 // Version of the engine, reported by `envoy version`.
-const Version = "0.14.1"
+const Version = "0.14.2"
 
 // Exit codes: 0 ok · 1 provider failure · 2 infra · 3 usage · 4 timeout ·
 // 5 interrupted · 6 partial (several voices only).
@@ -151,9 +151,13 @@ func Run(req RunRequest) int {
 	}
 
 	caller := job.CallerFromEnv()
-	turns, errText := resolveTurns(req, instructions, invocationCwd, caller, timeoutMin)
-	if errText != "" {
-		return usageError(stderr, "%s", errText)
+	turns, err := resolveTurns(req, instructions, invocationCwd, caller, timeoutMin)
+	if msg, storeFailed := unresolvable(err); storeFailed {
+		fmt.Fprintf(stderr, "envoy: %s\n", msg)
+		return ExitInfra
+	}
+	if err != nil {
+		return usageError(stderr, "%s", err)
 	}
 	// Every turn's prompt is checked before the name is reserved, so a
 	// member's unreadable file refuses the whole dispatch rather than
@@ -208,8 +212,9 @@ func Run(req RunRequest) int {
 }
 
 // unresolvable words the two ways a name can fail to resolve that are the
-// store's fault rather than the caller's: both stop with exit 2 instead of
-// letting an older job answer to the name.
+// store's fault rather than the caller's — the job's own name, a continued
+// voice's, or a read's: each stops with exit 2 instead of letting an older
+// job answer to the name.
 func unresolvable(err error) (string, bool) {
 	var unreadable *job.StoreUnreadableError
 	var unattributed *job.UnattributedError
@@ -415,8 +420,8 @@ func Pending(base string, stdout, stderr io.Writer) int {
 	if base == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
-			fmt.Fprintf(stderr, "collect error: cannot determine cwd: %s\n", err)
-			return ExitUsage
+			fmt.Fprintf(stderr, "pending error: cannot determine cwd: %s\n", err)
+			return ExitInfra
 		}
 		base = job.DefaultBase(cwd)
 	}

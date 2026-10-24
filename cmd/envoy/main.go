@@ -381,7 +381,7 @@ func cmdPending(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 	if fs.NArg() > 0 {
-		fmt.Fprintln(stderr, "collect error: pending does not take a job; use --base to choose the job root")
+		fmt.Fprintln(stderr, "usage error: pending does not take a job; use --base to choose the job root")
 		return envoy.ExitUsage
 	}
 	return envoy.Pending(*base, stdout, stderr)

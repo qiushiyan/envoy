@@ -240,6 +240,11 @@ func TestAnUnreadableRecordNeverYieldsAnOlderGeneration(t *testing.T) {
 	if r := runEnvoyIn(t, a, project, "run", "consult-r1", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5"); r.code != 2 {
 		t.Fatalf("dispatch past an unreadable record = %d, want 2\n%s", r.code, r.stderr)
 	}
+	if r := runEnvoyIn(t, a, project, "run", "consult-r2", "--prompt-file", prompt, "--with", "@consult-r1", "--timeout-min", "5"); r.code != 2 {
+		t.Fatalf("continuation past an unreadable record = %d, want 2\n%s", r.code, r.stderr)
+	} else {
+		mustContain(t, "continuation stderr", r.stderr, "was not resolved", dirs[1])
+	}
 	// The older job is still reachable, by the identity that cannot drift.
 	if r := runEnvoyIn(t, a, project, "collect", "--status-only", dirs[0]); r.code != 0 || jobLineOf(r.stdout) != dirs[0] {
 		t.Fatalf("collect by path = %d\n%s", r.code, r.stderr)
