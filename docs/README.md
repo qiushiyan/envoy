@@ -110,6 +110,20 @@ claude-steps, which reads `envoy run|collect <job>` and the block's `job:` and
 `status:` lines out of transcripts. `cmd/envoy`'s contract suite pins every
 invocation they use, byte for byte, in `cmd/envoy/testdata/contract`.
 
+## How a dispatch flows
+
+`cmd/envoy` holds the clikit grammar and the help prose; `run` parses, then
+goes through `internal/detach`, which runs the dispatch in a process of its
+own and waits for it. `internal/dispatch` makes the refusals, resolves the
+roster (`internal/dispatch/roster.go`) and reserves the name, then hands each
+turn to `internal/runner`, the lifecycle, which drives a driver in
+`internal/provider` and writes through `internal/job`, the artifacts and
+their schemas. `internal/fan` sits beside the runner: it starts several runs
+and reports them as a set, knowing nothing about the turn lifecycle.
+`internal/collect` reads what the runner wrote — collect, wait, pending, the
+name a read gives, and the continuation inspection dispatch shares — and
+`internal/prose` words everything either side says to the caller.
+
 ## Where each decision lives
 
 - **Job names, callers, generations, name holds and the store:**
@@ -157,9 +171,12 @@ its source (its first line says where); these bindings tie it to this
 repository and win where they narrow it.
 
 - **Hot path:** `CLAUDE.md` alone; `AGENTS.md` is a symlink to it, never
-  written directly. It carries the ownership map and the invariants that
-  prevent a wrong edit anywhere, each stated as its conclusion with the
-  reasoning left here. This page is the landing page for design work.
+  written directly. It follows the house agent-guide template
+  (`~/dotfiles/claude/.claude/skills/go-cli/AGENTS-TEMPLATE.md`): the
+  contracts other repositories read, then the ownership rules and invariants
+  that prevent a wrong edit anywhere, each stated as its conclusion with the
+  test that holds it and the reasoning left here. This page is the landing
+  page for design work, and § How a dispatch flows its tour of the packages.
 - **Evidence:** `EVIDENCE.md` at the root is the dated log, one entry per
   incident or mining pass, appended by `/improve-tool`. Its entries are
   history and never rewritten; its header carries how to read them against
@@ -172,8 +189,7 @@ repository and win where they narrow it.
   help pages (`cmd/envoy/testdata/help`) and the contract pins
   (`cmd/envoy/testdata/contract`) are a contract the tests pin exactly, so a
   doc quotes them verbatim or not at all; the dated measurements in
-  `EVIDENCE.md`;
-  the commands in `CLAUDE.md` § Commands.
+  `EVIDENCE.md`.
 - **Own check:** no live doc presents a retired surface as current.
 
   ```bash
