@@ -1,0 +1,15 @@
+$ envoy run nan-r1 --with claude --prompt-file $HOME/brief.md --max-budget-usd NaN
+exit 0
+--- stdout
+job: $HOME/.local/state/envoy/jobs/repo-<key>/nan-r1
+provider: claude · model (provider default) · effort (provider default) · hard cap 30m
+stop: kill -INT <pid>
+next: let this command run to completion, then collect the job: envoy collect '$HOME/.local/state/envoy/jobs/repo-<key>/nan-r1'
+
+status: ok
+result: $HOME/.local/state/envoy/jobs/repo-<key>/nan-r1/result.md
+meta: $HOME/.local/state/envoy/jobs/repo-<key>/nan-r1/meta.json
+session: sess-claude
+next: Collect and verify this job: envoy collect '$HOME/.local/state/envoy/jobs/repo-<key>/nan-r1'.
+--- stderr
+

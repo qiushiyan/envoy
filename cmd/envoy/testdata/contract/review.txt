@@ -1,0 +1,100 @@
+$ envoy run review-r1 --with codex:gpt-6-astra:high --prompt-file $HOME/brief.md --baseline <base> --timeout-min 60
+exit 0
+--- stdout
+job: $HOME/.local/state/envoy/jobs/repo-<key>/review-r1
+provider: codex · model gpt-6-astra · effort high · hard cap 60m
+baseline: <base>
+stop: kill -INT <pid>
+next: let this command run to completion, then collect the job: envoy collect '$HOME/.local/state/envoy/jobs/repo-<key>/review-r1'
+session: sess-codex
+
+status: ok
+result: $HOME/.local/state/envoy/jobs/repo-<key>/review-r1/result.md
+meta: $HOME/.local/state/envoy/jobs/repo-<key>/review-r1/meta.json
+session: sess-codex
+next: Collect and verify this job: envoy collect '$HOME/.local/state/envoy/jobs/repo-<key>/review-r1'.
+--- stderr
+
+$ envoy collect --status-only review-r1
+exit 0
+--- stdout
+job: $HOME/.local/state/envoy/jobs/repo-<key>/review-r1
+status: ok
+provider: codex · model gpt-6-astra · effort high
+duration: 0m
+tokens: input 13 · cachedInput 5 · output 8 · reasoningOutput 3
+prompt: accepted · evidence codex thread.started
+result kind: final
+provider stream: no connection-error events recognized by this engine version
+logs: progress $HOME/.local/state/envoy/jobs/repo-<key>/review-r1/progress.log · raw $HOME/.local/state/envoy/jobs/repo-<key>/review-r1/raw.log · stderr $HOME/.local/state/envoy/jobs/repo-<key>/review-r1/stderr.log
+resume: envoy run <new-job-name> --with @'$HOME/.local/state/envoy/jobs/repo-<key>/review-r1' --timeout-min 60 --prompt-file <your-follow-up.md>
+
+--- git since baseline <base> (in $HOME/repo) ---
+(no commits)
+(no diff)
+tree clean
+
+next: this was a status check only — no result was printed and nothing was marked collected. Print the full job: envoy collect '$HOME/.local/state/envoy/jobs/repo-<key>/review-r1'.
+--- stderr
+
+$ envoy pending
+exit 0
+--- stdout
+pending jobs: 1 (under $HOME/.local/state/envoy/jobs/repo-<key>)
+
+[terminal:ok] $HOME/.local/state/envoy/jobs/repo-<key>/review-r1
+why: terminal status ok has not been collected
+next: envoy collect '$HOME/.local/state/envoy/jobs/repo-<key>/review-r1'
+--- stderr
+
+$ envoy wait review-r1
+exit 0
+--- stdout
+job: $HOME/.local/state/envoy/jobs/repo-<key>/review-r1
+
+status: ok
+result: $HOME/.local/state/envoy/jobs/repo-<key>/review-r1/result.md
+meta: $HOME/.local/state/envoy/jobs/repo-<key>/review-r1/meta.json
+session: sess-codex
+next: Collect and verify this job: envoy collect '$HOME/.local/state/envoy/jobs/repo-<key>/review-r1'.
+--- stderr
+
+$ envoy collect review-r1
+exit 0
+--- stdout
+job: $HOME/.local/state/envoy/jobs/repo-<key>/review-r1
+status: ok
+duration: 0m
+resume: envoy run <new-job-name> --with @'$HOME/.local/state/envoy/jobs/repo-<key>/review-r1' --timeout-min 60 --prompt-file <your-follow-up.md>
+
+--- git since baseline <base> (in $HOME/repo) ---
+(no commits)
+(no diff)
+tree clean
+
+--- result.md ---
+fake provider result
+
+next: result.md above is this turn's return value — use it in the step that dispatched it.
+--- stderr
+
+$ envoy collect --result-only review-r1
+exit 0
+--- stdout
+fake provider result
+--- stderr
+
+$ envoy pending
+exit 0
+--- stdout
+pending jobs: 0 (under $HOME/.local/state/envoy/jobs/repo-<key>)
+next: no recovery action is needed
+--- stderr
+
+$ envoy pending --base $HOME/.local/state/envoy/jobs
+exit 0
+--- stdout
+pending jobs: 0 (under $HOME/.local/state/envoy/jobs)
+next: no recovery action is needed
+--- stderr
+

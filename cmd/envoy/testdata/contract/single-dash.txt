@@ -1,0 +1,16 @@
+$ envoy run dash-r1 -with codex -prompt-file $HOME/brief.md
+exit 0
+--- stdout
+job: $HOME/.local/state/envoy/jobs/repo-<key>/dash-r1
+provider: codex · model (provider default) · effort (provider default) · hard cap 30m
+stop: kill -INT <pid>
+next: let this command run to completion, then collect the job: envoy collect '$HOME/.local/state/envoy/jobs/repo-<key>/dash-r1'
+session: sess-codex
+
+status: ok
+result: $HOME/.local/state/envoy/jobs/repo-<key>/dash-r1/result.md
+meta: $HOME/.local/state/envoy/jobs/repo-<key>/dash-r1/meta.json
+session: sess-codex
+next: Collect and verify this job: envoy collect '$HOME/.local/state/envoy/jobs/repo-<key>/dash-r1'.
+--- stderr
+

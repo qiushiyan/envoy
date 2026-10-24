@@ -1,0 +1,111 @@
+$ envoy run failed-r1 --with claude --prompt-file $HOME/brief.md
+exit 1
+--- stdout
+job: $HOME/.local/state/envoy/jobs/repo-<key>/failed-r1
+provider: claude · model (provider default) · effort (provider default) · hard cap 30m
+stop: kill -INT <pid>
+next: let this command run to completion, then collect the job: envoy collect '$HOME/.local/state/envoy/jobs/repo-<key>/failed-r1'
+
+status: failed — the provider ran and reported a failure
+result: $HOME/.local/state/envoy/jobs/repo-<key>/failed-r1/result.md
+meta: $HOME/.local/state/envoy/jobs/repo-<key>/failed-r1/meta.json
+session: sess-claude
+next: Collect and verify this job: envoy collect '$HOME/.local/state/envoy/jobs/repo-<key>/failed-r1'.
+--- stderr
+
+$ envoy collect failed-r1
+exit 0
+--- stdout
+job: $HOME/.local/state/envoy/jobs/repo-<key>/failed-r1
+status: failed — the provider ran and reported a failure
+provider: claude · model (provider default, ran fake-claude-model) · effort (provider default)
+duration: 0m · cost $0.01
+tokens: input 11 · cacheRead 4 · cacheCreation 2 · output 7
+context: no measurement yet; incomplete (response ID missing; window unknown; no context sample; terminal usage incomplete)
+prompt: accepted · evidence claude assistant
+result kind: partial
+logs: progress $HOME/.local/state/envoy/jobs/repo-<key>/failed-r1/progress.log · raw $HOME/.local/state/envoy/jobs/repo-<key>/failed-r1/raw.log · stderr $HOME/.local/state/envoy/jobs/repo-<key>/failed-r1/stderr.log
+resume: envoy run <new-job-name> --with @'$HOME/.local/state/envoy/jobs/repo-<key>/failed-r1' --timeout-min 30 --prompt-file <your-follow-up.md>
+error: Claude reported a provider failure: synthetic provider failure
+
+--- result.md ---
+# Turn failed
+
+Claude reported a provider failure: synthetic provider failure
+
+## Partial output recovered before the failure
+
+useful claude work before failure
+
+
+next: The provider accepted this prompt, so work may already exist in the session and the working tree. Fix the cause it reported first. Read result.md and check the tree, then continue the same session with a follow-up prompt:
+  envoy run <new-job-name> --with @'$HOME/.local/state/envoy/jobs/repo-<key>/failed-r1' --timeout-min 30 --prompt-file <your-follow-up.md>
+Sending the original prompt again would repeat work that already happened.
+--- stderr
+
+$ envoy run partial-r1 --with codex --with claude --prompt-file $HOME/brief.md
+exit 6
+--- stdout
+job: $HOME/.local/state/envoy/jobs/repo-<key>/partial-r1
+fan-out: 2 turns · hard cap 30m each
+member codex: model (provider default) · effort (provider default) · dir $HOME/.local/state/envoy/jobs/repo-<key>/partial-r1/codex
+member claude: model (provider default) · effort (provider default) · dir $HOME/.local/state/envoy/jobs/repo-<key>/partial-r1/claude
+stop: kill -INT <pid>
+next: let this command run to completion — it exits once every member is done — then collect the job once: envoy collect '$HOME/.local/state/envoy/jobs/repo-<key>/partial-r1' · that single command returns every member's result
+
+status: partial — 1 of 2 turns returned a result; the rest each carry their own status and next action below
+member codex: ok · result $HOME/.local/state/envoy/jobs/repo-<key>/partial-r1/codex/result.md
+member claude: failed — the provider ran and reported a failure · result $HOME/.local/state/envoy/jobs/repo-<key>/partial-r1/claude/result.md
+group: $HOME/.local/state/envoy/jobs/repo-<key>/partial-r1/group.json
+next: Collect the fan-out: envoy collect '$HOME/.local/state/envoy/jobs/repo-<key>/partial-r1' — the members that returned a result are usable as they are, and each member that did not carries its own next action in its section. One member's outcome licenses nothing about another: re-dispatch or resume per member, never the whole fan-out.
+--- stderr
+
+$ envoy collect partial-r1
+exit 0
+--- stdout
+fan-out: $HOME/.local/state/envoy/jobs/repo-<key>/partial-r1
+status: partial — 1 of 2 turns returned a result; the rest each carry their own status and next action below
+members: codex ok · claude failed
+resume: envoy run <new-job-name> --with @'$HOME/.local/state/envoy/jobs/repo-<key>/partial-r1' --timeout-min 30 --prompt-file <your-follow-up.md>
+
+=== member codex ===
+job: $HOME/.local/state/envoy/jobs/repo-<key>/partial-r1/codex
+status: ok
+duration: 0m
+resume: envoy run <new-job-name> --with @'$HOME/.local/state/envoy/jobs/repo-<key>/partial-r1/codex' --timeout-min 30 --prompt-file <your-follow-up.md>
+
+--- result.md ---
+fake provider result
+
+next: result.md above is this turn's return value — use it in the step that dispatched it.
+
+=== member claude ===
+job: $HOME/.local/state/envoy/jobs/repo-<key>/partial-r1/claude
+status: failed — the provider ran and reported a failure
+provider: claude · model (provider default, ran fake-claude-model) · effort (provider default)
+duration: 0m · cost $0.01
+tokens: input 11 · cacheRead 4 · cacheCreation 2 · output 7
+context: no measurement yet; incomplete (response ID missing; window unknown; no context sample; terminal usage incomplete)
+prompt: accepted · evidence claude assistant
+result kind: partial
+logs: progress $HOME/.local/state/envoy/jobs/repo-<key>/partial-r1/claude/progress.log · raw $HOME/.local/state/envoy/jobs/repo-<key>/partial-r1/claude/raw.log · stderr $HOME/.local/state/envoy/jobs/repo-<key>/partial-r1/claude/stderr.log
+resume: envoy run <new-job-name> --with @'$HOME/.local/state/envoy/jobs/repo-<key>/partial-r1/claude' --timeout-min 30 --prompt-file <your-follow-up.md>
+error: Claude reported a provider failure: synthetic provider failure
+
+--- result.md ---
+# Turn failed
+
+Claude reported a provider failure: synthetic provider failure
+
+## Partial output recovered before the failure
+
+useful claude work before failure
+
+
+next: The provider accepted this prompt, so work may already exist in the session and the working tree. Fix the cause it reported first. Read result.md and check the tree, then continue the same session with a follow-up prompt:
+  envoy run <new-job-name> --with @'$HOME/.local/state/envoy/jobs/repo-<key>/partial-r1/claude' --timeout-min 30 --prompt-file <your-follow-up.md>
+Sending the original prompt again would repeat work that already happened.
+
+next: the member results above are usable as they are. Each member that returned none carries its own next action in its section — act on it per member; the members that succeeded need nothing.
+--- stderr
+

@@ -1,0 +1,110 @@
+$ envoy run $HOME/steward/turn-1 --prompt-file $HOME/brief.md --with claude:claude-opus-5-5:high --allow-write --cwd $HOME/repo --timeout-min 30 --max-budget-usd 0.50 --instructions-file $HOME/rules.md
+exit 0
+--- stdout
+job: $HOME/steward/turn-1
+provider: claude · model claude-opus-5-5 · effort high · hard cap 30m
+baseline: <base>
+instructions: $HOME/steward/turn-1/instructions.md
+stop: kill -INT <pid>
+next: let this command run to completion, then collect the job: envoy collect '$HOME/steward/turn-1'
+
+status: ok
+result: $HOME/steward/turn-1/result.md
+meta: $HOME/steward/turn-1/meta.json
+session: sess-claude
+next: Collect and verify this job: envoy collect '$HOME/steward/turn-1'.
+--- stderr
+
+$ envoy collect $HOME/steward/turn-1
+exit 0
+--- stdout
+job: $HOME/steward/turn-1
+status: ok
+duration: 0m · cost $0.01
+resume: envoy run <new-job-name> --with @'$HOME/steward/turn-1' --timeout-min 30 --prompt-file <your-follow-up.md>
+
+--- git since baseline <base> (in $HOME/repo) ---
+(no commits)
+(no diff)
+tree clean
+
+--- result.md ---
+fake provider result
+
+next: result.md above is this turn's return value — use it in the step that dispatched it.
+--- stderr
+
+$ envoy run $HOME/steward/turn-2 --prompt-file $HOME/next.md --with @$HOME/steward/turn-1 --allow-write --cwd $HOME/repo --timeout-min 30
+exit 0
+--- stdout
+job: $HOME/steward/turn-2
+provider: claude · model claude-opus-5-5 · effort high · hard cap 30m
+baseline: <base>
+resumed-from: $HOME/steward/turn-1
+instructions: $HOME/steward/turn-2/instructions.md
+stop: kill -INT <pid>
+next: let this command run to completion, then collect the job: envoy collect '$HOME/steward/turn-2'
+
+status: ok
+result: $HOME/steward/turn-2/result.md
+meta: $HOME/steward/turn-2/meta.json
+session: sess-claude
+next: Collect and verify this job: envoy collect '$HOME/steward/turn-2'.
+--- stderr
+
+$ envoy collect $HOME/steward/turn-2
+exit 0
+--- stdout
+job: $HOME/steward/turn-2
+status: ok
+duration: 0m · cost $0.01
+resumed-from: $HOME/steward/turn-1
+resume: envoy run <new-job-name> --with @'$HOME/steward/turn-2' --timeout-min 30 --prompt-file <your-follow-up.md>
+
+--- git since baseline <base> (in $HOME/repo) ---
+(no commits)
+(no diff)
+tree clean
+
+--- result.md ---
+fake provider result
+
+next: result.md above is this turn's return value — use it in the step that dispatched it.
+--- stderr
+
+$ envoy run $HOME/consult/job --prompt-file $HOME/brief.md --with codex:gpt-6-astra:high --cwd $HOME/repo --timeout-min 12
+exit 0
+--- stdout
+job: $HOME/consult/job
+provider: codex · model gpt-6-astra · effort high · hard cap 12m
+stop: kill -INT <pid>
+next: let this command run to completion, then collect the job: envoy collect '$HOME/consult/job'
+session: sess-codex
+
+status: ok
+result: $HOME/consult/job/result.md
+meta: $HOME/consult/job/meta.json
+session: sess-codex
+next: Collect and verify this job: envoy collect '$HOME/consult/job'.
+--- stderr
+
+$ envoy collect $HOME/consult/job
+exit 0
+--- stdout
+job: $HOME/consult/job
+status: ok
+duration: 0m
+resume: envoy run <new-job-name> --with @'$HOME/consult/job' --timeout-min 12 --prompt-file <your-follow-up.md>
+
+--- result.md ---
+fake provider result
+
+next: result.md above is this turn's return value — use it in the step that dispatched it.
+--- stderr
+
+$ envoy run $HOME/steward/turn-3 --prompt-file $HOME/next.md --with @$HOME/steward/turn-2 --allow-write --cwd $HOME/repo --timeout-min 30
+exit 3
+--- stdout
+--- stderr
+lock error: session sess-claude already has a live turn (pid <pid>, started <time>, job /tmp/live-job). One turn per session: wait for that job — envoy wait '/tmp/live-job' — then collect it: envoy collect '/tmp/live-job'
+

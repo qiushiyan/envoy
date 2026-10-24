@@ -1,0 +1,36 @@
+$ envoy run delegate-r1 --with codex:gpt-6.1-sol:xhigh --allow-write --baseline <base> --prompt-file $HOME/brief.md --timeout-min 180
+exit 0
+--- stdout
+job: $HOME/.local/state/envoy/jobs/repo-<key>/delegate-r1
+provider: codex · model gpt-6.1-sol · effort xhigh · hard cap 180m
+baseline: <base>
+stop: kill -INT <pid>
+next: let this command run to completion, then collect the job: envoy collect '$HOME/.local/state/envoy/jobs/repo-<key>/delegate-r1'
+session: sess-codex
+
+status: ok
+result: $HOME/.local/state/envoy/jobs/repo-<key>/delegate-r1/result.md
+meta: $HOME/.local/state/envoy/jobs/repo-<key>/delegate-r1/meta.json
+session: sess-codex
+next: Collect and verify this job: envoy collect '$HOME/.local/state/envoy/jobs/repo-<key>/delegate-r1'.
+--- stderr
+
+$ envoy collect delegate-r1
+exit 0
+--- stdout
+job: $HOME/.local/state/envoy/jobs/repo-<key>/delegate-r1
+status: ok
+duration: 0m
+resume: envoy run <new-job-name> --with @'$HOME/.local/state/envoy/jobs/repo-<key>/delegate-r1' --timeout-min 180 --prompt-file <your-follow-up.md>
+
+--- git since baseline <base> (in $HOME/repo) ---
+(no commits)
+(no diff)
+tree clean
+
+--- result.md ---
+fake provider result
+
+next: result.md above is this turn's return value — use it in the step that dispatched it.
+--- stderr
+

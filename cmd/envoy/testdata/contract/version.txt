@@ -1,0 +1,18 @@
+$ envoy version
+exit 0
+--- stdout
+envoy 0.14.2
+--- stderr
+
+$ envoy --version
+exit 0
+--- stdout
+envoy 0.14.2
+--- stderr
+
+$ envoy -v
+exit 0
+--- stdout
+envoy 0.14.2
+--- stderr
+
