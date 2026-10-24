@@ -121,13 +121,12 @@ func TestFanPartialOutcomeCollectsPerMember(t *testing.T) {
 	if res.code != 6 {
 		t.Fatalf("exit = %d, want 6 (partial)\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
-	mustContain(t, "stdout", res.stdout,
-		"status: partial — 1 of 2 turns returned a result",
-		"member codex: ok · result ",
-		"member claude: timeout — the wall-clock cap elapsed, which is not evidence the provider hung",
-		"licenses nothing about another",
-		"never the whole fan-out",
-	)
+	mustContain(t, "stdout", res.stdout, "status: partial", "member codex: ok · result ", "member claude: timeout")
+	// claude's init proves only that it launched: the member that timed out
+	// never had its prompt accepted.
+	if got := readMeta(t, filepath.Join(outDir, "claude"))["promptState"]; got != "unknown" {
+		t.Fatalf("claude member promptState = %v, want unknown", got)
+	}
 
 	// Discovery finds the fan-out as one entry to act on, not two loose jobs.
 	pending := runEnvoy(t, e, "pending", "--base", base)
@@ -145,13 +144,13 @@ func TestFanPartialOutcomeCollectsPerMember(t *testing.T) {
 	}
 	mustContain(t, "collect stdout", collected.stdout,
 		"fan-out: "+outDir,
-		"status: partial — 1 of 2 turns returned a result",
+		"status: partial",
 		"members: codex ok · claude timeout",
 		"=== member codex ===",
 		"job: "+filepath.Join(outDir, "codex"),
 		"fake provider result",
 		"=== member claude ===",
-		"status: timeout — the wall-clock cap elapsed",
+		"status: timeout",
 		// the timed-out member's own recovery, not the group's
 		"silence is not proof that nothing ran",
 		"envoy run <new-job-name> --with @'"+filepath.Join(outDir, "claude")+"'",
@@ -287,8 +286,7 @@ func TestFanResumeFromContinuesEveryMember(t *testing.T) {
 	// Collecting the finished set offers the set-level follow-up, runnable as
 	// printed, with the prompt file left as the placeholder a round 2 must fill.
 	col := runEnvoy(t, e, "collect", r1)
-	mustContain(t, "collect stdout", col.stdout,
-		"resume: envoy run <new-job-name> --with @'"+r1+"' --timeout-min 5 --prompt-file <your-follow-up.md>")
+	mustContain(t, "collect stdout", col.stdout, "resume: envoy run <new-job-name> --with @'"+r1+"'", "--timeout-min 5")
 
 	round2 := filepath.Join(t.TempDir(), "round2.md")
 	if err := os.WriteFile(round2, []byte("round-2 prompt body\n"), 0o644); err != nil {
@@ -302,10 +300,8 @@ func TestFanResumeFromContinuesEveryMember(t *testing.T) {
 	// The members keep their identities, and each says which conversation
 	// it continues.
 	mustContain(t, "round 2 stdout", res.stdout,
-		"member codex: model (provider default) · effort (provider default) · dir "+filepath.Join(r2, "codex")+" · continues "+filepath.Join(r1, "codex"),
-		"member claude-opus: model opus · effort (provider default) · dir "+filepath.Join(r2, "claude-opus")+" · continues "+filepath.Join(r1, "claude-opus"),
-		"status: ok — all 2 turns returned a result",
-	)
+		"member codex: ", "· continues "+filepath.Join(r1, "codex"),
+		"member claude-opus: ", "· continues "+filepath.Join(r1, "claude-opus"))
 	// Each member's turn is a real resume — the provider argv carries the
 	// original session — and the roster's settings carry over.
 	codexMeta := readMeta(t, filepath.Join(r2, "codex"))
@@ -545,7 +541,6 @@ func TestFanMembersReceiveTheirOwnPrompts(t *testing.T) {
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
-	mustContain(t, "stdout", res.stdout, "fan-out: 2 turns · hard cap 5m each", "status: ok — all 2 turns returned a result")
 	for name, want := range map[string]string{"codex": "survey the landscape\n", "claude-opus": "critique the design\n"} {
 		if got := readFile(t, filepath.Join(outDir, name, "prompt.md")); got != want {
 			t.Fatalf("%s prompt.md = %q, want %q", name, got, want)

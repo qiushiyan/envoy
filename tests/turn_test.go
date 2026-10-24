@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -69,6 +70,10 @@ func TestCodexSuccess(t *testing.T) {
 	}
 	if meta["providerReportedModel"] != nil {
 		t.Fatalf("codex reports no model; the field must stay null, got %v", meta["providerReportedModel"])
+	}
+	// codex has no usage measurement, so its record carries no usage at all.
+	if _, has := meta["usage"]; has {
+		t.Fatalf("a codex record must carry no usage, got %v", meta["usage"])
 	}
 	// The runner's claim on its directory is what liveness is read from.
 	if meta["runnerLock"] != true {
@@ -189,8 +194,10 @@ func TestClaudeSuccessWithUnterminatedFinalLine(t *testing.T) {
 		t.Fatalf("default command prefix = %q", got)
 	}
 	mustNotContain(t, "default dispatch", res.stdout, "launcher:")
+	// The session the stream reports wins over the id envoy minted for the
+	// launch.
 	if meta["sessionId"] != "fake-session-id" {
-		t.Fatalf("the result envelope's session id must win, got %v", meta["sessionId"])
+		t.Fatalf("the stream's session id must win, got %v", meta["sessionId"])
 	}
 	if meta["costUsd"] != float64(0.01) {
 		t.Fatalf("cost = %v", meta["costUsd"])
@@ -207,17 +214,7 @@ func TestClaudeSuccessWithUnterminatedFinalLine(t *testing.T) {
 		t.Fatalf("providerReportedModel = %v", meta["providerReportedModel"])
 	}
 	mustContain(t, "progress.log", readFile(t, filepath.Join(outDir, "progress.log")),
-		"state=provider-initialized session=fake-session-id model=fake-claude-model")
-	// A default that simply resolved is not a substitution: the caller asked
-	// for the provider's own choice and got it, so an ok block says nothing
-	// about it. The observation is still there for anyone who asks.
-	collected := runEnvoy(t, e, "collect", outDir)
-	if strings.Contains(collected.stdout, "provider: claude") {
-		t.Fatalf("an ok block must not restate the settings the caller passed:\n%s", collected.stdout)
-	}
-	status := runEnvoy(t, e, "collect", "--status-only", outDir)
-	mustContain(t, "status-only stdout", status.stdout,
-		"provider: claude · model (provider default, ran fake-claude-model) · effort (provider default)")
+		"state=provider-initialized", "model=fake-claude-model")
 }
 
 func TestClaudePartialFailure(t *testing.T) {
@@ -236,13 +233,15 @@ func TestClaudePartialFailure(t *testing.T) {
 	if meta["childExitCode"] != float64(7) {
 		t.Fatalf("childExitCode = %v", meta["childExitCode"])
 	}
+	// The record keeps the provider's own words for its verdict, read from
+	// the envelope's errors, and the partial leaves out the assistant's echo
+	// of them.
+	failure, _ := meta["failure"].(map[string]any)
+	if failure["cause"] != "provider_verdict" || failure["message"] != "synthetic provider failure" {
+		t.Fatalf("failure record = %v", meta["failure"])
+	}
 	result := readFile(t, filepath.Join(outDir, "result.md"))
-	mustContain(t, "result.md", result,
-		"# Turn failed",
-		"synthetic provider failure",
-		"## Partial output recovered before the failure",
-		"useful claude work before failure",
-	)
+	mustContain(t, "result.md", result, "synthetic provider failure", "useful claude work before failure")
 	if strings.Count(result, "synthetic provider failure") != 1 {
 		t.Fatalf("the error echo must be excluded from the partial:\n%s", result)
 	}
@@ -265,23 +264,16 @@ func TestClaudeRefusalNamesItsCategory(t *testing.T) {
 	if meta["status"] != "failed" || failure["cause"] != "provider_refusal" || failure["code"] != "reasoning_extraction" {
 		t.Fatalf("meta = status %v failure %v", meta["status"], failure)
 	}
-	const why = "Claude refused this turn (category reasoning_extraction): This request was blocked by the fake safety classifier."
+	// The category and the explanation are what reach the caller, in place of
+	// the terminal message, beside the work done before the refusal and the
+	// continuation its accepted prompt licenses.
+	const explanation = "This request was blocked by the fake safety classifier."
 	result := readFile(t, filepath.Join(outDir, "result.md"))
-	mustContain(t, "result.md", result,
-		"# Turn failed",
-		why,
-		"## Partial output recovered before the failure",
-		"useful claude work before the refusal",
-	)
-	if strings.Contains(result, "safeguards flagged") {
-		t.Fatalf("the terminal message must be excluded from the partial:\n%s", result)
-	}
-
+	mustContain(t, "result.md", result, "reasoning_extraction", explanation, "useful claude work before the refusal")
 	collected := runEnvoy(t, e, "collect", outDir)
-	mustContain(t, "collect", collected.stdout,
-		why,
-		"continue the same session with a follow-up prompt",
-	)
+	mustContain(t, "collect", collected.stdout, "reasoning_extraction", explanation, "--with @'"+outDir+"'")
+	mustNotContain(t, "result.md", result, "safeguards flagged")
+	mustNotContain(t, "collect", collected.stdout, "safeguards flagged")
 }
 
 func TestCodexTimeoutRecordsAcceptance(t *testing.T) {
@@ -300,9 +292,6 @@ func TestCodexTimeoutRecordsAcceptance(t *testing.T) {
 	if meta["status"] != "timeout" || meta["promptState"] != "accepted" {
 		t.Fatalf("meta = status %v prompt %v", meta["status"], meta["promptState"])
 	}
-	mustContain(t, "error", failureText(t, outDir),
-		"wall-clock cap ended this codex turn",
-		"not evidence the provider hung")
 	// The record holds the observation the sentence is worded from, never the
 	// sentence: a stored job reads in whatever vocabulary collects it.
 	failure, _ := meta["failure"].(map[string]any)
@@ -318,16 +307,13 @@ func TestCodexTimeoutRecordsAcceptance(t *testing.T) {
 	// carry that observation, because the caller cannot otherwise tell it from
 	// a turn that worked right up to the deadline — and the follow-up each one
 	// deserves is different.
-	mustContain(t, "error", failureText(t, outDir),
-		"the stream had been quiet for", "after 1 event (last: thread.started)")
+	mustContain(t, "error", failureText(t, outDir), "after 1 event (last: thread.started)")
 	// The prescription is rendered from the records at collect time: the
-	// prompt was accepted, so the one move offered is to continue the session.
+	// prompt was accepted, so the one move offered is to continue the session,
+	// and the identical retry of the archived prompt is not offered at all.
 	col := runEnvoy(t, e, "collect", outDir)
-	mustContain(t, "collect next", col.stdout,
-		"next: The provider accepted this prompt",
-		"--with @'"+outDir+"'", "--timeout-min 0.02",
-		"would repeat work that already happened")
-	mustContain(t, "result.md", readFile(t, filepath.Join(outDir, "result.md")), "# Turn timeout")
+	mustContain(t, "collect next", col.stdout, "--with @'"+outDir+"'", "--timeout-min 0.02")
+	mustNotContain(t, "collect next", col.stdout, "--prompt-file '"+filepath.Join(outDir, "prompt.md")+"'")
 }
 
 // "When the cap arrived" has to mean the cap, not the end of cleanup. A
@@ -355,29 +341,6 @@ func TestCodexTimeoutReportsTheStreamAsOfTheCap(t *testing.T) {
 	}
 }
 
-// A cap that fires before the provider says anything at all has no quiet
-// interval to report, only the absence of a stream. The envelope says that
-// instead of inventing a duration — and it reports the absence, without
-// concluding from it that no work happened anywhere.
-func TestCodexTimeoutBeforeAnyOutputReportsAnEmptyStream(t *testing.T) {
-	e := newEnv(t).
-		set("ENVOY_FAKE_SCENARIO", "delayed-success").
-		set("ENVOY_FAKE_START_DELAY_MS", "60000")
-	outDir := filepath.Join(t.TempDir(), "job")
-	prompt := writePrompt(t, t.TempDir())
-
-	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "0.02")...)
-	if res.code != 4 {
-		t.Fatalf("exit = %d, want 4\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
-	}
-	mustContain(t, "error", failureText(t, outDir),
-		"wall-clock cap ended this codex turn",
-		"The provider wrote nothing at all before the cap — no output on either stream, and no events.")
-	if strings.Contains(failureText(t, outDir), "quiet for") {
-		t.Fatalf("no output means no quiet interval to report: %v", failureText(t, outDir))
-	}
-}
-
 // Bytes on the wire are not events envoy can read, and the envelope must not
 // collapse the two: a provider that writes a diagnostic and then stalls did
 // stream something, and reporting "nothing at all" there is false — the shape
@@ -391,12 +354,16 @@ func TestCodexTimeoutSeparatesBytesFromEvents(t *testing.T) {
 	if res.code != 4 {
 		t.Fatalf("exit = %d, want 4\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
-	errText := failureText(t, outDir)
-	mustContain(t, "error", errText, "bytes before the cap but no event envoy could parse")
-	for _, forbidden := range []string{"nothing at all", "no work of its own"} {
-		if strings.Contains(errText, forbidden) {
-			t.Fatalf("output did arrive, so %q is false here: %s", forbidden, errText)
-		}
+	meta := readMeta(t, outDir)
+	failure, _ := meta["failure"].(map[string]any)
+	stream, _ := failure["stream"].(map[string]any)
+	if bytes, _ := stream["bytes"].(float64); bytes == 0 || stream["events"] != float64(0) {
+		t.Fatalf("the cap's stream sample = %v, want bytes and no events", failure["stream"])
+	}
+	mustNotContain(t, "error", failureText(t, outDir), "nothing at all")
+	// Nothing the provider wrote proved the prompt was accepted.
+	if meta["promptState"] != "unknown" {
+		t.Fatalf("promptState = %v, want unknown", meta["promptState"])
 	}
 }
 
@@ -457,14 +424,39 @@ func TestClaudeStubbornGrandchildTimeout(t *testing.T) {
 	}
 }
 
+// A claude turn whose stream shows nothing can still prove acceptance from its
+// session transcript, found by the session id envoy launched it with. The
+// heartbeat reads it while the turn runs, so a runner that died before the
+// cap would leave the acceptance on record rather than an unknown prompt
+// state; and the transcript's text is what the timeout recovers.
 func TestClaudeTranscriptRecoveryOnTimeout(t *testing.T) {
 	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "transcript-only-hang")
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "claude", "--timeout-min", "0.02")...)
-	if res.code != 4 {
-		t.Fatalf("exit = %d, want 4\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+	cmd := exec.Command(binPath, runArgs(prompt, outDir, "--with", "claude", "--timeout-min", "0.02")...)
+	cmd.Env = e.build()
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { killDispatch(cmd, outDir) })
+	var running map[string]any
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		data, err := os.ReadFile(filepath.Join(outDir, "meta.json"))
+		var m map[string]any
+		if err != nil || json.Unmarshal(data, &m) != nil {
+			continue
+		}
+		if m["status"] != "running" || m["promptState"] == "accepted" {
+			running = m
+			break
+		}
+	}
+	if running["status"] != "running" || running["promptStateEvidence"] != "claude session transcript" {
+		t.Fatalf("the transcript's acceptance must be recorded while the turn runs, got %v", running)
+	}
+	if err := cmd.Wait(); err == nil || err.(*exec.ExitError).ExitCode() != 4 {
+		t.Fatalf("exit = %v, want 4", err)
 	}
 	meta := readMeta(t, outDir)
 	if meta["promptState"] != "accepted" || meta["promptStateEvidence"] != "claude session transcript" {
@@ -539,76 +531,11 @@ func TestASecondInterruptKillsTheTreeNow(t *testing.T) {
 	}
 }
 
-func TestInterruptRecordsPartialAndResume(t *testing.T) {
-	e := newEnv(t).
-		set("ENVOY_FAKE_SCENARIO", "delayed-success").
-		set("ENVOY_FAKE_START_DELAY_MS", "0").
-		set("ENVOY_FAKE_DELAY_MS", "60000")
-	outDir := filepath.Join(t.TempDir(), "job")
-	prompt := writePrompt(t, t.TempDir())
-
-	cmd := exec.Command(binPath, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "5")...)
-	cmd.Env = e.build()
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-
-	// Interrupt once the provider has provably accepted the prompt.
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if time.Now().After(deadline) {
-			killDispatch(cmd, outDir)
-			t.Fatalf("provider never accepted; stdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
-		}
-		if data, err := os.ReadFile(filepath.Join(outDir, "meta.json")); err == nil &&
-			strings.Contains(string(data), `"promptState": "accepted"`) {
-			break
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
-	cmd.Process.Signal(syscall.SIGINT)
-	err := cmd.Wait()
-	code := 0
-	if ee, ok := err.(*exec.ExitError); ok {
-		code = ee.ExitCode()
-	}
-	if code != 5 {
-		t.Fatalf("exit = %d, want 5\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
-	}
-	meta := readMeta(t, outDir)
-	if meta["status"] != "interrupted" || meta["interruptionSignal"] != "SIGINT" {
-		t.Fatalf("meta = status %v signal %v", meta["status"], meta["interruptionSignal"])
-	}
-	mustContain(t, "error", failureText(t, outDir), "stopped codex after receiving SIGINT")
-	col := runEnvoy(t, e, "collect", outDir)
-	mustContain(t, "collect next", col.stdout,
-		"envoy run <new-job-name>", "--with @'"+outDir+"'", "--timeout-min 5")
-}
-
-func TestExitBeforeStdinDoesNotCrash(t *testing.T) {
-	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "exit-before-stdin")
-	outDir := filepath.Join(t.TempDir(), "job")
-	prompt := writePrompt(t, t.TempDir())
-
-	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "5")...)
-	if res.code != 2 {
-		t.Fatalf("exit = %d, want 2\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
-	}
-	meta := readMeta(t, outDir)
-	if meta["status"] != "infra" || meta["childExitCode"] != float64(23) {
-		t.Fatalf("meta = status %v exit %v", meta["status"], meta["childExitCode"])
-	}
-	mustContain(t, "error", failureText(t, outDir), "fake provider exited before reading its prompt")
-}
-
 // The r.term == nil residual-cleanup chain: the provider exits cleanly while
 // a SIGTERM-ignoring grandchild keeps the pipes open. This chain — exit
 // fallback → group probe → TERM → KILL → finalize — is the entire reason the
 // runner passes raw pipe fds instead of exec's managed pipes; if the fallback
-// timer were dropped, this test would hang instead of finishing ok.
+// timer were dropped, the dispatch would never exit.
 func TestStubbornGrandchildAfterSuccessIsReaped(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
 	readyFile := filepath.Join(t.TempDir(), "grandchild.ready")
@@ -619,7 +546,7 @@ func TestStubbornGrandchildAfterSuccessIsReaped(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
-	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "5")...)
+	res := runEnvoyWithin(t, e, 20*time.Second, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "5")...)
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
@@ -644,11 +571,13 @@ func TestStubbornGrandchildAfterSuccessIsReaped(t *testing.T) {
 	}
 }
 
-// Split multi-byte UTF-8 and a result envelope split across writes must
-// reassemble; guards the byte-level line buffer against a rewrite onto a
-// line scanner that decodes or caps mid-chunk.
+// Records split across reads — the result envelope among them, cut inside a
+// multi-byte rune of the answer — must reassemble byte for byte; guards the
+// byte-level line buffer against a rewrite onto a line scanner that decodes
+// or caps mid-chunk.
 func TestClaudeFragmentedStreamAssembles(t *testing.T) {
-	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "fragmented-success")
+	const answer = "the answer crosses a read 🧭 boundary"
+	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "fragmented-success").set("ENVOY_FAKE_FINAL_TEXT", answer)
 	outDir := filepath.Join(t.TempDir(), "job")
 	prompt := writePrompt(t, t.TempDir())
 
@@ -656,11 +585,8 @@ func TestClaudeFragmentedStreamAssembles(t *testing.T) {
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
-	if got := readFile(t, filepath.Join(outDir, "result.md")); got != "fake provider result" {
-		t.Fatalf("result.md = %q", got)
-	}
-	if raw := readFile(t, filepath.Join(outDir, "raw.log")); !strings.Contains(raw, "🧭") {
-		t.Fatal("raw.log must carry the split multi-byte rune verbatim")
+	if got := readFile(t, filepath.Join(outDir, "result.md")); got != answer {
+		t.Fatalf("result.md = %q, want %q", got, answer)
 	}
 }
 
@@ -680,29 +606,10 @@ func TestCodexNonzeroExitAfterResponse(t *testing.T) {
 	if meta["status"] != "failed" || meta["resultKind"] != "partial" || meta["promptState"] != "accepted" {
 		t.Fatalf("meta = status %v kind %v prompt %v", meta["status"], meta["resultKind"], meta["promptState"])
 	}
-	mustContain(t, "error", failureText(t, outDir), "Codex exited with code 7 after producing a response")
+	if failure, _ := meta["failure"].(map[string]any); failure["cause"] != "exited_after_response" || meta["childExitCode"] != float64(7) {
+		t.Fatalf("failure record = %v, exit %v", meta["failure"], meta["childExitCode"])
+	}
 	mustContain(t, "result.md", readFile(t, filepath.Join(outDir, "result.md")), "fake provider result")
-}
-
-// system/init proves only that the process launched — it must never count as
-// prompt acceptance, or a turn that died before model work would be steered
-// to "resume, never redispatch" for work that never began.
-func TestClaudeInitOnlyIsNotAcceptance(t *testing.T) {
-	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "init-only-hang")
-	outDir := filepath.Join(t.TempDir(), "job")
-	prompt := writePrompt(t, t.TempDir())
-
-	res := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "claude", "--timeout-min", "0.02")...)
-	if res.code != 4 {
-		t.Fatalf("exit = %d, want 4\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
-	}
-	meta := readMeta(t, outDir)
-	if meta["promptState"] != "unknown" {
-		t.Fatalf("init alone must not prove acceptance, got %v (evidence %v)",
-			meta["promptState"], meta["promptStateEvidence"])
-	}
-	col := runEnvoy(t, e, "collect", outDir)
-	mustContain(t, "collect next", col.stdout, "silence is not proof", "only once they show it never began")
 }
 
 // A turn whose link dropped and came back is a success: codex's bare `error`

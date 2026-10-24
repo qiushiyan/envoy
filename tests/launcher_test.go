@@ -40,41 +40,11 @@ printf 'launcher neutralized an inherited variable\n' >&2
 	return record
 }
 
-type invocation struct {
-	Argv []string          `json:"argv"`
-	Env  map[string]string `json:"env"`
-	Pid  int               `json:"pid"`
-	Cwd  string            `json:"cwd"`
-	// AppendedSystemPrompt is what the file a claude launch named with
-	// --append-system-prompt-file held when it launched; nil when none.
-	AppendedSystemPrompt *string `json:"appendedSystemPrompt"`
-}
-
-func readInvocation(t *testing.T, path string) invocation {
-	t.Helper()
-	var v invocation
-	if err := json.Unmarshal([]byte(readFile(t, path)), &v); err != nil {
-		t.Fatal(err)
-	}
-	return v
-}
-func stringsFromMeta(t *testing.T, m map[string]any, key string) []string {
-	t.Helper()
-	raw, ok := m[key].([]any)
-	if !ok {
-		t.Fatalf("missing %s: %v", key, m[key])
-	}
-	out := make([]string, len(raw))
-	for i, v := range raw {
-		out[i] = v.(string)
-	}
-	return out
-}
-
 func TestLauncherFreshAndResume(t *testing.T) {
 	for _, provider := range []string{"codex", "claude"} {
 		t.Run(provider, func(t *testing.T) {
-			e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").set("ENVOY_TEST_AMBIENT", "inherited value")
+			e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").set("ENVOY_TEST_AMBIENT", "inherited value").
+				set("ENVOY_CALLER", "dispatcher").set("CLAUDE_CODE_SESSION_ID", "dispatcher-session")
 			record := launcherEnv(t, e, false)
 			captured := filepath.Join(t.TempDir(), "provider.json")
 			received := filepath.Join(t.TempDir(), "received-prompt")
@@ -110,6 +80,13 @@ func TestLauncherFreshAndResume(t *testing.T) {
 				for _, observed := range []invocation{launched, child} {
 					if observed.Env["ENVOY_TEST_AMBIENT"] != "inherited value" {
 						t.Fatal("lost inherited environment")
+					}
+					// The provider is a session of its own: a job it dispatches
+					// through envoy must not answer to its dispatcher's names.
+					for _, key := range []string{"ENVOY_CALLER", "CLAUDE_CODE_SESSION_ID"} {
+						if v, inherited := observed.Env[key]; inherited {
+							t.Fatalf("the launched process inherited the dispatcher's %s=%s", key, v)
+						}
 					}
 					if provider == "claude" && observed.Env["API_FORCE_IDLE_TIMEOUT"] != "1" {
 						t.Fatal("lost driver environment")
@@ -231,82 +208,85 @@ func TestFanUsesEachProviderLauncher(t *testing.T) {
 	}
 }
 
+// A launcher's whole tree is supervised: a cap or an interrupt reaches the
+// launcher, the provider and a stubborn grandchild alike, whether the launcher
+// execs the provider or stays as its parent. An exec launcher hit by the cap
+// is the bare provider's tree, which TestClaudeStubbornGrandchildTimeout owns.
 func TestLauncherSupervision(t *testing.T) {
-	for _, wrapper := range []bool{false, true} {
-		for _, interrupt := range []bool{false, true} {
-			t.Run(fmt.Sprintf("wrapper=%v/interrupt=%v", wrapper, interrupt), func(t *testing.T) {
-				e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "hang-with-stubborn-grandchild-only")
-				record := launcherEnv(t, e, wrapper)
-				e.set("ENVOY_CODEX_CMD", "stub-launcher codex --")
-				pidFile, readyFile, capture := filepath.Join(t.TempDir(), "grandchild.pid"), filepath.Join(t.TempDir(), "ready"), filepath.Join(t.TempDir(), "provider.json")
-				e.set("ENVOY_FAKE_GRANDCHILD_PID_FILE", pidFile).set("ENVOY_FAKE_GRANDCHILD_READY_FILE", readyFile).set("ENVOY_FAKE_INVOCATION_FILE", capture)
-				out := filepath.Join(t.TempDir(), "job")
-				cap := "0.05"
-				if interrupt {
-					cap = "5"
+	for _, c := range []struct{ wrapper, interrupt bool }{{false, true}, {true, false}, {true, true}} {
+		wrapper, interrupt := c.wrapper, c.interrupt
+		t.Run(fmt.Sprintf("wrapper=%v/interrupt=%v", wrapper, interrupt), func(t *testing.T) {
+			e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "hang-with-stubborn-grandchild-only")
+			record := launcherEnv(t, e, wrapper)
+			e.set("ENVOY_CODEX_CMD", "stub-launcher codex --")
+			pidFile, readyFile, capture := filepath.Join(t.TempDir(), "grandchild.pid"), filepath.Join(t.TempDir(), "ready"), filepath.Join(t.TempDir(), "provider.json")
+			e.set("ENVOY_FAKE_GRANDCHILD_PID_FILE", pidFile).set("ENVOY_FAKE_GRANDCHILD_READY_FILE", readyFile).set("ENVOY_FAKE_INVOCATION_FILE", capture)
+			out := filepath.Join(t.TempDir(), "job")
+			cap := "0.05"
+			if interrupt {
+				cap = "5"
+			}
+			cmd := exec.Command(binPath, runArgs(writePrompt(t, t.TempDir()), out, "--with", "codex", "--timeout-min", cap)...)
+			cmd.Env = e.build()
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() { done <- cmd.Wait() }()
+			t.Cleanup(func() {
+				if data, err := os.ReadFile(filepath.Join(out, "meta.json")); err == nil {
+					var m map[string]any
+					if json.Unmarshal(data, &m) == nil {
+						if pid, ok := m["providerPid"].(float64); ok {
+							syscall.Kill(-int(pid), syscall.SIGKILL)
+						}
+					}
 				}
-				cmd := exec.Command(binPath, runArgs(writePrompt(t, t.TempDir()), out, "--with", "codex", "--timeout-min", cap)...)
-				cmd.Env = e.build()
-				if err := cmd.Start(); err != nil {
+				killDispatch(cmd, out)
+			})
+			deadline := time.Now().Add(10 * time.Second)
+			for {
+				if _, err := os.Stat(readyFile); err == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("grandchild never ready")
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			if interrupt {
+				if err := cmd.Process.Signal(syscall.SIGINT); err != nil {
 					t.Fatal(err)
 				}
-				done := make(chan error, 1)
-				go func() { done <- cmd.Wait() }()
-				t.Cleanup(func() {
-					if data, err := os.ReadFile(filepath.Join(out, "meta.json")); err == nil {
-						var m map[string]any
-						if json.Unmarshal(data, &m) == nil {
-							if pid, ok := m["providerPid"].(float64); ok {
-								syscall.Kill(-int(pid), syscall.SIGKILL)
-							}
-						}
-					}
-					killDispatch(cmd, out)
-				})
-				deadline := time.Now().Add(10 * time.Second)
-				for {
-					if _, err := os.Stat(readyFile); err == nil {
-						break
-					}
-					if time.Now().After(deadline) {
-						t.Fatal("grandchild never ready")
-					}
-					time.Sleep(20 * time.Millisecond)
-				}
+			}
+			select {
+			case err := <-done:
+				want := 4
 				if interrupt {
-					if err := cmd.Process.Signal(syscall.SIGINT); err != nil {
-						t.Fatal(err)
-					}
+					want = 5
 				}
-				select {
-				case err := <-done:
-					want := 4
-					if interrupt {
-						want = 5
-					}
-					ee, ok := err.(*exec.ExitError)
-					if !ok || ee.ExitCode() != want {
-						t.Fatalf("exit %v, want %d", err, want)
-					}
-				case <-time.After(15 * time.Second):
-					t.Fatal("launcher tree stalled cleanup")
+				ee, ok := err.(*exec.ExitError)
+				if !ok || ee.ExitCode() != want {
+					t.Fatalf("exit %v, want %d", err, want)
 				}
-				var grandchild int
-				fmt.Sscanf(readFile(t, pidFile), "%d", &grandchild)
-				pids := []int{readInvocation(t, record+"-codex").Pid, readInvocation(t, capture).Pid, grandchild}
-				for _, pid := range pids {
-					if pid <= 0 {
-						t.Fatal("invalid recorded PID")
-					}
-					deadline := time.Now().Add(3 * time.Second)
-					for syscall.Kill(pid, 0) != syscall.ESRCH {
-						if time.Now().After(deadline) {
-							t.Fatalf("process %d survived tree cleanup", pid)
-						}
-						time.Sleep(25 * time.Millisecond)
-					}
+			case <-time.After(15 * time.Second):
+				t.Fatal("launcher tree stalled cleanup")
+			}
+			var grandchild int
+			fmt.Sscanf(readFile(t, pidFile), "%d", &grandchild)
+			pids := []int{readInvocation(t, record+"-codex").Pid, readInvocation(t, capture).Pid, grandchild}
+			for _, pid := range pids {
+				if pid <= 0 {
+					t.Fatal("invalid recorded PID")
 				}
-			})
-		}
+				deadline := time.Now().Add(3 * time.Second)
+				for syscall.Kill(pid, 0) != syscall.ESRCH {
+					if time.Now().After(deadline) {
+						t.Fatalf("process %d survived tree cleanup", pid)
+					}
+					time.Sleep(25 * time.Millisecond)
+				}
+			}
+		})
 	}
 }

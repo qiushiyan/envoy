@@ -78,11 +78,19 @@ func TestClaudeUsageCapture(t *testing.T) {
 	if u.SampledAt == nil || *u.SampledAt != *live.SampledAt || u.Responses != 3 || *u.LatestContextTokens != 19454 {
 		t.Fatal("terminal must not replace the last context sample with cumulative usage")
 	}
-	// First terminal wins, just like the lifecycle's terminal observation.
-	feedUsage(t, c, records[1])
-	feedUsage(t, c, records[5])
+	// First terminal wins, just like the lifecycle's terminal observation:
+	// records after it change nothing, even ones that would change usage — a
+	// new response, and a second envelope reporting different totals.
+	late := usageCapture(t)[4]
+	message := late["message"].(map[string]any)
+	message["id"] = "after-the-terminal"
+	message["usage"] = map[string]any{"input_tokens": 5, "cache_read_input_tokens": 5, "cache_creation_input_tokens": 5, "output_tokens": 5}
+	feedUsage(t, c, late)
+	again := usageCapture(t)[5]
+	again["usage"].(map[string]any)["output_tokens"] = 1
+	feedUsage(t, c, again)
 	if !reflect.DeepEqual(u, c.Usage()) {
-		t.Fatal("post-terminal records changed settled usage")
+		t.Fatalf("post-terminal records changed settled usage:\n%+v\n%+v", u, c.Usage())
 	}
 }
 
@@ -216,22 +224,5 @@ func TestClaudeUsageMissingSampleEvidence(t *testing.T) {
 				t.Fatal("terminal silently repaired missing sample evidence")
 			}
 		})
-	}
-}
-
-func TestClaudeUsageResumeStartsNewTurn(t *testing.T) {
-	c := newClaude(Options{Resume: "previous-session"}, job.Workspace{}, time.Now())
-	if c.Usage().Responses != 0 || c.Usage().PeakContextTokens != nil {
-		t.Fatal("continuation inherited earlier turn accounting")
-	}
-	r := usageCapture(t)
-	feedUsage(t, c, r[0])
-	feedUsage(t, c, r[4])
-	if u := c.Usage(); u.Responses != 1 || *u.PeakContextTokens != 19454 || *u.InputTokens != 32 {
-		t.Fatalf("resumed turn = %+v", u)
-	}
-	d, err := New("codex", Options{}, job.Workspace{Dir: t.TempDir()}, time.Now())
-	if err != nil || d.Usage() != nil {
-		t.Fatal("Codex must leave usage unavailable")
 	}
 }

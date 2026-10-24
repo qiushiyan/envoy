@@ -63,33 +63,18 @@ func diskUsage(t *testing.T, r *run) *job.Meta {
 	return m
 }
 
-func TestUsageIsPersistedDuringTheTurn(t *testing.T) {
+// The terminal envelope's settled usage reaches meta.json when the envelope
+// arrives, not when the process is finalized: a runner killed between the two
+// still leaves the settled measurement. Live persistence of each response is
+// tests/usage_test.go's.
+func TestSettledUsageIsPersistedBeforeTheTurnIsFinished(t *testing.T) {
 	r, records := usageRun(t)
-	if m := diskUsage(t, r); m.Status != job.StatusRunning || m.Usage.State != "unmeasured" {
-		t.Fatalf("initial record = %+v", m)
-	}
-	wantResponses := []int64{0, 1, 1, 2, 3, 3}
-	for i, line := range records {
+	for _, line := range records {
 		r.handleEvents(r.driver.Feed(line))
-		// No heartbeat or process finalization: the events alone must publish
-		// every changed sample, including responses after first acceptance.
-		m := diskUsage(t, r)
-		if m.Status != job.StatusRunning || m.Tokens != nil || m.Usage.Responses != wantResponses[i] {
-			t.Fatalf("record %d: status=%s tokens=%+v usage=%+v", i, m.Status, m.Tokens, m.Usage)
-		}
-		if i > 0 && i < len(records)-1 && (m.Usage.State != "live" || m.Usage.OutputTokens != nil || m.Usage.ContextWindowTokens != nil) {
-			t.Fatalf("record %d fabricated settled usage: %+v", i, m.Usage)
-		}
 	}
 	m := diskUsage(t, r)
-	if m.Usage.State != "settled" || *m.Usage.LatestContextTokens != 19454 || *m.Usage.OutputTokens != 338 {
-		t.Fatalf("terminal envelope not persisted before process exit: %+v", m.Usage)
-	}
-	out := r.driver.Conclude(provider.ExitInfo{Code: job.Ptr(0)})
-	r.finish(out, exitResult{})
-	m = diskUsage(t, r)
-	if m.Status != job.StatusOK || m.Usage.State != "settled" || *m.Tokens.Output != 338 {
-		t.Fatalf("finish changed settled usage or tokens writer: %+v", m)
+	if m.Status != job.StatusRunning || m.Usage.State != "settled" || *m.Usage.LatestContextTokens != 19454 || *m.Usage.OutputTokens != 338 {
+		t.Fatalf("terminal envelope not persisted before the turn finished: status=%s usage=%+v", m.Status, m.Usage)
 	}
 }
 

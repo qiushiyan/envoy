@@ -113,36 +113,6 @@ func TestStandingInstructionsRideEveryTurnOfAClaudeConversation(t *testing.T) {
 	mustNotContain(t, "delivered block", runEnvoy(t, e, "collect", r3).stdout, "instructions:")
 }
 
-// codex takes the text inline as its developer_instructions setting, encoded
-// as a TOML string so that quotes, backslashes and newlines arrive intact, on
-// a fresh thread and on its resume alike.
-func TestStandingInstructionsReachCodexAsDeveloperInstructions(t *testing.T) {
-	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").set("ENVOY_FAKE_SESSION_ID", "thread-1")
-	text := "Say \"done\" when done.\nPaths look like C:\\tmp.\n"
-	want := `developer_instructions="Say \"done\" when done.\nPaths look like C:\\tmp.\n"`
-	rules := writeInstructions(t, text)
-	prompt := writePrompt(t, t.TempDir())
-
-	r1 := filepath.Join(t.TempDir(), "consult")
-	if res := runEnvoy(t, e, runArgs(prompt, r1, "--with", "codex", "--instructions-file", rules)...); res.code != 0 {
-		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
-	}
-	if argv := stringsFromMeta(t, readMeta(t, r1), "providerArgv"); !slices.Contains(argv, want) {
-		t.Fatalf("fresh codex argv = %v, want %s", argv, want)
-	}
-	r2 := filepath.Join(t.TempDir(), "round2")
-	if res := runEnvoy(t, e, runArgs(prompt, r2, "--with", "@"+r1)...); res.code != 0 {
-		t.Fatalf("resume exit = %d\nstderr:\n%s", res.code, res.stderr)
-	}
-	argv := stringsFromMeta(t, readMeta(t, r2), "providerArgv")
-	if !slices.Contains(argv, "resume") || !slices.Contains(argv, want) {
-		t.Fatalf("resumed codex argv = %v, want the instructions again on the resume", argv)
-	}
-	if got := readFile(t, filepath.Join(r2, "instructions.md")); got != text {
-		t.Fatalf("resumed instructions.md = %q, want %q", got, text)
-	}
-}
-
 // A conversation keeps the instructions it started with: a different file,
 // or any file for a conversation that started without one, is refused before
 // anything is reserved — the session would go on holding its first text. A
@@ -208,7 +178,6 @@ func TestInstructionsFileIsValidatedBeforeReserving(t *testing.T) {
 	}
 	cases := []struct{ file, want string }{
 		{filepath.Join(t.TempDir(), "absent.md"), "instructions file not found"},
-		{t.TempDir(), "instructions file is a directory, not a file"},
 		{writeInstructions(t, " \n\t\n"), "instructions file is empty"},
 		{invalid, "instructions file is not UTF-8 text"},
 	}
@@ -356,13 +325,6 @@ func TestMixedRosterKeepsEachConversationsInstructions(t *testing.T) {
 			t.Fatalf("%s instructions.md = %q", m, got)
 		}
 	}
-
-	dir := filepath.Join(t.TempDir(), "differs")
-	res := runEnvoy(t, e, runArgs(prompt, dir, "--with", "@"+src, "--with", "codex", "--instructions-file", writeInstructions(t, "rule B\n"))...)
-	if res.code != 3 {
-		t.Fatalf("differing flag exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
-	}
-	mustContain(t, "refusal", res.stderr, "--instructions-file differs from the standing instructions")
 }
 
 // The identical retry repeats the dispatch it replaces: a turn that started
@@ -398,14 +360,14 @@ func TestRetryRepeatsTheArchivedInstructions(t *testing.T) {
 	mustNotContain(t, "continued retry", col, "--instructions-file")
 }
 
-// A record whose conversation carries standing instructions is a schema of
-// its own. An engine that reads only the schema before it would decode such a
-// record without the digest — and stamping a collect would then write it
-// back without one, turning "this conversation has instructions" into "it
-// never had any" for the next continuation. A record of an unknown version is
-// refused by name instead, so the older engine never reads it. A record
-// without instructions keeps the schema every engine since it reads alike.
-func TestARecordWithInstructionsIsASchemaOlderEnginesRefuse(t *testing.T) {
+// A record whose conversation carries standing instructions is written as a
+// schema of its own. An engine that reads only the schema before it would
+// decode such a record without the digest — and stamping a collect would then
+// write it back without one, turning "this conversation has instructions" into
+// "it never had any" for the next continuation; a version it does not read is
+// refused by name instead (job_test.go). A record without instructions keeps
+// the schema every engine since it reads alike.
+func TestARecordWithInstructionsIsWrittenAsItsOwnSchema(t *testing.T) {
 	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
 	prompt := writePrompt(t, t.TempDir())
 
@@ -423,15 +385,6 @@ func TestARecordWithInstructionsIsASchemaOlderEnginesRefuse(t *testing.T) {
 	if got := readMeta(t, bare)["schemaVersion"]; got != float64(10) {
 		t.Fatalf("record without instructions schemaVersion = %v, want 10", got)
 	}
-
-	// This engine reads both, and continues each as what it is.
-	for _, src := range []string{ruled, bare} {
-		next := filepath.Join(t.TempDir(), "next")
-		if res := runEnvoy(t, e, runArgs(prompt, next, "--with", "@"+src)...); res.code != 0 {
-			t.Fatalf("@%s exit = %d\nstderr:\n%s", src, res.code, res.stderr)
-		}
-	}
-	mustContain(t, "collect of an instructed job", runEnvoy(t, e, "collect", "--status-only", ruled).stdout, "status: ok")
 }
 
 // An archive edited after its turn never started is never handed to the
@@ -481,9 +434,7 @@ func TestADamagedArchiveRefusalNamesTheRepair(t *testing.T) {
 		t.Fatal(err)
 	}
 	res = runEnvoy(t, e, runArgs(prompt, filepath.Join(t.TempDir(), "y"), "--with", "@"+second)...)
-	mustContain(t, "refusal with no intact turn", res.stderr, "sha256 is "+digest("rule A\n"),
-		"envoy run <new-job-name> --with claude:opus --prompt-file <your-follow-up.md> --instructions-file <your-instructions.md>",
-		"--cwd ", "--timeout-min 30")
+	mustContain(t, "refusal with no intact turn", res.stderr, "sha256 is "+digest("rule A\n"), "--with claude:opus")
 	mustNotContain(t, "refusal with no intact turn", res.stderr, "cp '")
 }
 

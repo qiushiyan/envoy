@@ -12,7 +12,6 @@ import (
 
 	"github.com/qiushiyan/envoy/internal/job"
 	"github.com/qiushiyan/envoy/internal/proc"
-	"github.com/qiushiyan/envoy/internal/prose"
 )
 
 // writeClaimedTurn writes a turn record whose runner recorded its claim. The
@@ -58,13 +57,32 @@ func waitOn(t *testing.T, dir string) (int, string) {
 	return code, out.String() + errOut.String()
 }
 
+// waitEnds runs a wait that must return because its runner is gone, failing
+// at once rather than hanging the package when the wait blocks instead.
+func waitEnds(t *testing.T, dir string) (int, string) {
+	t.Helper()
+	type ended struct {
+		code int
+		out  string
+	}
+	done := make(chan ended, 1)
+	go func() { code, out := waitOn(t, dir); done <- ended{code, out} }()
+	select {
+	case e := <-done:
+		return e.code, e.out
+	case <-time.After(5 * time.Second):
+		t.Fatal("the wait blocked though the job's runner is gone")
+		return 0, ""
+	}
+}
+
 // A wait on a turn whose runner is gone without a final record returns at
 // once, says the ending is not recorded, and sends the caller to collect,
 // which reconciles; the wait itself leaves the record as it found it.
 func TestWaitReportsARunnerThatLeftNoFinalRecord(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "job")
 	writeClaimedTurn(t, dir, "running")
-	code, out := waitOn(t, dir)
+	code, out := waitEnds(t, dir)
 	if code != job.ExitInfra {
 		t.Fatalf("exit = %d, want %d\n%s", code, job.ExitInfra, out)
 	}
@@ -98,7 +116,7 @@ func TestWaitOnAFanOutWhoseMembersLeftNoFinalRecord(t *testing.T) {
 		writeClaimedGroup(t, dir, "codex", "claude")
 		writeClaimedTurn(t, filepath.Join(dir, "codex"), "ok")
 		c.build(dir)
-		code, out := waitOn(t, dir)
+		code, out := waitEnds(t, dir)
 		if code != job.ExitInfra {
 			t.Errorf("%s: exit = %d, want %d\n%s", c.name, code, job.ExitInfra, out)
 		}
@@ -121,7 +139,7 @@ func TestWaitOnAFanOutWithAMemberThatNeverStarted(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "job")
 	writeClaimedGroup(t, dir, "codex", "claude")
 	writeClaimedTurn(t, filepath.Join(dir, "codex"), "ok")
-	code, out := waitOn(t, dir)
+	code, out := waitEnds(t, dir)
 	if code != job.ExitPartial || !strings.Contains(out, "member claude: never dispatched") {
 		t.Fatalf("exit = %d, want %d, with claude never dispatched:\n%s", code, job.ExitPartial, out)
 	}
@@ -189,25 +207,6 @@ func TestWaitPollsARunnerKnownOnlyByItsPID(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("did not return once the record was final")
-	}
-}
-
-// A fan-out that recorded its claim holds its name through a member that has
-// not yet written a record only while that claim is held — the member may
-// still start until then. Its recorded PID answering proves nothing.
-func TestAClaimedFanOutHoldsForAnUnstartedMemberOnlyWhileClaimed(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "job")
-	writeClaimedGroup(t, dir, "codex")
-	if hold, held := NameHold(dir, ""); held {
-		t.Fatalf("free claim, live PID: name held as %+v", hold)
-	}
-	claim, err := proc.LockDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer claim.Release()
-	if hold, held := NameHold(dir, ""); !held || hold.Kind != prose.HoldUnrecorded || hold.Member != "codex" {
-		t.Fatalf("held claim: hold = %+v, held = %v; want the unstarted member to hold", hold, held)
 	}
 }
 

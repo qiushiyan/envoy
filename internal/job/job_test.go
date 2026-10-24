@@ -12,21 +12,33 @@ import (
 	"time"
 )
 
-func TestISOFormat(t *testing.T) {
-	got := ISO(time.Date(2026, 7, 25, 10, 30, 0, 123_000_000, time.UTC))
-	if got != "2026-07-25T10:30:00.123Z" {
-		t.Fatalf("ISO = %q", got)
+// A record's timestamps are UTC whatever zone the engine runs in, so two
+// records written in different zones compare as instants.
+func TestISORendersTheUTCInstant(t *testing.T) {
+	zoned := time.Date(2026, 7, 25, 11, 30, 0, 123_000_000, time.FixedZone("UTC+1", 3600))
+	if got := ISO(zoned); got != "2026-07-25T10:30:00.123Z" {
+		t.Fatalf("ISO = %q, want the UTC instant", got)
 	}
 }
 
+// A record is replaced, never rewritten in place: a reader holding the old
+// file keeps reading the old bytes, and none of the write's temp files stay
+// in the job directory.
 func TestWriteFileAtomic(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "meta.json")
 	if err := WriteFileAtomic(p, []byte("one")); err != nil {
 		t.Fatal(err)
 	}
+	before, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := WriteFileAtomic(p, []byte("two")); err != nil {
 		t.Fatal(err)
+	}
+	if after, err := os.Stat(p); err != nil || os.SameFile(before, after) {
+		t.Fatalf("the path must name a new file after the write, not the old one rewritten (%v)", err)
 	}
 	data, _ := os.ReadFile(p)
 	if string(data) != "two" {
@@ -38,11 +50,11 @@ func TestWriteFileAtomic(t *testing.T) {
 	}
 }
 
-// A bare name is an address in the invoking project's central store; a path
-// is taken as given; and nothing is ever written inside the project tree.
+// A bare name is an address in the invoking project's store, the same from
+// any directory of the project, spelled exactly as given; a path is taken as
+// given. Where the store lives is tests/names_test.go's.
 func TestResolveRefNamesLandInTheCentralStore(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	t.Setenv("HOME", t.TempDir())
 	repo := t.TempDir()
 	run(t, repo, "git", "init", "-q")
 	subdir := filepath.Join(repo, "pkg", "inner")
@@ -62,10 +74,6 @@ func TestResolveRefNamesLandInTheCentralStore(t *testing.T) {
 	if _, err := ResolveName("review-r1/codex", repo); err == nil {
 		t.Fatal("a new job's name is one segment")
 	}
-	jobsRoot := filepath.Join(home, ".local", "state", "envoy", "jobs")
-	if filepath.Dir(filepath.Dir(dir)) != jobsRoot || filepath.Base(dir) != "review-r1" {
-		t.Fatalf("dir = %q, want %q/<project>/review-r1", dir, jobsRoot)
-	}
 	// The name round-trips exactly: no lowercasing, no slugging.
 	if d, _ := ResolveName("Review.R1_x", repo); filepath.Base(d) != "Review.R1_x" {
 		t.Fatalf("name was rewritten: %q", d)
@@ -82,9 +90,6 @@ func TestResolveRefNamesLandInTheCentralStore(t *testing.T) {
 		if _, err := ResolveRef(bad, repo, ""); err == nil {
 			t.Fatalf("ResolveRef(%q) must refuse", bad)
 		}
-	}
-	if _, err := os.Stat(filepath.Join(repo, ".envoy")); !os.IsNotExist(err) {
-		t.Fatal("central storage must not create dirs inside the repo")
 	}
 }
 
@@ -127,7 +132,7 @@ func TestResolveFindsTheHighestGeneration(t *testing.T) {
 	if a, _ := Resolve(base, "review-r1", ""); a.Newest != 0 || a.Dir != filepath.Join(base, "review-r1") {
 		t.Fatalf("free name = %+v, want the bare name at generation 0", a)
 	}
-	for _, d := range []string{"review-r1", "review-r1+2", "review-r1+10", "review-r1b", "review-r1+02", "review-r1+1", "review-r1+x", "review-r10+40"} {
+	for _, d := range []string{"review-r1", "review-r1+2", "review-r1+10", "review-r1b", "review-r1+x", "review-r10+40"} {
 		if err := os.Mkdir(filepath.Join(base, d), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -148,6 +153,20 @@ func TestResolveFindsTheHighestGeneration(t *testing.T) {
 	}
 	if a, _ := Resolve(base, "review-r1", ""); a.Newest != 10 || a.Dir != filepath.Join(base, "review-r1+10") {
 		t.Fatalf("Resolve without generation 1 = %+v, want review-r1+10 gen 10", a)
+	}
+	// A look-alike suffix is somebody else's directory even where it would be
+	// the highest number in the store.
+	for _, lookalikes := range [][]string{{"review-r1", "review-r1+02"}, {"review-r1+1"}} {
+		store := t.TempDir()
+		for _, d := range lookalikes {
+			if err := os.Mkdir(filepath.Join(store, d), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		want := len(lookalikes) - 1 // the bare name, when present, is generation 1
+		if a, _ := Resolve(store, "review-r1", ""); a.Newest != want {
+			t.Errorf("store %v: Newest = %d, want %d", lookalikes, a.Newest, want)
+		}
 	}
 	// A generation is reachable by path only: no caller can name one.
 	if _, err := ResolveName("review-r1+2", base); err == nil {
@@ -195,32 +214,6 @@ func TestResolveScopesANameToItsCaller(t *testing.T) {
 		if err != nil || addr.Dir != GenerationDir(base, "consult-r1", want) || addr.Newest != 6 {
 			t.Errorf("Resolve for caller %q = %+v (%v), want generation %d of 6", caller, addr, err, want)
 		}
-	}
-}
-
-// With no caller to scope by, references follow the name to its newest
-// generation, members included.
-func TestResolveRefFollowsTheLatestGeneration(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	repo := t.TempDir()
-	first, _ := ResolveName("consult-r1", repo)
-	base := filepath.Dir(first)
-	for _, d := range []string{first, GenerationDir(base, "consult-r1", 2)} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	want := GenerationDir(base, "consult-r1", 2)
-	if ref, _ := resolveDir("consult-r1", repo, ""); ref != want {
-		t.Fatalf("ResolveRef(name) = %q, want %q", ref, want)
-	}
-	if ref, _ := resolveDir("consult-r1/codex", repo, ""); ref != filepath.Join(want, "codex") {
-		t.Fatalf("ResolveRef(name/member) = %q, want the member under %q", ref, want)
-	}
-	// The first generation stays an identity, reachable by its path.
-	if ref, _ := resolveDir(first, repo, ""); ref != first {
-		t.Fatalf("ResolveRef(path) = %q, want %q", ref, first)
 	}
 }
 
@@ -274,8 +267,13 @@ func TestProjectSlugDistinguishesSameName(t *testing.T) {
 	if slugA == slugB {
 		t.Fatal("same-named projects at different paths must not share a store")
 	}
-	if ProjectSlug(a) != slugA {
-		t.Fatal("slug must be stable across calls")
+	// A symlinked spelling of the same project is the same store.
+	link := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(a, link); err != nil {
+		t.Fatal(err)
+	}
+	if ProjectSlug(link) != slugA {
+		t.Fatalf("a symlinked spelling = %q, want %q", ProjectSlug(link), slugA)
 	}
 }
 

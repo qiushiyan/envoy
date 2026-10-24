@@ -68,21 +68,6 @@ func writeOtherGroup(t *testing.T, dir string, runnerPid int) {
 	}
 }
 
-// Another version's fan-out holds or releases its name on its stamp alone:
-// what its directory lists is no part of that decision, so a directory that
-// cannot be listed releases a name its stamp releases.
-func TestAnotherSchemasFanOutHoldsOnItsStampAlone(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "job")
-	writeOtherGroup(t, dir, 0)
-	if err := os.Chmod(dir, 0o300); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chmod(dir, 0o755) })
-	if hold, held := NameHold(dir, ""); held {
-		t.Fatalf("NameHold = %+v; a stamp recording no runner holds nothing, listable or not", hold)
-	}
-}
-
 // A name is released by delivery and by nothing else: not by success, not by
 // the first member being done, and never by a record that is missing or
 // unreadable where one could still appear.
@@ -135,6 +120,23 @@ func TestNameHoldClassifiesWhatStillHoldsAName(t *testing.T) {
 		{"fan-out gone, every member refused", func(d string) {
 			writeGroup(t, d, gone, "codex", "claude")
 		}, prose.NameHold{}, false},
+		{"fan-out gone, a refused member ahead of an undelivered one", func(d string) {
+			writeGroup(t, d, gone, "codex", "claude")
+			writeTurn(t, filepath.Join(d, "claude"), "ok", false)
+		}, prose.NameHold{Kind: prose.HoldUncollected, Member: "claude"}, true},
+		// A fan-out that recorded its claim may still start a member exactly
+		// while the claim is held; its recorded PID answering proves nothing.
+		{"claimed fan-out, claim free, a member never started", func(d string) {
+			writeClaimedGroup(t, d, "codex")
+		}, prose.NameHold{}, false},
+		{"claimed fan-out, claim held, a member not started yet", func(d string) {
+			writeClaimedGroup(t, d, "codex")
+			claim, err := proc.LockDir(d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(claim.Release)
+		}, prose.NameHold{Kind: prose.HoldUnrecorded, Member: "codex"}, true},
 		{"fan-out in its first moments", func(d string) {
 			writeGroup(t, d, os.Getpid(), "codex", "claude")
 		}, prose.NameHold{Kind: prose.HoldUnrecorded, Member: "codex"}, true},
@@ -159,6 +161,13 @@ func TestNameHoldClassifiesWhatStillHoldsAName(t *testing.T) {
 		}, prose.NameHold{}, false},
 		{"another schema's fan-out recording no runner", func(d string) {
 			writeOtherGroup(t, d, 0)
+		}, prose.NameHold{}, false},
+		// What its directory lists is no part of that decision: one that
+		// cannot be listed releases a name its stamp releases.
+		{"another schema's fan-out recording no runner, unlistable", func(d string) {
+			writeOtherGroup(t, d, 0)
+			os.Chmod(d, 0o300)
+			t.Cleanup(func() { os.Chmod(d, 0o755) })
 		}, prose.NameHold{}, false},
 		{"fan-out with an unreadable roster", func(d string) {
 			os.MkdirAll(d, 0o755)

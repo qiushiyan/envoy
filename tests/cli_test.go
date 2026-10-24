@@ -4,31 +4,37 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 // The command line itself: the help page an agent reads first, usage
 // errors, and the rosters refused before anything is reserved.
 
-// A roster that cannot mean anything is refused in its own terms, before
-// any voice spawns and without a job directory left behind.
+// A roster that cannot mean anything is refused whole, in its own terms,
+// before any voice spawns and without a job directory left behind — a later
+// seat's mistake, or one member's prompt that cannot be read from its own
+// seat or the default, refuses its siblings too.
 func TestRunRefusesMalformedRosters(t *testing.T) {
 	e := newEnv(t)
 	prompt := writePrompt(t, t.TempDir())
+	absent := filepath.Join(t.TempDir(), "absent.md")
 	cases := []struct {
 		args []string
 		want string
 	}{
-		{[]string{"--with", "codex", "--with", "claude", "--allow-write"}, "--allow-write needs exactly one --with"},
-		{[]string{"--with", "codex", "--with", "gemini"}, "must name provider claude or codex"},
-		{[]string{"--with", "codex", "--with", "claude:opus:minimal"}, "claude has no 'minimal'"},
-		{[]string{"--with", "codex", "--with", "claude:opus:high:extra"}, "has too many fields"},
-		{[]string{"--with", "codex", "--with", "claude", "codex"}, "unexpected argument"},
-		{[]string{"--with", "codex", "--model", "opus"}, "flag provided but not defined: -model"},
+		{[]string{"--prompt-file", prompt, "--with", "codex", "--with", "claude", "--allow-write"}, "--allow-write needs exactly one --with"},
+		{[]string{"--prompt-file", prompt, "--with", "codex", "--with", "gemini"}, "must name provider claude or codex"},
+		{[]string{"--prompt-file", prompt, "--with", "codex", "--with", "claude:opus:high:extra"}, "has too many fields"},
+		{[]string{"--prompt-file", prompt, "--with", "codex", "--with", "claude", "codex"}, "unexpected argument"},
+		{[]string{"--prompt-file", prompt, "--with", "codex", "--model", "opus"}, "flag provided but not defined: -model"},
+		{[]string{"--with", "codex=" + prompt, "--with", "claude:opus"}, "--with claude:opus has no prompt"},
+		{[]string{"--with", "codex=" + prompt, "--with", "claude:opus=" + absent}, "prompt file not found"},
+		{[]string{"--with", "codex", "--with", "claude:opus=" + prompt, "--prompt-file", absent}, "prompt file not found"},
 	}
 	for _, c := range cases {
 		dir := filepath.Join(t.TempDir(), "job")
-		res := runEnvoy(t, e, runArgs(prompt, dir, c.args...)...)
+		res := runEnvoy(t, e, append([]string{"run", dir}, c.args...)...)
 		if res.code != 3 {
 			t.Fatalf("%v: exit = %d, want 3\nstderr:\n%s", c.args, res.code, res.stderr)
 		}
@@ -125,6 +131,7 @@ func TestUsageErrors(t *testing.T) {
 		{[]string{"run", job, "--with", "codex", "--prompt-file", prompt, "--timeout-min", "-1"}, "--timeout-min must be a number >= 0"},
 		{[]string{"run", job, "--with", "codex", "--prompt-file", prompt, "--max-budget-usd", "1"}, "caps one claude voice"},
 		{[]string{"run", job, "--with", "claude", "--with", "codex", "--prompt-file", prompt, "--max-budget-usd", "1"}, "caps one claude voice"},
+		{[]string{"wait"}, "wait takes the job to wait for"},
 		{[]string{"nonsense"}, "unknown command"},
 	}
 	for _, c := range cases {
@@ -132,37 +139,15 @@ func TestUsageErrors(t *testing.T) {
 		if res.code != 3 {
 			t.Fatalf("%v: exit = %d, want 3\nstderr:\n%s", c.args, res.code, res.stderr)
 		}
+		// envoy -h tells a caller to recognise a refusal that ran nothing by
+		// this prefix, relayed through the process a run waits on.
+		if !strings.HasPrefix(res.stderr, "usage error: ") {
+			t.Fatalf("%v: stderr must open with the usage error:\n%s", c.args, res.stderr)
+		}
 		mustContain(t, fmt.Sprintf("stderr of %v", c.args), res.stderr, c.want)
 	}
 	if _, err := os.Stat(job); !os.IsNotExist(err) {
 		t.Fatal("no refused run may leave a job dir behind")
-	}
-}
-
-// A roster is refused whole before its name is reserved: one voice with no
-// prompt from either source, or one member's file that cannot be read, must
-// not start its siblings.
-func TestRunRefusesAnUnpromptedVoiceBeforeReserving(t *testing.T) {
-	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
-	prompt := writePrompt(t, t.TempDir())
-	cases := []struct {
-		args []string
-		want string
-	}{
-		{[]string{"--with", "codex=" + prompt, "--with", "claude:opus"}, "--with claude:opus has no prompt"},
-		{[]string{"--with", "codex=" + prompt, "--with", "claude:opus=" + filepath.Join(t.TempDir(), "absent.md")}, "prompt file not found"},
-		{[]string{"--with", "codex", "--with", "claude:opus=" + prompt, "--prompt-file", filepath.Join(t.TempDir(), "absent.md")}, "prompt file not found"},
-	}
-	for _, c := range cases {
-		dir := filepath.Join(t.TempDir(), "group")
-		res := runEnvoy(t, e, append([]string{"run", dir}, c.args...)...)
-		if res.code != 3 {
-			t.Fatalf("%v: exit = %d, want 3\nstderr:\n%s", c.args, res.code, res.stderr)
-		}
-		mustContain(t, fmt.Sprintf("stderr of %v", c.args), res.stderr, c.want)
-		if _, err := os.Stat(dir); !os.IsNotExist(err) {
-			t.Fatalf("%v: a refused roster must leave no job dir", c.args)
-		}
 	}
 }
 

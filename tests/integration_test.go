@@ -4,6 +4,12 @@
 // the terminal-envelope race, lock safety, and collection. This file is the
 // harness every feature's file shares: the binary, the isolated environment,
 // and the helpers that run and read a job.
+//
+// A caller-facing sentence's bytes are pinned once, by internal/prose's
+// tests. A test here asserts what only the built binary can show: the record
+// a turn leaves, process and signal wiring, and that a sentence reached the
+// right surface — by the token a caller acts on (a command, a status word, a
+// path), never by re-pinning the sentence.
 package integration
 
 import (
@@ -113,6 +119,25 @@ func runEnvoyIn(t *testing.T, e *env, dir string, args ...string) runResult {
 	return runResult{code: code, stdout: stdout.String(), stderr: stderr.String()}
 }
 
+// runEnvoyWithin runs envoy like runEnvoy, failing the test — and stopping
+// the turn — when the command has not exited within limit, so a guard whose
+// regression would hang fails fast instead of waiting out the test timeout.
+func runEnvoyWithin(t *testing.T, e *env, limit time.Duration, args ...string) runResult {
+	t.Helper()
+	done := make(chan runResult, 1)
+	go func() { done <- runEnvoy(t, e, args...) }()
+	select {
+	case res := <-done:
+		return res
+	case <-time.After(limit):
+		if len(args) > 1 && args[0] == "run" {
+			stopTurns(args[1])
+		}
+		t.Fatalf("envoy %s did not exit within %s", strings.Join(args, " "), limit)
+		return runResult{}
+	}
+}
+
 func writePrompt(t *testing.T, dir string) string {
 	t.Helper()
 	p := filepath.Join(dir, "prompt-src.md")
@@ -216,4 +241,81 @@ func stopTurns(outDir string) {
 func killDispatch(cmd *exec.Cmd, outDir string) {
 	cmd.Process.Kill()
 	stopTurns(outDir)
+}
+
+// as is the same machine and store seen by another caller: a harness session
+// with its own identity, or — caller "" — one that exports none.
+func (e *env) as(caller, codexSession string) *env {
+	extra := map[string]string{}
+	for k, v := range e.extra {
+		extra[k] = v
+	}
+	delete(extra, "ENVOY_CALLER")
+	if caller != "" {
+		extra["ENVOY_CALLER"] = caller
+	}
+	if codexSession != "" {
+		extra["ENVOY_FAKE_SESSION_ID_CODEX"] = codexSession
+	}
+	return &env{home: e.home, extra: extra}
+}
+
+// Two sessions in one checkout reach for the same name. Neither is refused,
+// neither ever reads the other's job, and a name keeps meaning its caller's
+// own job however the two interleave — including the continuation a caller
+// makes by name long after the other session reused it.
+
+// jobLineOf is the job a block names on its first job: line.
+func jobLineOf(stdout string) string {
+	for line := range strings.SplitSeq(stdout, "\n") {
+		if after, ok := strings.CutPrefix(line, "job: "); ok {
+			return after
+		}
+	}
+	return ""
+}
+
+// waitForStatus polls a job's meta.json until it records want.
+func waitForStatus(t *testing.T, outDir, want string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if data, err := os.ReadFile(filepath.Join(outDir, "meta.json")); err == nil &&
+			strings.Contains(string(data), `"status": "`+want+`"`) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("%s never recorded status %q", outDir, want)
+}
+
+type invocation struct {
+	Argv []string          `json:"argv"`
+	Env  map[string]string `json:"env"`
+	Pid  int               `json:"pid"`
+	Cwd  string            `json:"cwd"`
+	// AppendedSystemPrompt is what the file a claude launch named with
+	// --append-system-prompt-file held when it launched; nil when none.
+	AppendedSystemPrompt *string `json:"appendedSystemPrompt"`
+}
+
+func readInvocation(t *testing.T, path string) invocation {
+	t.Helper()
+	var v invocation
+	if err := json.Unmarshal([]byte(readFile(t, path)), &v); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+func stringsFromMeta(t *testing.T, m map[string]any, key string) []string {
+	t.Helper()
+	raw, ok := m[key].([]any)
+	if !ok {
+		t.Fatalf("missing %s: %v", key, m[key])
+	}
+	out := make([]string, len(raw))
+	for i, v := range raw {
+		out[i] = v.(string)
+	}
+	return out
 }

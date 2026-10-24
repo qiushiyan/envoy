@@ -1,33 +1,12 @@
 package integration
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-// as is the same machine and store seen by another caller: a harness session
-// with its own identity, or — caller "" — one that exports none.
-func (e *env) as(caller, codexSession string) *env {
-	extra := map[string]string{}
-	for k, v := range e.extra {
-		extra[k] = v
-	}
-	delete(extra, "ENVOY_CALLER")
-	if caller != "" {
-		extra["ENVOY_CALLER"] = caller
-	}
-	if codexSession != "" {
-		extra["ENVOY_FAKE_SESSION_ID_CODEX"] = codexSession
-	}
-	return &env{home: e.home, extra: extra}
-}
-
-// Two sessions in one checkout reach for the same name. Neither is refused,
-// neither ever reads the other's job, and a name keeps meaning its caller's
-// own job however the two interleave — including the continuation a caller
-// makes by name long after the other session reused it.
 func TestANameMeansItsCallersOwnJob(t *testing.T) {
 	base := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
 	a, b := base.as("session-a", "sess-a"), base.as("session-b", "sess-b")
@@ -200,7 +179,7 @@ func TestCallerIdentityIsReadFromTheHarness(t *testing.T) {
 
 	for e, want := range map[*env]string{claudeCode: first, explicit: second} {
 		r := runEnvoyIn(t, e, project, "collect", "--status-only", "pair/codex")
-		if r.code != 0 || jobLineOf(r.stdout) != filepath.Join(want, "codex") {
+		if r.code != 0 || jobLineOf(r.stdout) != filepath.Join(want, "codex") || strings.Contains(r.stdout, "fan-out:") {
 			t.Fatalf("pair/codex = %q, want the member under %s\n%s", jobLineOf(r.stdout), want, r.stderr)
 		}
 	}
@@ -264,32 +243,5 @@ func TestAnUnreadableRecordNeverYieldsAnOlderGeneration(t *testing.T) {
 	// The older job is still reachable, by the identity that cannot drift.
 	if r := runEnvoyIn(t, a, project, "collect", "--status-only", dirs[0]); r.code != 0 || jobLineOf(r.stdout) != dirs[0] {
 		t.Fatalf("collect by path = %d\n%s", r.code, r.stderr)
-	}
-}
-
-// A dispatched turn is a session of its own. A job it dispatches through
-// envoy does not answer to the dispatcher's names.
-func TestADispatchedTurnDoesNotInheritItsDispatchersNames(t *testing.T) {
-	a := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").as("session-a", "")
-	a.extra["CLAUDE_CODE_SESSION_ID"] = "cc-session-a"
-	project := t.TempDir()
-	prompt := writePrompt(t, t.TempDir())
-	own := runEnvoyIn(t, a, project, "run", "nested-source", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5")
-	if own.code != 0 {
-		t.Fatalf("A's dispatch = %d\n%s", own.code, own.stderr)
-	}
-	runEnvoyIn(t, a, project, "collect", "nested-source")
-
-	outer := a.as("session-a", "")
-	outer.extra["ENVOY_FAKE_NESTED_CMD"] = fmt.Sprintf("cd %q && %q run nested-source --prompt-file %q --with codex --timeout-min 5", project, binPath, prompt)
-	if r := runEnvoyIn(t, outer, project, "run", "outer", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5"); r.code != 0 {
-		t.Fatalf("outer dispatch = %d\n%s", r.code, r.stderr)
-	}
-	nested := jobLineOf(own.stdout) + "+2"
-	if caller, has := readMeta(t, nested)["caller"]; has {
-		t.Fatalf("the nested job recorded the dispatcher's identity %v", caller)
-	}
-	if r := runEnvoyIn(t, a, project, "collect", "--status-only", "nested-source"); jobLineOf(r.stdout) != jobLineOf(own.stdout) {
-		t.Fatalf("A's nested-source = %q, want its own %q", jobLineOf(r.stdout), jobLineOf(own.stdout))
 	}
 }

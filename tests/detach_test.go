@@ -103,6 +103,7 @@ func TestATurnOutlivesItsCaller(t *testing.T) {
 				t.Fatalf("wait exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 			}
 			mustContain(t, "wait stdout", res.stdout, "status: ok")
+			mustNotContain(t, "wait stdout", res.stdout, "fake provider result")
 			meta := readMeta(t, outDir)
 			if meta["status"] != "ok" || meta["interruptionSignal"] != nil || meta["allowWrite"] != true {
 				t.Fatalf("turn = status %v, interruption %v, write %v; want an ok write turn, uninterrupted",
@@ -116,7 +117,7 @@ func TestATurnOutlivesItsCaller(t *testing.T) {
 }
 
 // A fan-out runs its members in one process of its own, so it outlives its
-// caller as a whole.
+// caller as a whole — and a wait on it blocks until every member has ended.
 func TestAFanOutOutlivesItsCaller(t *testing.T) {
 	e := newEnv(t).
 		set("ENVOY_FAKE_SCENARIO", "delayed-success").
@@ -226,15 +227,6 @@ func TestPendingListsALiveTurnOnlyToItsCaller(t *testing.T) {
 	borrowed := runEnvoyIn(t, theirs, project, "wait", "review-r1")
 	mustContain(t, "another caller's wait by name", borrowed.stdout,
 		"job: "+outDir, "note: this session has dispatched no job named review-r1")
-}
-
-// Refusals before anything runs reach the caller through the waiter, with
-// their exit code.
-func TestARefusalReachesTheCallerThroughTheWaiter(t *testing.T) {
-	res := runEnvoy(t, newEnv(t), "run", "job", "--with", "codex")
-	if res.code != 3 || !strings.Contains(res.stderr, "usage error: --with codex has no prompt") {
-		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
-	}
 }
 
 // The provider starts with only its own stdin, stdout and stderr. A

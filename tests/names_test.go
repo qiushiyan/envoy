@@ -11,45 +11,6 @@ import (
 	"time"
 )
 
-func jobLineOf(stdout string) string {
-	for line := range strings.SplitSeq(stdout, "\n") {
-		if after, ok := strings.CutPrefix(line, "job: "); ok {
-			return after
-		}
-	}
-	return ""
-}
-
-// A name keeps passing on, generation after generation, and a job that ended
-// badly releases its name on collection exactly as an ok one does: delivery,
-// not success, is what frees a name.
-func TestANamePassesOnPastTheSecondGenerationAndAfterAFailure(t *testing.T) {
-	ok := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
-	project := t.TempDir()
-	prompt := writePrompt(t, t.TempDir())
-	dispatch := func(e *env) runResult {
-		return runEnvoyIn(t, e, project, "run", "consult-r1", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5")
-	}
-	first := dispatch(ok)
-	base := jobLineOf(first.stdout)
-	if first.code != 0 || base == "" {
-		t.Fatalf("first dispatch = %d\n%s", first.code, first.stderr)
-	}
-	runEnvoyIn(t, ok, project, "collect", "consult-r1")
-
-	failing := &env{home: ok.home, extra: map[string]string{"ENVOY_FAKE_SCENARIO": "partial-failure"}}
-	failed := runEnvoyIn(t, failing, project, "run", "consult-r1", "--prompt-file", prompt, "--with", "claude", "--timeout-min", "5")
-	if failed.code != 1 || jobLineOf(failed.stdout) != base+"+2" {
-		t.Fatalf("second dispatch = %d in %q, want a failed turn in %s\n%s", failed.code, jobLineOf(failed.stdout), base+"+2", failed.stderr)
-	}
-	runEnvoyIn(t, ok, project, "collect", "consult-r1")
-
-	third := dispatch(ok)
-	if third.code != 0 || jobLineOf(third.stdout) != base+"+3" {
-		t.Fatalf("third dispatch = %d in %q, want 0 in %s\n%s", third.code, jobLineOf(third.stdout), base+"+3", third.stderr)
-	}
-}
-
 // A session held at dispatch refuses one fan-out member before it writes a
 // record. Nothing can ever be collected for that member, so once the members
 // that did run are delivered the name passes on — and while they are not, the
@@ -219,8 +180,9 @@ func TestALiveFanOutHoldsItsNameForAMemberStillStarting(t *testing.T) {
 }
 
 // A bare name is an address in the invoking project's central store: the
-// job lands under ~/.local/state/envoy, never inside the project tree, and
-// collect resolves the same name from the same project with no path at all.
+// job lands under ~/.local/state/envoy, never inside the project tree, and a
+// fan-out member is named as name/member from the same project. A collect
+// with no job names nothing.
 func TestNamedJobsLiveInTheCentralStore(t *testing.T) {
 	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
 	project := t.TempDir()
@@ -230,13 +192,7 @@ func TestNamedJobsLiveInTheCentralStore(t *testing.T) {
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
-	var outDir string
-	for line := range strings.SplitSeq(res.stdout, "\n") {
-		if after, ok := strings.CutPrefix(line, "job: "); ok {
-			outDir = after
-			break
-		}
-	}
+	outDir := jobLineOf(res.stdout)
 	jobsRoot := filepath.Join(e.home, ".local", "state", "envoy", "jobs")
 	if !strings.HasPrefix(outDir, jobsRoot+string(filepath.Separator)) || filepath.Base(outDir) != "consult" {
 		t.Fatalf("job %q must be <central store>/<project>/consult under %q", outDir, jobsRoot)
@@ -246,28 +202,10 @@ func TestNamedJobsLiveInTheCentralStore(t *testing.T) {
 		t.Fatalf("the project tree must stay untouched, found %v", entries)
 	}
 
-	// Collect by name, from the project; the store is derived the same way.
-	collected := runEnvoyIn(t, e, project, "collect", "consult")
-	if collected.code != 0 {
-		t.Fatalf("collect = %d\n%s", collected.code, collected.stderr)
-	}
-	mustContain(t, "collect stdout", collected.stdout,
-		"job: "+outDir, "status: ok", "fake provider result")
-	// Flags may come before or after the name.
-	if r := runEnvoyIn(t, e, project, "collect", "--status-only", "consult"); r.code != 0 || !strings.Contains(r.stdout, "status: ok") {
-		t.Fatalf("collect --status-only <name> = %d\n%s%s", r.code, r.stdout, r.stderr)
-	}
-
-	// And pending resolves the same project store from cwd alone.
-	pending := runEnvoyIn(t, e, project, "pending")
-	mustContain(t, "pending stdout", pending.stdout, "pending jobs: 0")
-
-	// A fan-out member is reachable by name/member, from the project.
+	// A fan-out member is reachable by name/member, from the project, and
+	// seats its conversation beside a cold voice.
 	if r := runEnvoyIn(t, e, project, "run", "pair", "--prompt-file", prompt, "--with", "codex", "--with", "claude", "--timeout-min", "5"); r.code != 0 {
 		t.Fatalf("fan exit = %d\n%s", r.code, r.stderr)
-	}
-	if r := runEnvoyIn(t, e, project, "collect", "pair/codex"); r.code != 0 || !strings.Contains(r.stdout, "job: "+filepath.Join(filepath.Dir(outDir), "pair", "codex")) {
-		t.Fatalf("collect pair/codex = %d\n%s%s", r.code, r.stdout, r.stderr)
 	}
 	if r := runEnvoyIn(t, e, project, "run", "pair-r2", "--prompt-file", prompt, "--with", "@pair/codex", "--with", "claude", "--timeout-min", "5"); r.code != 0 {
 		t.Fatalf("warm member by name: exit = %d\n%s", r.code, r.stderr)
@@ -295,14 +233,7 @@ func TestANameAddressesItsLatestGeneration(t *testing.T) {
 	run := func(name string, extra ...string) runResult {
 		return runEnvoyIn(t, e, project, append([]string{"run", name, "--prompt-file", prompt, "--timeout-min", "5"}, extra...)...)
 	}
-	jobLine := func(stdout string) string {
-		for line := range strings.SplitSeq(stdout, "\n") {
-			if after, ok := strings.CutPrefix(line, "job: "); ok {
-				return after
-			}
-		}
-		return ""
-	}
+	jobLine := jobLineOf
 
 	first := run("review-r1", "--with", "codex")
 	if first.code != 0 {
@@ -318,8 +249,7 @@ func TestANameAddressesItsLatestGeneration(t *testing.T) {
 		t.Fatalf("dispatch under a held name = %d, want 3\n%s", held.code, held.stderr)
 	}
 	mustNotContain(t, "a held-name refusal's stdout", held.stdout, "job:")
-	mustContain(t, "stderr", held.stderr, "nothing was dispatched", "has not been collected",
-		"now reads an earlier job, not a new one", "review-r1-b", "yours or its caller is gone", "envoy collect '"+firstDir+"'")
+	mustContain(t, "stderr", held.stderr, "envoy collect '"+firstDir+"'")
 	if _, err := os.Stat(secondDir); !os.IsNotExist(err) {
 		t.Fatalf("a refused dispatch must reserve nothing, found %s", secondDir)
 	}
@@ -371,7 +301,7 @@ func TestANameAddressesItsLatestGeneration(t *testing.T) {
 		t.Fatalf("fan-out under a delivered name = %d\n%s", r.code, r.stderr)
 	}
 	pairTwo := filepath.Join(filepath.Dir(firstDir), "pair+2")
-	if r := runEnvoyIn(t, e, project, "collect", "pair/codex"); r.code != 0 || jobLine(r.stdout) != filepath.Join(pairTwo, "codex") {
+	if r := runEnvoyIn(t, e, project, "collect", "pair/codex"); r.code != 0 || jobLine(r.stdout) != filepath.Join(pairTwo, "codex") || strings.Contains(r.stdout, "fan-out:") {
 		t.Fatalf("collect pair/codex = %d, job %q, want it under %s", r.code, jobLine(r.stdout), pairTwo)
 	}
 
@@ -385,48 +315,7 @@ func TestANameAddressesItsLatestGeneration(t *testing.T) {
 	if again.code != 3 {
 		t.Fatalf("re-running a taken path = %d, want 3\n%s", again.code, again.stderr)
 	}
-	mustContain(t, "stderr", again.stderr, "a directory holds one job", "envoy collect '"+outDir+"'")
-}
-
-// A running job holds its name: its caller will collect by it when the
-// process exits, and a dispatch that took the name would hand that caller
-// another job's result.
-func TestARunningJobHoldsItsName(t *testing.T) {
-	e := newEnv(t).
-		set("ENVOY_FAKE_SCENARIO", "delayed-success").
-		set("ENVOY_FAKE_START_DELAY_MS", "0").
-		set("ENVOY_FAKE_DELAY_MS", "60000")
-	project := t.TempDir()
-	prompt := writePrompt(t, t.TempDir())
-
-	cmd := exec.Command(binPath, "run", "consult-r1", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5")
-	cmd.Env = e.build()
-	cmd.Dir = project
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		cmd.Process.Signal(os.Interrupt)
-		cmd.Wait()
-	}()
-
-	// Contend only once the first job is visibly running under the name.
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if time.Now().After(deadline) {
-			t.Fatal("the first job never reported running")
-		}
-		if r := runEnvoyIn(t, e, project, "collect", "--status-only", "consult-r1"); strings.Contains(r.stdout, "status: running") {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	held := runEnvoyIn(t, e, project, "run", "consult-r1", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5")
-	if held.code != 3 {
-		t.Fatalf("dispatch under a running job's name = %d, want 3\nstdout:\n%s\nstderr:\n%s", held.code, held.stdout, held.stderr)
-	}
-	mustContain(t, "stderr", held.stderr, "is still running")
-	mustContain(t, "stderr", held.stderr, "nothing was dispatched", "its own caller has collected it")
+	mustContain(t, "stderr", again.stderr, "envoy collect '"+outDir+"'")
 }
 
 // An engine whose meta schema moved must not take the store's names hostage.
@@ -535,11 +424,6 @@ func TestAnEarlierSchemasJobsLeaveTheirNamesWorking(t *testing.T) {
 	}
 	if r := runEnvoyIn(t, a, project, "run", "live-fan", "--prompt-file", prompt, "--with", "codex", "--timeout-min", "5"); r.code != 3 {
 		t.Fatalf("another engine's live fan-out must hold its name: %d\n%s", r.code, r.stdout)
-	} else {
-		// This engine cannot collect another version's job, so collecting is
-		// never what the refusal says frees the name.
-		mustContain(t, "stderr", r.stderr, "still running under another envoy version", "this envoy version cannot collect it")
-		mustNotContain(t, "stderr", r.stderr, "its own caller has collected it")
 	}
 	oldFan := runEnvoyIn(t, a, project, "collect", filepath.Join(store, "fan-r1"))
 	if oldFan.code != 3 {

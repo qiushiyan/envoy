@@ -3,9 +3,11 @@ package lock
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/qiushiyan/envoy/internal/job"
 	"github.com/qiushiyan/envoy/internal/proc"
 )
 
@@ -23,25 +25,16 @@ func TestAcquireConflictRelease(t *testing.T) {
 		t.Fatalf("first acquire: %v", err)
 	}
 
-	// A second acquire against a live owner (this test process) must report
-	// the live-owner conflict, never the stale-refusal one. The message text
-	// is the contract: it is what the calling agent reads.
+	// A second acquire against a live owner (this test process) reports the
+	// holder it read and that it is live; prose words it
+	// (TestSessionLockSaysWhoHoldsItAndTheOneSafeStep).
 	_, err = Acquire("session-a", "/tmp/job2", "instance-2")
 	conflict, ok := err.(*Conflict)
 	if !ok {
 		t.Fatalf("expected conflict, got %v", err)
 	}
-	if !strings.Contains(conflict.Error(), "already has a live turn") ||
-		!strings.Contains(conflict.Error(), "/tmp/job1") {
-		t.Fatalf("conflict message = %q", conflict.Error())
-	}
-	if strings.Contains(conflict.Error(), "Automatic takeover is refused") {
-		t.Fatal("live owner must not be reported as a stale refusal")
-	}
-	// The caller is an agent that waits and collects; a terminal to tail is
-	// not a thing it has.
-	if strings.Contains(conflict.Error(), "tail -f") || !strings.Contains(conflict.Error(), "envoy collect '/tmp/job1'") {
-		t.Fatalf("a live conflict must point at the owning job's collect, not a watch command: %q", conflict.Error())
+	if !conflict.HolderLive || conflict.Holder == nil || conflict.Holder.Dir != "/tmp/job1" || conflict.SessionID != "session-a" {
+		t.Fatalf("conflict = %+v, want the live holder /tmp/job1", conflict.LockConflict)
 	}
 
 	h.Release()
@@ -74,9 +67,8 @@ func TestStaleLockIsNeverReclaimed(t *testing.T) {
 	if !ok {
 		t.Fatalf("dead owner must be a conflict, got %v", err)
 	}
-	if !strings.Contains(conflict.Error(), "Automatic takeover is refused") ||
-		!strings.Contains(conflict.Error(), "envoy collect '/tmp/dead-job'") {
-		t.Fatalf("stale message must refuse takeover and point at the job: %q", conflict.Error())
+	if conflict.HolderLive || conflict.Holder == nil || conflict.Holder.Dir != "/tmp/dead-job" || conflict.LockPath != p {
+		t.Fatalf("conflict = %+v, want the not-live holder /tmp/dead-job at %s", conflict.LockConflict, p)
 	}
 	if _, err := os.Stat(p); err != nil {
 		t.Fatal("the stale lock must still exist — never auto-reclaimed")
@@ -104,11 +96,15 @@ func TestReleaseRefusesForeignLock(t *testing.T) {
 	h2.Release()
 }
 
+// A session id is the provider's, so its lock file stays inside the lock
+// directory whatever the id spells.
 func TestSessionIDSanitizedInPath(t *testing.T) {
 	isolate(t)
-	p := lockPath("weird id/../with:stuff")
-	if strings.ContainsAny(p[strings.LastIndex(p, "/")+1:], " /:") {
-		t.Fatalf("lock filename must be sanitized: %q", p)
+	locks := filepath.Join(job.StateDir(), "locks")
+	for _, id := range []string{"weird id/../with:stuff", "../../escape", "/abs"} {
+		if p := lockPath(id); filepath.Dir(p) != locks || strings.ContainsAny(filepath.Base(p), " :") {
+			t.Errorf("lockPath(%q) = %q, want a sanitized file directly in %s", id, p, locks)
+		}
 	}
 }
 

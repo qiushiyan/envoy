@@ -30,7 +30,7 @@ func TestResumeLockConflictFailsFast(t *testing.T) {
 	if res.code != 3 {
 		t.Fatalf("exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
 	}
-	mustContain(t, "stderr", res.stderr, "lock error:", "already has a live turn", "/tmp/live-job")
+	mustContain(t, "stderr", res.stderr, "lock error:", "/tmp/live-job")
 	// envoy -h tells a caller to recognise a dispatch that ran nothing by this.
 	mustNotContain(t, "stdout", res.stdout, "job:")
 	if _, err := os.Stat(outDir); !os.IsNotExist(err) {
@@ -59,14 +59,15 @@ func TestCodexFreshSessionLockCollision(t *testing.T) {
 	if meta["promptStateEvidence"] != "codex thread.started with conflicting session lock" {
 		t.Fatalf("evidence = %v", meta["promptStateEvidence"])
 	}
-	mustContain(t, "result.md", readFile(t, filepath.Join(outDir, "result.md")),
-		"# Turn infra", "another turn already holds")
+	if failure, _ := meta["failure"].(map[string]any); failure["cause"] != "session_conflict" {
+		t.Fatalf("failure record = %v", meta["failure"])
+	}
 	// The session may belong to the other turn, so no continuation of it is
 	// offered; the next move is to collect the job that holds it.
 	// The record keeps the lock file's account of its holder, so the refusal
-	// still names the job to collect whenever this one is read.
+	// still names the job to wait for and collect whenever this one is read.
 	col := runEnvoy(t, e, "collect", outDir)
 	mustContain(t, "collect stdout", col.stdout, "session: fake-session-id", "next: Another turn holds this session id",
-		"already has a live turn", "wait for that job — envoy wait '/tmp/live-job' — then collect it: envoy collect '/tmp/live-job'")
+		"envoy wait '/tmp/live-job'", "envoy collect '/tmp/live-job'")
 	mustNotContain(t, "collect stdout", col.stdout, "resume: envoy run")
 }

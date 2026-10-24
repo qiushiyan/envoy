@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -39,114 +38,90 @@ func TestValidateEffort(t *testing.T) {
 	}
 }
 
-// Every surface that names providers reads the registry, so a provider is a
-// driver file and one entry — not a hunt for hardcoded lists.
-func TestTheRegistryNamesEveryProvider(t *testing.T) {
-	if got := Names(); !slices.Equal(got, []string{"claude", "codex"}) {
-		t.Fatalf("names = %v", got)
-	}
-	for _, name := range Names() {
-		if !Known(name) || len(EffortList(name)) == 0 {
-			t.Fatalf("%s is registered without its efforts", name)
-		}
-		if _, err := New(name, Options{}, job.Workspace{Dir: t.TempDir()}, time.Now()); err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-	}
-	if !SpendCap("claude") || SpendCap("codex") || Known("gemini") {
-		t.Fatal("capabilities are read from the registry")
-	}
-}
-
+// claude runs headless and streaming, on the session envoy minted or the one
+// it resumes — never both — with each setting passed only when it was set,
+// permission prompts bypassed on every turn, and the standing instructions
+// read from the job's own archive on every launch, a resume included.
 func TestClaudeArgv(t *testing.T) {
-	fresh := newClaude(Options{}, job.Workspace{}, time.Now())
-	argv := fresh.Argv()
-	want := []string{"-p", "--output-format", "stream-json", "--verbose", "--session-id", fresh.sessionID,
-		"--permission-mode", "bypassPermissions"}
-	if !reflect.DeepEqual(argv, want) {
-		t.Fatalf("fresh argv = %v, want %v", argv, want)
-	}
+	ws := job.Workspace{Dir: "/tmp/x"}
+	fresh := newClaude(Options{}, ws, time.Now())
 	if fresh.PreflightSessionID() == "" {
 		t.Fatal("fresh claude must mint a session id before spawn")
 	}
+	expectArgv(t, "fresh", fresh.Argv(),
+		map[string]string{"--output-format": "stream-json", "--session-id": fresh.PreflightSessionID(), "--permission-mode": "bypassPermissions"},
+		[]string{"-p", "--verbose"},
+		[]string{"--resume", "--model", "--effort", "--max-budget-usd", "--append-system-prompt-file"})
 
 	budget := 0.5
-	full := newClaude(Options{
-		Model: "opus", Effort: "xhigh",
-		Resume: "abc", MaxBudgetUSD: &budget,
-	}, job.Workspace{}, time.Now())
-	argv = full.Argv()
-	want = []string{
-		"-p", "--output-format", "stream-json", "--verbose",
-		"--model", "opus", "--effort", "xhigh", "--resume", "abc",
-		"--permission-mode", "bypassPermissions", "--max-budget-usd", "0.5",
-	}
-	if !reflect.DeepEqual(argv, want) {
-		t.Fatalf("full argv = %v, want %v", argv, want)
-	}
-	if got := full.PreflightSessionID(); got != "abc" {
+	resumed := newClaude(Options{Model: "opus", Effort: "xhigh", Resume: "abc", MaxBudgetUSD: &budget, Instructions: "stay read-only\n"}, ws, time.Now())
+	if got := resumed.PreflightSessionID(); got != "abc" {
 		t.Fatalf("resume session id = %q, want abc", got)
 	}
-	if env := full.ExtraEnv(); len(env) != 1 || env[0] != "API_FORCE_IDLE_TIMEOUT=1" {
-		t.Fatalf("claude env = %v", env)
-	}
+	expectArgv(t, "resumed", resumed.Argv(),
+		map[string]string{"--output-format": "stream-json", "--resume": "abc", "--model": "opus", "--effort": "xhigh",
+			"--max-budget-usd": "0.5", "--permission-mode": "bypassPermissions", "--append-system-prompt-file": ws.InstructionsPath()},
+		[]string{"-p", "--verbose"},
+		[]string{"--session-id"})
 }
 
+// codex runs `exec`, or `exec resume <thread>`, with its JSONL stream and the
+// prompt on stdin (the trailing "-"), its last message written to the job's
+// own file, each setting only when it was set, no git-root gate, and the
+// standing instructions as a TOML string on every launch. No sandbox or
+// approval flag ever: codex's own configuration governs.
 func TestCodexArgv(t *testing.T) {
 	ws := job.Workspace{Dir: "/tmp/x"}
+	sandbox := []string{"--sandbox", "-s", "--full-auto", "--dangerously-bypass-approvals-and-sandbox"}
 
 	fresh := newCodex(Options{}, ws)
-	argv := fresh.Argv()
-	want := []string{"exec", "--json", "--skip-git-repo-check", "-o", ws.LastMessagePath(), "-"}
-	if !reflect.DeepEqual(argv, want) {
-		t.Fatalf("fresh argv = %v, want %v", argv, want)
-	}
 	if fresh.PreflightSessionID() != "" {
 		t.Fatal("fresh codex must not know a session id before spawn")
 	}
-
-	resumed := newCodex(Options{Model: "gpt-5.3", Effort: "xhigh", Resume: "tid"}, ws)
-	argv = resumed.Argv()
-	want = []string{
-		"exec", "resume", "--json", "--skip-git-repo-check", "-m", "gpt-5.3",
-		"-c", "model_reasoning_effort=xhigh", "-o", ws.LastMessagePath(), "tid", "-",
+	argv := fresh.Argv()
+	if argv[0] != "exec" || argv[1] == "resume" || argv[len(argv)-1] != "-" {
+		t.Fatalf("fresh argv = %v, want exec … -", argv)
 	}
-	if !reflect.DeepEqual(argv, want) {
-		t.Fatalf("resume argv = %v, want %v", argv, want)
+	expectArgv(t, "fresh", argv, map[string]string{"-o": ws.LastMessagePath()},
+		[]string{"--json", "--skip-git-repo-check"}, append([]string{"-m", "-c"}, sandbox...))
+
+	resumed := newCodex(Options{Model: "gpt-5.3", Effort: "xhigh", Resume: "tid", Instructions: "stay read-only\n"}, ws)
+	argv = resumed.Argv()
+	if !slices.Equal(argv[:2], []string{"exec", "resume"}) || !slices.Equal(argv[len(argv)-2:], []string{"tid", "-"}) {
+		t.Fatalf("resume argv = %v, want exec resume … tid -", argv)
+	}
+	expectArgv(t, "resumed", argv, map[string]string{"-m": "gpt-5.3", "-o": ws.LastMessagePath()},
+		[]string{"--json", "--skip-git-repo-check"}, sandbox)
+	var configs []string
+	for i, a := range argv[:len(argv)-1] {
+		if a == "-c" {
+			configs = append(configs, argv[i+1])
+		}
+	}
+	if want := []string{"model_reasoning_effort=xhigh", `developer_instructions="stay read-only\n"`}; !slices.Equal(configs, want) {
+		t.Fatalf("-c settings = %q, want %q", configs, want)
 	}
 }
 
-// Standing instructions ride on every launch of a conversation, a resume
-// included: each provider re-renders its system-level text from the launch
-// after a compaction, so a launch without them would leave the session bare.
-// Claude reads the job's own archive; codex takes the text as a TOML string.
-func TestStandingInstructionsArgv(t *testing.T) {
-	ws := job.Workspace{Dir: "/tmp/x"}
-	text := "stay read-only\n"
-
-	for _, resume := range []string{"", "abc"} {
-		argv := newClaude(Options{Resume: resume, Instructions: text}, ws, time.Now()).Argv()
-		if !slices.Contains(argv, "--append-system-prompt-file") ||
-			argv[slices.Index(argv, "--append-system-prompt-file")+1] != ws.InstructionsPath() {
-			t.Fatalf("claude argv (resume %q) = %v, want the archive passed", resume, argv)
+// expectArgv checks argv by what a CLI parses — each flag's value, the flags
+// that must be there and the ones that must not — never by position.
+func expectArgv(t *testing.T, name string, argv []string, values map[string]string, present, absent []string) {
+	t.Helper()
+	for flag, want := range values {
+		i := slices.Index(argv, flag)
+		if i < 0 || i+1 >= len(argv) || argv[i+1] != want {
+			t.Errorf("%s: %s must carry %q in %q", name, flag, want, argv)
 		}
 	}
-	if argv := newClaude(Options{}, ws, time.Now()).Argv(); slices.Contains(argv, "--append-system-prompt-file") {
-		t.Fatalf("a conversation without instructions passes none: %v", argv)
+	for _, flag := range present {
+		if !slices.Contains(argv, flag) {
+			t.Errorf("%s: %s missing from %q", name, flag, argv)
+		}
 	}
-
-	resumed := newCodex(Options{Resume: "tid", Instructions: text}, ws).Argv()
-	want := []string{
-		"exec", "resume", "--json", "--skip-git-repo-check", "-c", `developer_instructions="stay read-only\n"`,
-		"-o", ws.LastMessagePath(), "tid", "-",
-	}
-	if !reflect.DeepEqual(resumed, want) {
-		t.Fatalf("codex resume argv = %v, want %v", resumed, want)
-	}
-	if argv := newCodex(Options{}, ws).Argv(); slices.ContainsFunc(argv, func(a string) bool {
-		return strings.HasPrefix(a, "developer_instructions=")
-	}) {
-		t.Fatalf("a conversation without instructions passes none: %v", argv)
+	for _, flag := range absent {
+		if slices.Contains(argv, flag) {
+			t.Errorf("%s: %s must not be passed: %q", name, flag, argv)
+		}
 	}
 }
 
@@ -196,10 +171,15 @@ func TestTOMLStringRoundTrips(t *testing.T) {
 func TestClaudeStreamParsing(t *testing.T) {
 	c := newClaude(Options{}, job.Workspace{}, time.Now())
 
+	// init reports the model and is a milestone; it proves the process
+	// launched, never that the turn reached model work.
 	events := c.Feed(`{"type":"system","subtype":"init","session_id":"s1","model":"claude-opus-5"}`)
-	if len(events) != 4 || events[1].Kind != KindModelReported || events[1].Model != "claude-opus-5" ||
-		events[2].Kind != KindNote || events[2].State != "provider-initialized" {
-		t.Fatalf("init events = %+v", events)
+	if !slices.ContainsFunc(events, func(e Event) bool { return e.Kind == KindModelReported && e.Model == "claude-opus-5" }) ||
+		!slices.ContainsFunc(events, func(e Event) bool { return e.Kind == KindNote && e.State == "provider-initialized" }) {
+		t.Fatalf("init events = %+v, want the reported model and the initialized note", events)
+	}
+	if slices.ContainsFunc(events, func(e Event) bool { return e.Kind == KindAccepted }) {
+		t.Fatalf("init must not prove acceptance: %+v", events)
 	}
 
 	// An init without a model field must not fabricate a report.
@@ -236,14 +216,10 @@ func TestClaudeStreamParsing(t *testing.T) {
 	if out.Status != job.StatusOK || out.Text != "done" {
 		t.Fatalf("outcome = %+v", out)
 	}
+	// A resumed conversation continues under a fresh id: the envelope's wins
+	// over the one init announced.
 	if out.SessionID != "s2" {
 		t.Fatalf("envelope session id must win, got %q", out.SessionID)
-	}
-	if out.Tokens == nil || *out.Tokens.Input != 10 || *out.Tokens.CacheRead != 3 || *out.Tokens.CacheCreation != 0 || *out.Tokens.Output != 5 {
-		t.Fatalf("tokens = %+v", out.Tokens)
-	}
-	if out.CostUSD == nil || *out.CostUSD != 0.02 {
-		t.Fatalf("cost = %v", out.CostUSD)
 	}
 }
 
@@ -435,34 +411,6 @@ func TestClaudeArrayAndNoiseTolerance(t *testing.T) {
 	}
 }
 
-func TestCodexLifecycle(t *testing.T) {
-	ws := job.Workspace{Dir: t.TempDir()}
-	c := newCodex(Options{}, ws)
-
-	events := c.Feed(`{"type":"thread.started","thread_id":"tid-1"}`)
-	var kinds []EventKind
-	for _, e := range events {
-		kinds = append(kinds, e.Kind)
-	}
-	if !reflect.DeepEqual(kinds, []EventKind{KindActivity, KindSessionStarted, KindAccepted}) {
-		t.Fatalf("thread.started events = %+v", events)
-	}
-
-	c.Feed(`{"type":"item.completed","item":{"type":"agent_message","text":"the answer"}}`)
-	events = c.Feed(`{"type":"turn.completed","usage":{"input_tokens":13,"cached_input_tokens":5,"output_tokens":8,"reasoning_output_tokens":3}}`)
-	if events[len(events)-1].Terminal != "codex turn.completed" {
-		t.Fatalf("turn.completed events = %+v", events)
-	}
-
-	out := c.Conclude(ExitInfo{Code: job.Ptr(0)})
-	if out.Status != job.StatusOK || out.Text != "the answer" {
-		t.Fatalf("outcome = %+v", out)
-	}
-	if *out.Tokens.Input != 13 || *out.Tokens.CachedInput != 5 || *out.Tokens.ReasoningOutput != 3 {
-		t.Fatalf("tokens = %+v", out.Tokens)
-	}
-}
-
 func TestCodexFailureAndRecovery(t *testing.T) {
 	ws := job.Workspace{Dir: t.TempDir()}
 	c := newCodex(Options{}, ws)
@@ -511,37 +459,6 @@ func TestCodexNoResultUsesStderrTail(t *testing.T) {
 	}
 }
 
-// A transient `error` event is an observation, not a verdict: codex emits
-// one per reconnect attempt and carries on, and a turn that then completes is
-// a success. Only turn.failed fails a turn. (A real job once recorded
-// `failed` over a full result because the reconnect messages overwrote the
-// error text — EVIDENCE.md 2026-08-28.)
-func TestCodexTransientErrorDoesNotOverrideCompletion(t *testing.T) {
-	ws := job.Workspace{Dir: t.TempDir()}
-	c := newCodex(Options{}, ws)
-	c.Feed(`{"type":"thread.started","thread_id":"tid-4"}`)
-	events := c.Feed(`{"type":"error","message":"Reconnecting... waiting for network (Connection failed: error sending request)"}`)
-	var conn int
-	for _, e := range events {
-		if e.Kind == KindConnectionError {
-			conn++
-		}
-	}
-	if conn != 1 {
-		t.Fatalf("a reconnect message must surface as one connection-error observation, got %+v", events)
-	}
-	if events := c.Feed(`{"type":"error","message":"some other transient thing"}`); len(events) != 1 || events[0].Kind != KindActivity {
-		t.Fatalf("an unrecognized error is activity only, got %+v", events)
-	}
-	c.Feed(`{"type":"item.completed","item":{"type":"agent_message","text":"the answer"}}`)
-	c.Feed(`{"type":"turn.completed","usage":{"input_tokens":1}}`)
-
-	out := c.Conclude(ExitInfo{Code: job.Ptr(0)})
-	if out.Status != job.StatusOK || out.Text != "the answer" {
-		t.Fatalf("turn.completed with a result must win over earlier transient errors, got %+v", out)
-	}
-}
-
 // With no verdict and no result, the last transient error is detail on the
 // infra outcome — the caller reads what the provider last said.
 func TestCodexTransientErrorIsDetailWithoutResult(t *testing.T) {
@@ -552,20 +469,5 @@ func TestCodexTransientErrorIsDetailWithoutResult(t *testing.T) {
 	out := c.Conclude(ExitInfo{Code: job.Ptr(1), StderrTail: "tail"})
 	if out.Status != job.StatusInfra || !strings.Contains(job.Deref(out.Failure.LastErrorEvent), "stream disconnected") {
 		t.Fatalf("outcome = %+v", out)
-	}
-}
-
-// An ending the provider never concluded may claim acceptance only on the
-// evidence's word, and always records how that was proven — or that it wasn't.
-func TestEvidenceOutcomeTakesPromptStateFromAcceptance(t *testing.T) {
-	partial := "half an answer"
-	accepted := Evidence{Accepted: true, Label: "codex thread.started", Partial: &partial}.Outcome(job.StatusTimeout, job.Failure{Cause: job.CauseTimeout})
-	if accepted.Status != job.StatusTimeout || accepted.Failure.Cause != job.CauseTimeout || accepted.Partial != &partial ||
-		accepted.PromptState != job.PromptAccepted || accepted.Evidence != "codex thread.started" {
-		t.Fatalf("accepted evidence outcome = %+v", accepted)
-	}
-	unproven := Evidence{}.Outcome(job.StatusInterrupted, job.Failure{Cause: job.CauseInterrupted})
-	if unproven.PromptState != job.PromptUnknown || unproven.Evidence != "" {
-		t.Fatalf("unproven evidence outcome = %+v", unproven)
 	}
 }

@@ -144,10 +144,7 @@ func TestContinuedVoiceBesideAColdVoice(t *testing.T) {
 		t.Fatalf("fan exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
 	}
 	mustContain(t, "fan stdout", res.stdout,
-		"member codex-fake-m: model fake-m · effort (provider default) · dir "+filepath.Join(g, "codex-fake-m")+" · continues "+r1,
-		"member claude-opus: ",
-		"status: ok — all 2 turns returned a result",
-	)
+		"member codex-fake-m: model fake-m", "· continues "+r1, "member claude-opus: ")
 
 	warm := readMeta(t, filepath.Join(g, "codex-fake-m"))
 	mustContain(t, "warm argv", fmt.Sprintf("%v", warm["providerArgv"]), "resume", "sess-consult")
@@ -207,8 +204,6 @@ func TestRosterRefusals(t *testing.T) {
 			[]string{"same conversation twice"}},
 		{[]string{"--with", "@" + writeJob, "--with", "codex"},
 			[]string{"read-only", "envoy run <new-job-name> --with @'" + writeJob + "'"}},
-		{[]string{"--with", "@" + r1, "--with", "codex", "--allow-write"},
-			[]string{"--allow-write needs exactly one --with"}},
 	}
 	for _, c := range cases {
 		dir := filepath.Join(t.TempDir(), "next")
@@ -263,72 +258,51 @@ func TestRunningJobIsNotAdvertisedAsContinuable(t *testing.T) {
 	}
 }
 
-// A warm source's recorded baseline is part of the conversation being
-// continued: it inherits like cwd does, and two warm sources that disagree
-// are refused rather than silently anchored to one of them.
-func TestContinuedVoicesInheritBaselines(t *testing.T) {
+// Continued conversations share one fan-out only on one tree and one anchor:
+// a warm source's recorded cwd and baseline are part of its conversation, and
+// the engine will not choose whose the members run in, so two sources that
+// disagree are refused, and the flag naming the setting resolves it — the
+// fan-out records the choice.
+func TestContinuedVoicesMustShareATreeAndAnAnchor(t *testing.T) {
 	prompt := writePrompt(t, t.TempDir())
-	shared := t.TempDir()
+	shared, cwdA, cwdB := t.TempDir(), t.TempDir(), t.TempDir()
+	for _, c := range []struct {
+		name           string
+		flagsA, flagsB []string
+		refusal        []string
+		resolve        []string
+		field, want    string
+	}{
+		{"baselines", []string{"--cwd", shared, "--baseline", "bl-a"}, []string{"--cwd", shared, "--baseline", "bl-b"},
+			[]string{"different baselines", "--baseline"}, []string{"--baseline", "bl-x"}, "gitBaseline", "bl-x"},
+		{"trees", []string{"--cwd", cwdA}, []string{"--cwd", cwdB},
+			[]string{"different working directories", "pass --cwd"}, []string{"--cwd", cwdA}, "cwd", cwdA},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			a, b := filepath.Join(t.TempDir(), "job-a"), filepath.Join(t.TempDir(), "job-b")
+			eA := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").set("ENVOY_FAKE_SESSION_ID", "sess-"+c.name+"-a")
+			eB := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").set("ENVOY_FAKE_SESSION_ID", "sess-"+c.name+"-b")
+			if r := runEnvoy(t, eA, runArgs(prompt, a, append([]string{"--with", "codex", "--timeout-min", "5"}, c.flagsA...)...)...); r.code != 0 {
+				t.Fatalf("job-a exit = %d\nstderr:\n%s", r.code, r.stderr)
+			}
+			if r := runEnvoy(t, eB, runArgs(prompt, b, append([]string{"--with", "codex", "--timeout-min", "5"}, c.flagsB...)...)...); r.code != 0 {
+				t.Fatalf("job-b exit = %d\nstderr:\n%s", r.code, r.stderr)
+			}
 
-	a := filepath.Join(t.TempDir(), "job-a")
-	eA := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").set("ENVOY_FAKE_SESSION_ID", "sess-bl-a")
-	if r := runEnvoy(t, eA, runArgs(prompt, a, "--with", "codex", "--cwd", shared,
-		"--baseline", "bl-a", "--timeout-min", "5")...); r.code != 0 {
-		t.Fatalf("job-a exit = %d\nstderr:\n%s", r.code, r.stderr)
-	}
-	b := filepath.Join(t.TempDir(), "job-b")
-	eB := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").set("ENVOY_FAKE_SESSION_ID", "sess-bl-b")
-	if r := runEnvoy(t, eB, runArgs(prompt, b, "--with", "codex", "--cwd", shared,
-		"--baseline", "bl-b", "--timeout-min", "5")...); r.code != 0 {
-		t.Fatalf("job-b exit = %d\nstderr:\n%s", r.code, r.stderr)
-	}
+			res := runEnvoy(t, eA, runArgs(prompt, filepath.Join(t.TempDir(), "g0"), "--with", "@"+a, "--with", "@"+b)...)
+			if res.code != 3 {
+				t.Fatalf("diverging %s: exit = %d, want 3\nstderr:\n%s", c.name, res.code, res.stderr)
+			}
+			mustContain(t, "stderr", res.stderr, c.refusal...)
 
-	res := runEnvoy(t, eA, runArgs(prompt, filepath.Join(t.TempDir(), "g0"), "--with", "@"+a, "--with", "@"+b)...)
-	if res.code != 3 {
-		t.Fatalf("divergent baselines: exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
-	}
-	mustContain(t, "stderr", res.stderr, "different baselines", "--baseline")
-
-	// An explicit anchor resolves it.
-	g := filepath.Join(t.TempDir(), "group")
-	res = runEnvoy(t, eA, runArgs(prompt, g, "--with", "@"+a, "--with", "@"+b,
-		"--baseline", "bl-x", "--timeout-min", "5")...)
-	if res.code != 0 {
-		t.Fatalf("explicit-baseline exit = %d\nstderr:\n%s", res.code, res.stderr)
-	}
-	if readGroup(t, g)["gitBaseline"] != "bl-x" {
-		t.Fatalf("gitBaseline = %v, want the explicit bl-x", readGroup(t, g)["gitBaseline"])
-	}
-}
-
-// Two continued conversations from different trees cannot share one fan-out
-// silently: the engine will not choose which tree the members run in.
-func TestContinuedVoicesRefuseMixedTrees(t *testing.T) {
-	prompt := writePrompt(t, t.TempDir())
-	cwdA, cwdB := t.TempDir(), t.TempDir()
-
-	a := filepath.Join(t.TempDir(), "job-a")
-	eA := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").set("ENVOY_FAKE_SESSION_ID", "sess-a")
-	if r := runEnvoy(t, eA, runArgs(prompt, a, "--with", "codex", "--cwd", cwdA, "--timeout-min", "5")...); r.code != 0 {
-		t.Fatalf("job-a exit = %d\nstderr:\n%s", r.code, r.stderr)
-	}
-	b := filepath.Join(t.TempDir(), "job-b")
-	eB := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success").set("ENVOY_FAKE_SESSION_ID", "sess-b")
-	if r := runEnvoy(t, eB, runArgs(prompt, b, "--with", "codex", "--cwd", cwdB, "--timeout-min", "5")...); r.code != 0 {
-		t.Fatalf("job-b exit = %d\nstderr:\n%s", r.code, r.stderr)
-	}
-
-	res := runEnvoy(t, eA, runArgs(prompt, filepath.Join(t.TempDir(), "g0"), "--with", "@"+a, "--with", "@"+b)...)
-	if res.code != 3 {
-		t.Fatalf("mixed-tree exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
-	}
-	mustContain(t, "stderr", res.stderr, "different working directories", "pass --cwd")
-
-	// Naming the tree resolves it.
-	g := filepath.Join(t.TempDir(), "group")
-	res = runEnvoy(t, eA, runArgs(prompt, g, "--with", "@"+a, "--with", "@"+b,
-		"--cwd", cwdA, "--timeout-min", "5")...)
-	if res.code != 0 {
-		t.Fatalf("explicit-cwd exit = %d\nstdout:\n%s\nstderr:\n%s", res.code, res.stdout, res.stderr)
+			g := filepath.Join(t.TempDir(), "group")
+			res = runEnvoy(t, eA, runArgs(prompt, g, append([]string{"--with", "@" + a, "--with", "@" + b, "--timeout-min", "5"}, c.resolve...)...)...)
+			if res.code != 0 {
+				t.Fatalf("resolved %s: exit = %d\nstdout:\n%s\nstderr:\n%s", c.name, res.code, res.stdout, res.stderr)
+			}
+			if got := readGroup(t, g)[c.field]; got != c.want {
+				t.Fatalf("group %s = %v, want the named %s", c.field, got, c.want)
+			}
+		})
 	}
 }

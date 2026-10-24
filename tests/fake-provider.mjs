@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { execSync, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
@@ -24,16 +24,6 @@ if (invocationFile) {
     invocationFile,
     JSON.stringify({ argv: providerArgs, env: process.env, pid: process.pid, cwd: process.cwd(), appendedSystemPrompt }),
   );
-}
-
-// A turn that itself drives envoy: the command runs once, in the provider's
-// own environment, before the turn answers. The hook is cleared for the
-// nested call so its provider does not recurse.
-if (process.env.ENVOY_FAKE_NESTED_CMD) {
-  execSync(process.env.ENVOY_FAKE_NESTED_CMD, {
-    stdio: 'ignore',
-    env: { ...process.env, ENVOY_FAKE_NESTED_CMD: '' },
-  });
 }
 
 if (!['codex', 'claude'].includes(provider)) {
@@ -149,11 +139,12 @@ function emitCodexResult() {
   }
 }
 
-function startGrandchild({ ignoreSigterm = false } = {}) {
+// startGrandchild leaves a stubborn grandchild in the provider's tree: it
+// ignores every polite stop, so only SIGKILL ends it.
+function startGrandchild() {
   const readyFile = process.env.ENVOY_FAKE_GRANDCHILD_READY_FILE;
   const grandchildProgram = [
-    // A stubborn grandchild ignores every polite stop: only SIGKILL ends it.
-    ignoreSigterm ? "process.on('SIGTERM', () => {}); process.on('SIGINT', () => {});" : '',
+    "process.on('SIGTERM', () => {}); process.on('SIGINT', () => {});",
     readyFile ? `require('node:fs').writeFileSync(${JSON.stringify(readyFile)}, 'ready\\n');` : '',
     'setInterval(() => {}, 60_000);',
   ].join(' ');
@@ -186,18 +177,9 @@ if (provider === 'claude') {
         }
       }
     }
-    const ending = process.env.ENVOY_FAKE_USAGE_END ?? 'success';
     const result = records.at(-1);
     result.session_id = claudeArgSessionId();
-    if (ending === 'missing') delete result.usage;
-    if (ending === 'budget') result.subtype = 'error_max_budget_usd';
-    if (ending === 'crash') {
-      result.subtype = 'error_during_execution';
-      result.is_error = true;
-      result.usage = { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0 };
-    }
-    if (ending === 'hang') await sleep(60000);
-    if (ending !== 'eof') process.stdout.write(JSON.stringify(result));
+    process.stdout.write(JSON.stringify(result));
   } else if (scenario === 'success') {
     emit(claudeInit());
     emit(claudeAssistant('claude is finishing the fake task'));
@@ -216,29 +198,18 @@ if (provider === 'claude') {
     process.stdout.write(assistant.subarray(0, markerAt + 1));
     await sleep(20);
     process.stdout.write(assistant.subarray(markerAt + 1));
+    // The envelope splits inside the marker too when the final text carries
+    // one, so the answer itself crosses a read boundary mid-rune.
     const result = Buffer.from(JSON.stringify(claudeResult()));
-    const splitAt = Math.floor(result.length / 2);
+    const resultMarkerAt = result.indexOf(marker);
+    const splitAt = resultMarkerAt >= 0 ? resultMarkerAt + 1 : Math.floor(result.length / 2);
     process.stdout.write(result.subarray(0, splitAt));
     await sleep(20);
     process.stdout.write(result.subarray(splitAt));
-  } else if (scenario === 'success-with-stubborn-grandchild') {
-    emit(claudeInit());
-    emit(claudeAssistant('claude completed before residual cleanup'));
-    emit(claudeResult());
-    startGrandchild({ ignoreSigterm: true });
-    const readyFile = process.env.ENVOY_FAKE_GRANDCHILD_READY_FILE;
-    if (readyFile) {
-      while (!fs.existsSync(readyFile)) await sleep(5);
-    }
-  } else if (scenario === 'terminal-success-then-hang') {
-    emit(claudeInit());
-    emit(claudeAssistant('claude completed before its CLI stalled'));
-    emit(claudeResult());
-    setInterval(() => {}, 60_000);
   } else if (scenario === 'hang-with-stubborn-grandchild-only') {
     emit(claudeInit());
     emit(claudeAssistant('useful claude work before timeout'));
-    startGrandchild({ ignoreSigterm: true });
+    startGrandchild();
     setInterval(() => {}, 60_000);
   } else if (scenario === 'init-only-hang') {
     emit(claudeInit());
@@ -320,7 +291,7 @@ if (provider === 'claude') {
 } else if (scenario === 'success-with-stubborn-grandchild') {
   emitCodexStart();
   emitCodexResult();
-  startGrandchild({ ignoreSigterm: true });
+  startGrandchild();
   const readyFile = process.env.ENVOY_FAKE_GRANDCHILD_READY_FILE;
   if (readyFile) {
     while (!fs.existsSync(readyFile)) await sleep(5);
@@ -347,7 +318,7 @@ if (provider === 'claude') {
   setInterval(() => {}, 60_000);
 } else if (scenario === 'hang-with-stubborn-grandchild-only') {
   emitCodexStart();
-  startGrandchild({ ignoreSigterm: true });
+  startGrandchild();
   setInterval(() => {}, 60_000);
 } else {
   process.stderr.write(`unsupported fake codex scenario: ${scenario}\n`);

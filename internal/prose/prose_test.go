@@ -1,3 +1,7 @@
+// These tests own the bytes and the relations of the sentences envoy
+// addresses to its caller; the surfaces that print them assert only that they
+// arrived (tests/integration_test.go).
+
 package prose
 
 import (
@@ -41,7 +45,7 @@ func TestContextUsage(t *testing.T) {
 func TestTimeoutCarriesTheStreamItObserved(t *testing.T) {
 	quiet := timedOut(30, "codex", job.StreamSample{Events: 2, LastEvent: "turn.started", QuietMs: (29*time.Minute + 58*time.Second).Milliseconds()})
 	for _, want := range []string{
-		"The 30-minute wall-clock cap ended this codex turn.",
+		"30-minute", "codex turn",
 		"not evidence the provider hung",
 		"the stream had been quiet for 29m, after 2 events (last: turn.started)",
 	} {
@@ -188,14 +192,74 @@ func TestRecoveryCoversEveryPromptState(t *testing.T) {
 	}
 }
 
-func TestStatusLineGlossesNonOK(t *testing.T) {
-	if got := StatusLine(job.StatusOK); got != "ok" {
-		t.Fatalf("ok needs no gloss, got %q", got)
+// Every non-ok status carries what it rules in or out, so a caller acting on
+// one word needs no table of envoy's statuses. This is where the gloss bytes
+// are pinned; a surface that prints a status line asserts the status word.
+func TestStatusLineGlossesEveryNonOKStatus(t *testing.T) {
+	for status, want := range map[string]string{
+		job.StatusOK:          "ok",
+		job.StatusFailed:      "failed — the provider ran and reported a failure",
+		job.StatusInfra:       "infra — envoy or the environment failed, not the model",
+		job.StatusTimeout:     "timeout — the wall-clock cap elapsed, which is not evidence the provider hung",
+		job.StatusInterrupted: "interrupted — a signal stopped the turn",
+		job.StatusAbandoned:   "abandoned — the process ended without publishing a result",
+	} {
+		if got := StatusLine(status); got != want {
+			t.Errorf("StatusLine(%s) = %q, want %q", status, got, want)
+		}
 	}
-	for _, status := range []string{job.StatusFailed, job.StatusInfra, job.StatusTimeout, job.StatusInterrupted, job.StatusAbandoned} {
-		got := StatusLine(status)
-		if !strings.HasPrefix(got, status+" — ") {
-			t.Fatalf("%s must carry a gloss, got %q", status, got)
+}
+
+// A refusal names the classifier's category and reason and nothing to fix:
+// the record does not hold what was matched, so a remedy would be a guess,
+// and one aimed at the prompt would contradict the resume beside it. Its
+// prescription is exactly the one its prompt state licenses.
+func TestARefusalCarriesNoRemedy(t *testing.T) {
+	const resume, redispatch = "RESUME", "REDISPATCH"
+	refusal := &job.Failure{Cause: job.CauseProviderRefusal, Code: job.Ptr("cyber"), Message: job.Ptr("flagged")}
+	for _, state := range []string{job.PromptAccepted, job.PromptNotStarted, job.PromptUnknown} {
+		refused := Recovery(&job.Meta{Provider: "claude", PromptState: state, Failure: refusal}, resume, redispatch, "")
+		plain := Recovery(&job.Meta{Provider: "claude", PromptState: state}, resume, redispatch, "")
+		if refused != plain {
+			t.Errorf("%s: a refusal changed the prescription:\n%s\nwant\n%s", state, refused, plain)
+		}
+	}
+}
+
+// A held session is refused with who holds it and the one safe step: a live
+// holder is waited for and collected; a holder not provably live is inspected
+// and never taken over, since its provider may still be running.
+func TestSessionLockSaysWhoHoldsItAndTheOneSafeStep(t *testing.T) {
+	holder := &job.LockHolder{Pid: 4242, StartedAt: "2026-10-01T00:00:00.000Z", Dir: "/jobs/j1"}
+	for _, c := range []struct {
+		name     string
+		conflict job.LockConflict
+		want     []string
+		not      []string
+	}{
+		{"live holder", job.LockConflict{SessionID: "s1", Holder: holder, HolderLive: true},
+			[]string{"session s1 already has a live turn", "pid 4242", "envoy wait '/jobs/j1'", "envoy collect '/jobs/j1'"},
+			[]string{"Automatic takeover", "remove the stale lock"}},
+		{"holder not provably live", job.LockConflict{SessionID: "s1", LockPath: "/locks/s1.lock", Holder: holder},
+			[]string{"session s1 has an existing lock whose runner is not provably live (/locks/s1.lock)",
+				"Automatic takeover is refused", "envoy collect '/jobs/j1'", "remove the stale lock and retry"},
+			[]string{"already has a live turn", "envoy wait"}},
+		{"unreadable lock file", job.LockConflict{SessionID: "s1", LockPath: "/locks/s1.lock"},
+			[]string{"Automatic takeover is refused", "remove the stale lock and retry"},
+			[]string{"envoy collect"}},
+		{"a failure that was not a conflict", job.LockConflict{SessionID: "s1", Error: job.Ptr("permission denied")},
+			[]string{"permission denied"}, []string{"Automatic takeover", "envoy collect"}},
+	} {
+		got := SessionLock(&c.conflict)
+		for _, w := range c.want {
+			if !strings.Contains(got, w) {
+				t.Errorf("%s: %q is missing %q", c.name, got, w)
+			}
+		}
+		for _, n := range c.not {
+			if strings.Contains(got, n) {
+				t.Errorf("%s: %q must not say %q", c.name, got, n)
+			}
 		}
 	}
 }
@@ -347,14 +411,12 @@ func TestContinueVocabulary(t *testing.T) {
 		}
 	}
 
-	// A taken path is refused with the way to read what holds it, and a
-	// write conversation is kept whole by continuing alone.
-	if got := JobExists("/jobs/r1"); !strings.Contains(got, "a directory holds one job") || !strings.Contains(got, "envoy collect '/jobs/r1'") {
-		t.Fatalf("JobExists = %q", got)
-	}
-	// A held name says nothing ran, that collecting the name reads the other
-	// job, and what frees it — with the collect command only where collecting
-	// is what frees it, and removal only of a directory seen to be empty.
+}
+
+// A held name says nothing ran, that collecting the name reads the other job,
+// and what frees it — with the collect command only where collecting is what
+// frees it, and removal only of a directory seen to be empty.
+func TestNameHeldSaysWhatHoldsTheNameAndWhatFreesIt(t *testing.T) {
 	for _, c := range []struct {
 		hold NameHold
 		want []string
@@ -389,8 +451,5 @@ func TestContinueVocabulary(t *testing.T) {
 				t.Fatalf("NameHeld(%+v) = %q, must not say %q", c.hold, got, n)
 			}
 		}
-	}
-	if got := WriteSourceInRoster("/jobs/w", 60); !strings.Contains(got, "--allow-write") || !strings.Contains(got, ContinueCommand("/jobs/w", 60)) {
-		t.Fatalf("WriteSourceInRoster = %q", got)
 	}
 }

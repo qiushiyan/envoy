@@ -40,9 +40,9 @@ func TestCollectOkBlockDoesNotGuessAtModelSubstitution(t *testing.T) {
 	mustNotContain(t, "ok block", collected.stdout,
 		"provider: claude · model", "fake-claude-model")
 
+	// The observation is there for anyone who asks.
 	status := runEnvoy(t, e, "collect", "--status-only", outDir)
-	mustContain(t, "status-only stdout", status.stdout,
-		"provider: claude · model opus (ran fake-claude-model) · effort (provider default)")
+	mustContain(t, "status-only stdout", status.stdout, "model opus", "fake-claude-model")
 }
 
 func TestCollectStampsAndPendingDiscovers(t *testing.T) {
@@ -66,13 +66,7 @@ func TestCollectStampsAndPendingDiscovers(t *testing.T) {
 	if collected.code != 0 {
 		t.Fatalf("collect = %d\n%s", collected.code, collected.stderr)
 	}
-	mustContain(t, "collect stdout", collected.stdout,
-		"job: "+outDir,
-		"status: ok",
-		"resume: envoy run <new-job-name> --with @'"+outDir+"' --timeout-min 5 --prompt-file <your-follow-up.md>",
-		"--- result.md ---",
-		"fake provider result",
-		"next: result.md above is this turn's return value")
+	mustContain(t, "collect stdout", collected.stdout, "fake provider result")
 
 	meta := readMeta(t, outDir)
 	if meta["collectedAt"] == nil {
@@ -171,22 +165,16 @@ func TestPendingSeparatesAnUnreadableStoreFromAnEmptyOne(t *testing.T) {
 	// the derived default may be waved through: a typo must refuse, or the
 	// listing answers a question about a project the caller never asked about.
 	absent := filepath.Join(t.TempDir(), "never-dispatched")
-	for _, cmd := range []string{"pending"} {
-		res := runEnvoy(t, e, cmd, "--base", absent)
-		if res.code != 2 {
-			t.Fatalf("%s on an explicit --base that does not exist must refuse, got exit %d\nstdout:\n%s", cmd, res.code, res.stdout)
-		}
-		mustContain(t, cmd+" stderr", res.stderr, "could not be read", "not the same as an empty store")
+	res := runEnvoy(t, e, "pending", "--base", absent)
+	if res.code != 2 {
+		t.Fatalf("pending on an explicit --base that does not exist must refuse, got exit %d\nstdout:\n%s", res.code, res.stdout)
 	}
+	mustContain(t, "pending stderr", res.stderr, "could not be read", "not the same as an empty store")
 
 	// The derived default store is created by the first dispatch, so its
 	// absence is exactly how a project looks before it has ever run a turn.
-	project := t.TempDir()
-	for _, cmd := range []string{"pending"} {
-		res := runEnvoyIn(t, e, project, cmd)
-		if res.code != 0 {
-			t.Fatalf("%s in a project that never dispatched is a normal first run: exit %d\n%s", cmd, res.code, res.stderr)
-		}
+	if res := runEnvoyIn(t, e, t.TempDir(), "pending"); res.code != 0 {
+		t.Fatalf("pending in a project that never dispatched is a normal first run: exit %d\n%s", res.code, res.stderr)
 	}
 
 	sealed := filepath.Join(t.TempDir(), "sealed")
@@ -194,18 +182,12 @@ func TestPendingSeparatesAnUnreadableStoreFromAnEmptyOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chmod(sealed, 0o755) })
-	for _, cmd := range []string{"pending"} {
-		res := runEnvoy(t, e, cmd, "--base", sealed)
-		if res.code != 2 {
-			t.Fatalf("%s over an unreadable store must fail as infra, got exit %d\nstdout:\n%s", cmd, res.code, res.stdout)
-		}
-		mustContain(t, cmd+" stderr", res.stderr, "could not be read", "not the same as an empty store")
-		for _, forbidden := range []string{"no recovery action is needed"} {
-			if strings.Contains(res.stdout, forbidden) {
-				t.Fatalf("%s must not claim %q over a store it could not read:\n%s", cmd, forbidden, res.stdout)
-			}
-		}
+	res = runEnvoy(t, e, "pending", "--base", sealed)
+	if res.code != 2 {
+		t.Fatalf("pending over an unreadable store must fail as infra, got exit %d\nstdout:\n%s", res.code, res.stdout)
 	}
+	mustContain(t, "pending stderr", res.stderr, "could not be read", "not the same as an empty store")
+	mustNotContain(t, "pending stdout", res.stdout, "no recovery action is needed")
 }
 
 func TestCollectReconcilesAbandonedJob(t *testing.T) {
@@ -247,7 +229,8 @@ func TestCollectReconcilesAbandonedJob(t *testing.T) {
 
 // --status-only reads coordinates without paying for the result body, and
 // deliberately stamps nothing: the result has not been delivered, so pending
-// discovery must keep listing the job.
+// discovery must keep listing the job. The job is named after the option
+// terminator, which the documented grammar accepts.
 func TestCollectStatusOnlyLeavesTheResultOwed(t *testing.T) {
 	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
 	outDir := filepath.Join(t.TempDir(), "job")
@@ -256,7 +239,7 @@ func TestCollectStatusOnlyLeavesTheResultOwed(t *testing.T) {
 		t.Fatalf("turn exit = %d\nstderr:\n%s", r.code, r.stderr)
 	}
 
-	res := runEnvoy(t, e, "collect", "--status-only", outDir)
+	res := runEnvoy(t, e, "collect", "--status-only", "--", outDir)
 	if res.code != 0 {
 		t.Fatalf("exit = %d\nstderr:\n%s", res.code, res.stderr)
 	}
@@ -360,22 +343,6 @@ func TestCollectDoesNotStampAnOkTurnWithoutItsResult(t *testing.T) {
 			t.Fatalf("%v stamped a result it never delivered", args)
 		}
 	}
-}
-
-// The option terminator is part of the documented grammar: a job whose
-// spelling starts with a dash can only be named after `--`.
-func TestCollectAcceptsTheOptionTerminator(t *testing.T) {
-	e := newEnv(t).set("ENVOY_FAKE_SCENARIO", "success")
-	outDir := filepath.Join(t.TempDir(), "job")
-	prompt := writePrompt(t, t.TempDir())
-	if r := runEnvoy(t, e, runArgs(prompt, outDir, "--with", "codex", "--timeout-min", "5")...); r.code != 0 {
-		t.Fatalf("turn exit = %d\nstderr:\n%s", r.code, r.stderr)
-	}
-	res := runEnvoy(t, e, "collect", "--status-only", "--", outDir)
-	if res.code != 0 {
-		t.Fatalf("collect -- <job>: exit = %d\nstderr:\n%s", res.code, res.stderr)
-	}
-	mustContain(t, "stdout", res.stdout, "job: "+outDir, "status: ok")
 }
 
 // A prompt the provider never received is safe to send again — but only as
