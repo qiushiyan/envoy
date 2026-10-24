@@ -46,7 +46,7 @@ type RunCmd struct {
 	Cwd              string   `placeholder:"DIR" help:"The directory the session works in, instead of the current one (or a continued job's own)."`
 	Baseline         string   `placeholder:"SHA" help:"The commit collect diffs the working tree against; a write turn defaults to HEAD."`
 	AllowWrite       bool     `help:"Record that a single voice will edit files, so collect diffs its work. It restricts nothing; see What the flags cannot tell you."`
-	MaxBudgetUSD     *float64 `name:"max-budget-usd" placeholder:"USD" help:"Spend cap for a single claude voice: the safety net of a program dispatching unattended turns."`
+	MaxBudgetUSD     *float64 `name:"max-budget-usd" placeholder:"USD" help:"Spend cap for a single claude voice, the safety net of a program dispatching unattended turns; refused for a codex voice or a fan-out, which have no budget flag."`
 }
 
 // Run is the waiter: the dispatch runs in a process of its own, which parses

@@ -35,8 +35,9 @@ Flags:
                                   defaults to HEAD.
       --allow-write               Record that a single voice will edit files, so collect diffs its
                                   work. It restricts nothing; see What the flags cannot tell you.
-      --max-budget-usd=USD        Spend cap for a single claude voice: the safety net of a program
-                                  dispatching unattended turns.
+      --max-budget-usd=USD        Spend cap for a single claude voice, the safety net of a program
+                                  dispatching unattended turns; refused for a codex voice or a
+                                  fan-out, which have no budget flag.
 
 Inherited flags:
   -h, --help                      Show context-sensitive help.
@@ -106,8 +107,8 @@ What the flags cannot tell you:
   permission prompts bypassed, since a headless turn has no one to answer them,
   and codex under its own configuration. --allow-write records the intent and
   anchors the diff; any turn can still write, so "analyse only, change nothing"
-  belongs in the prompt. A fan-out is read-only: its members share one working
-  tree.
+  belongs in the prompt. A fan-out is refused --allow-write, since its members
+  share one working tree; that refusal records intent too, and enforces nothing.
 
   Continuing. A finished job that holds a session prints `resume:`, the exact
   command that continues its conversation as a new job — for a fan-out, the

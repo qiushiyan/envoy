@@ -136,8 +136,8 @@ Write intent, not a sandbox. envoy restricts no session: claude runs with its
 permission prompts bypassed, since a headless turn has no one to answer them,
 and codex under its own configuration. --allow-write records the intent and
 anchors the diff; any turn can still write, so "analyse only, change nothing"
-belongs in the prompt. A fan-out is read-only: its members share one working
-tree.
+belongs in the prompt. A fan-out is refused --allow-write, since its members
+share one working tree; that refusal records intent too, and enforces nothing.
 
 Continuing. A finished job that holds a session prints ` + "`resume:`" + `, the exact
 command that continues its conversation as a new job — for a fan-out, the
@@ -211,10 +211,13 @@ that produced one, and a next: line naming the one action to take. A fan-out
 prints a section per member under one status. A finished job that holds a
 session also prints resume:, the command that continues its conversation.
 
-Collecting marks the job collected once the block has reached you;
---status-only never does, and neither do wait or pending. Collect exits 0
-whenever it printed the job, whatever the job's status: read the block, not
-the code.`
+Collecting a finished job marks it collected once the block has reached you;
+--status-only never does, and neither do wait or pending. A running job prints
+its status and stop: command, and stays uncollected.
+
+The exit codes below are a dispatch's. Collect exits 0 whenever it printed the
+job, whatever the job's status — read the block, not the code — and non-zero
+only when it could not print it.`
 }
 
 func (CollectCmd) HelpSections() []clikit.Section {
@@ -235,8 +238,9 @@ func (WaitCmd) HelpSections() []clikit.Section {
 
 func (PendingCmd) Help() string {
 	return `Pending is the recovery index for a completion you may have missed, after a
-compaction, a crash or a restart: it lists each job of yours still running or
-finished but uncollected, with why it is listed and the next action. It prints
-no results and marks nothing collected. A store that cannot be read is
-reported as such, never as a store with no jobs.`
+compaction, a crash or a restart. It lists every job in this project's store
+that ended without being collected, whoever dispatched it, and each job of
+yours still running, with why it is listed and the next action. It prints no
+results and marks nothing collected. A store that cannot be read is reported
+as such, never as a store with no jobs.`
 }

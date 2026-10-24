@@ -3,10 +3,11 @@ Usage: envoy pending [flags]
 List the jobs still needing attention after a missed completion.
 
 Pending is the recovery index for a completion you may have missed, after a
-compaction, a crash or a restart: it lists each job of yours still running or
-finished but uncollected, with why it is listed and the next action. It prints
-no results and marks nothing collected. A store that cannot be read is
-reported as such, never as a store with no jobs.
+compaction, a crash or a restart. It lists every job in this project's store
+that ended without being collected, whoever dispatched it, and each job of
+yours still running, with why it is listed and the next action. It prints no
+results and marks nothing collected. A store that cannot be read is reported
+as such, never as a store with no jobs.
 
 Flags:
       --base=DIR    The job store to search, instead of the current project's.
