@@ -68,7 +68,10 @@ means to every caller without a generation of its own. Either one holds the
 name while **undelivered** — running, or terminal and uncollected, the meaning
 `collectedAt` has — against a caller it shares that meaning with: the same
 caller, or either side having no identity. Callers that each have an identity
-never contend. `collect.NameHold` is the one definition of a hold.
+never contend. `collect.NameHold` is the one definition of a hold, deciding from
+one read of the job's records both what it still owes and whom it binds; the
+sharing rule is `job.SharesName`, which `pending` applies to the running jobs
+it lists.
 
 A job holds on evidence, never on absence, and each edge is decided by what
 can be observed:
@@ -90,7 +93,9 @@ can be observed:
 - **A store that exists but cannot be listed** is an error, never generation
   zero, and so is a generation newer than the caller's selected one whose
   record is there and cannot be read: either would let an older job answer to
-  the name.
+  the name. Dispatch, a continued voice (`--with @<name>`) and every read stop
+  on either with exit 2 — the store's failure, which no change to the command
+  fixes.
 - **A reservation's first moments** have no record, so it cannot say whose it
   is, and a second caller dispatching the same name in that instant is refused
   rather than guessed about. This window is accepted.

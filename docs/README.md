@@ -134,8 +134,8 @@ repository and win where they narrow it.
   `':(glob)docs/*.md' CLAUDE.md README.md`.
 - **Paths** are written from the repository root.
 - **The protected set:** the caller-facing strings in `internal/prose` and the
-  `envoy -h` page are a contract integration tests assert exactly, so a doc
-  quotes them verbatim or not at all; the dated measurements in `EVIDENCE.md`;
+  `envoy -h` page are a contract the tests pin exactly, so a doc quotes them
+  verbatim or not at all; the dated measurements in `EVIDENCE.md`;
   the commands in `CLAUDE.md` § Commands.
 - **Own check:** no live doc presents a retired surface as current.
 

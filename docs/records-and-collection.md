@@ -72,8 +72,7 @@ Only a replaced field moves a schema. An optional observation (`usage`,
 eligibility keep their meaning, and readers treat an absent field as
 unavailable. Bumping for an addition would refuse compatible jobs and force
 callers to change their schema pins; the engine version (`envoy version`)
-identifies feature availability. `TestUsageSchemaCompatibility` pins this
-boundary.
+identifies feature availability.
 
 A field whose absence means something moves the schema of the records that
 carry it. A record with standing instructions is schema 11 — schema 10 with a
@@ -93,6 +92,11 @@ succeeded. `--status-only`, `pending` and `envoy wait` never stamp, since they
 read coordinates without delivering anything, and neither does a collect of an
 ok turn whose `result.md` will not read: the result stays owed and `pending`
 keeps listing the job.
+
+Everything a block says is read before a line of it is written: a turn's
+processes are probed once, an abandoned turn is reconciled on that one
+observation, and a fan-out's header is derived from the members its sections
+describe, so no part of a block describes a different reading than another.
 
 `pending` lists what a caller may still be owed: an uncollected terminal job, a
 record that will not read, a turn whose runner is gone, and a job still

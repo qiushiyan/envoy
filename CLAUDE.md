@@ -40,7 +40,7 @@ Flow: `cmd/envoy` (flags only; `run` goes through `internal/detach`, which runs 
 
 ## The Output Contract
 
-Stdout blocks, progress vocabulary, recovery prose, exit codes (0 ok · 1 failed · 2 infra · 3 usage · 4 timeout · 5 interrupted · 6 partial, fan-out only), and the job-dir file set are a **caller interface, consumed by an AI agent** — the prose is a prompt surface, and integration tests assert exact strings. Changing wording is a contract change, not cosmetics. `envoy -h` is the page the agent reads before driving the engine; `TestHelpIsSelfSufficient` pins what it must teach.
+Stdout blocks, progress vocabulary, recovery prose, exit codes (0 ok · 1 failed · 2 infra · 3 usage · 4 timeout · 5 interrupted · 6 partial, fan-out only), and the job-dir file set are a **caller interface, consumed by an AI agent** — the prose is a prompt surface: `internal/prose`'s tests pin each sentence's exact bytes once, and the integration tests assert the tokens a caller acts on — a command, a status word, a path — wherever the sentence reaches it. Changing wording is a contract change, not cosmetics. `envoy -h` is the page the agent reads before driving the engine; `TestHelpIsSelfSufficient` pins what it must teach.
 
 Three rules govern that prose, all enforced in `internal/prose`:
 
