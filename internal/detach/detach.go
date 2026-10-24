@@ -44,14 +44,12 @@ const (
 // first, its exit code last.
 const controlFd = 3
 
-// Dispatch is the waiter: it runs the dispatch with runArgs in a detached
-// process and returns that dispatch's exit code. A dispatch whose process
-// cannot be started dispatches nothing: there is one way a turn runs.
-func Dispatch(runArgs []string, stdout, stderr io.Writer) int {
-	jobRef := ""
-	if len(runArgs) > 0 && !strings.HasPrefix(runArgs[0], "-") {
-		jobRef = runArgs[0]
-	}
+// Dispatch is the waiter: it runs the dispatch with runArgs, the words of the
+// run as the caller gave them, in a detached process and returns that
+// dispatch's exit code. jobRef is the job they name, for what the waiter says
+// when it stops waiting. A dispatch whose process cannot be started
+// dispatches nothing: there is one way a turn runs.
+func Dispatch(jobRef string, runArgs []string, stdout, stderr io.Writer) int {
 	notStarted := func(err error) int {
 		fmt.Fprintln(stderr, prose.DetachFailed(err))
 		return job.ExitInfra

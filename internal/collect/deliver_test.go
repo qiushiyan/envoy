@@ -33,7 +33,7 @@ func TestCollectStampsOnlyWhatReachedTheCaller(t *testing.T) {
 	os.WriteFile(ws.ResultPath(), []byte("the answer"), 0o644)
 
 	var errBuf bytes.Buffer
-	if code := Collect(dir, ModeFull, failingWriter{}, &errBuf); code == 0 {
+	if code, _ := Collect(dir, ModeFull, failingWriter{}, &errBuf); code == 0 {
 		t.Fatalf("collect into a dead writer reported success\nstderr:\n%s", errBuf.String())
 	}
 	got, err := job.ReadMeta(dir)
@@ -45,7 +45,7 @@ func TestCollectStampsOnlyWhatReachedTheCaller(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if code := Collect(dir, ModeFull, &out, &errBuf); code != 0 {
+	if code, _ := Collect(dir, ModeFull, &out, &errBuf); code != 0 {
 		t.Fatalf("collect = %d\n%s", code, errBuf.String())
 	}
 	if got, _ := job.ReadMeta(dir); got.CollectedAt == nil {

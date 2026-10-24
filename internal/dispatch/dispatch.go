@@ -87,75 +87,71 @@ func resolveTimeout(timeoutMin float64, noTimeout bool) (float64, error) {
 	return timeoutMin, nil
 }
 
-func usageError(w io.Writer, format string, args ...any) int {
-	fmt.Fprintf(w, "usage error: "+format+"\n", args...)
-	return job.ExitUsage
-}
-
-// Run validates the request, reserves the job, and runs it to terminal state,
-// returning the process exit code.
-func Run(req Request) int {
-	stdout, stderr := req.Stdout, req.Stderr
-
+// Run validates the request, reserves the job, and runs it to terminal state.
+// code is the process exit code. A refusal made before the job could run —
+// the caller's mistake (3) or the environment's (2) — comes back as err,
+// unprinted, for the command line to report; what the job's own run reports,
+// it has already printed, and err is nil.
+func Run(req Request) (code int, err error) {
 	invocationCwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintf(stderr, "envoy: cannot determine cwd: %s\n", err)
-		return job.ExitInfra
+		return job.ExitInfra, fmt.Errorf("cannot determine cwd: %s", err)
 	}
 	dir, err := job.ResolveName(req.Job, invocationCwd)
 	if err != nil {
-		return usageError(stderr, "%s", err)
+		return job.ExitUsage, err
 	}
+	// The command line requires a voice before it calls; the check keeps a
+	// request without one from reaching the roster, which indexes its first.
 	if len(req.With) == 0 {
-		return usageError(stderr, "%s", prose.RunNeedsVoice())
+		return job.ExitUsage, errors.New(prose.RunNeedsVoice())
 	}
 	// A default the caller named must read even if every voice overrides it:
 	// a mistyped path is a mistake whatever the roster does with it.
 	if req.PromptFile != "" {
 		if err := promptReadable(req.PromptFile); err != nil {
-			return usageError(stderr, "prompt file %s", err)
+			return job.ExitUsage, fmt.Errorf("prompt file %s", err)
 		}
 	}
 	timeoutMin, err := resolveTimeout(req.TimeoutMin, req.NoTimeout)
 	if err != nil {
-		return usageError(stderr, "%s", err)
+		return job.ExitUsage, err
 	}
 
 	instructions := ""
 	if req.InstructionsFile != "" {
 		if instructions, err = readInstructions(req.InstructionsFile); err != nil {
-			return usageError(stderr, "instructions file %s", err)
+			return job.ExitUsage, fmt.Errorf("instructions file %s", err)
 		}
 	}
 
 	caller := job.CallerFromEnv()
 	turns, err := resolveTurns(req, instructions, invocationCwd, caller, timeoutMin)
 	if msg, storeFailed := collect.Unresolvable(err); storeFailed {
-		fmt.Fprintf(stderr, "envoy: %s\n", msg)
-		return job.ExitInfra
+		return job.ExitInfra, errors.New(msg)
 	}
 	if err != nil {
-		return usageError(stderr, "%s", err)
+		return job.ExitUsage, err
 	}
 	// Every turn's prompt is checked before the name is reserved, so a
 	// member's unreadable file refuses the whole dispatch rather than
 	// starting its siblings.
 	for _, t := range turns {
 		if err := promptReadable(t.Options.PromptFile); err != nil {
-			return usageError(stderr, "prompt file %s", err)
+			return job.ExitUsage, fmt.Errorf("prompt file %s", err)
 		}
 	}
 	if req.MaxBudgetUSD != nil {
 		if len(turns) != 1 || !provider.SpendCap(turns[0].Options.Provider) {
-			return usageError(stderr, "%s", spendCapRefusal())
+			return job.ExitUsage, errors.New(spendCapRefusal())
 		}
 		if math.IsNaN(*req.MaxBudgetUSD) || math.IsInf(*req.MaxBudgetUSD, 0) || *req.MaxBudgetUSD <= 0 {
-			return usageError(stderr, "--max-budget-usd must be a positive number")
+			return job.ExitUsage, errors.New("--max-budget-usd must be a positive number")
 		}
 	}
 	cwd := turns[0].Options.Cwd
 	if info, err := os.Stat(cwd); err != nil || !info.IsDir() {
-		return usageError(stderr, "cwd not found: %s", cwd)
+		return job.ExitUsage, fmt.Errorf("cwd not found: %s", cwd)
 	}
 
 	// The name is reserved last, after every refusal that needs no
@@ -163,15 +159,13 @@ func Run(req Request) int {
 	// job wrote its first record.
 	dir, refusal, err := reserve(req.Job, dir, caller)
 	if refusal != "" {
-		return usageError(stderr, "%s", refusal)
+		return job.ExitUsage, errors.New(refusal)
 	}
 	if msg, ok := collect.Unresolvable(err); ok {
-		fmt.Fprintf(stderr, "envoy: %s\n", msg)
-		return job.ExitInfra
+		return job.ExitInfra, errors.New(msg)
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "envoy: cannot create job dir: %s\n", err)
-		return job.ExitInfra
+		return job.ExitInfra, fmt.Errorf("cannot create job dir: %s", err)
 	}
 
 	// Cardinality decides layout only: one voice runs flat in the job
@@ -179,14 +173,14 @@ func Run(req Request) int {
 	if len(turns) == 1 {
 		opts := turns[0].Options
 		opts.OutDir = dir
-		opts.Stdout, opts.Stderr = stdout, stderr
+		opts.Stdout, opts.Stderr = req.Stdout, req.Stderr
 		code := runner.Run(opts).ExitCode
 		releaseIfUnstarted(dir)
-		return code
+		return code, nil
 	}
-	code := fan.Run(fan.Options{Turns: turns, OutDir: dir, Stdout: stdout, Stderr: stderr})
+	code = fan.Run(fan.Options{Turns: turns, OutDir: dir, Stdout: req.Stdout, Stderr: req.Stderr})
 	releaseIfUnstarted(dir)
-	return code
+	return code, nil
 }
 
 // reserve claims the directory this dispatch runs in. A path is an identity

@@ -1,0 +1,16 @@
+Usage: envoy version [flags]
+
+Print the version.
+
+Inherited flags:
+  -h, --help       Show context-sensitive help.
+      --version    Print the version and exit.
+
+Exit codes:
+  0    success
+  1    failed: the provider ran and reported a failure; partial work may exist
+  2    infra: envoy or the environment failed, not the model
+  3    refused: the command, a held name or a locked session
+  4    timeout: the cap elapsed, which is not evidence the provider hung
+  5    interrupted: Ctrl-C on the dispatch, or its stop: command
+  6    partial, a fan-out only: some members returned a result and others did not

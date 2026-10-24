@@ -1,400 +1,179 @@
 // Command envoy runs headless AI-session turns as named jobs and returns
-// them as data.
-//
-//	envoy run <job> [--prompt-file <F>] --with <voice>[=<F>] [--with <voice>…] [flags]
-//	envoy collect [--result-only|--status-only] <job>
-//	envoy wait <job>
-//	envoy pending [--base DIR]
-//	envoy version
+// them as data. The grammar is declared once, as the Kong structs below, and
+// clikit renders every help page from it; the prose an agent reads lives in
+// help.go.
 package main
 
 import (
-	"errors"
-	"flag"
-	"fmt"
-	"io"
-	"math"
 	"os"
-	"strings"
+	"slices"
+
+	"github.com/alecthomas/kong"
+	"github.com/qiushiyan/clikit"
 
 	"github.com/qiushiyan/envoy/internal/collect"
 	"github.com/qiushiyan/envoy/internal/detach"
 	"github.com/qiushiyan/envoy/internal/dispatch"
 	"github.com/qiushiyan/envoy/internal/job"
-	"github.com/qiushiyan/envoy/internal/provider"
 )
 
 // version is the engine's, printed by `envoy version`. It changes with every
 // change to what callers read.
-const version = "0.14.2"
+const version = "0.15.0"
 
-// usageText is the tool description an agent reads before driving envoy. It
-// carries the loop, the voice grammar, and the facts that decide whether a
-// retry is safe — and nothing a caller does not act on. Effort values render
-// from the provider package so the help and the validation cannot disagree.
-var usageText = fmt.Sprintf(`envoy — run headless AI-session turns (claude or codex) as named jobs
+type CLI struct {
+	VersionFlag kong.VersionFlag `name:"version" help:"Print the version and exit."`
 
-USAGE
-  envoy run <job> [--prompt-file <F>] --with <voice>[=<F>] [--with <voice>…] [flags]
-  envoy collect [--result-only|--status-only] <job>
-  envoy wait <job>                block until a running job ends, then say how it ended
-  envoy pending [--base DIR]      jobs still needing attention after a missed completion
-  envoy version
+	Run     RunCmd     `cmd:"" help:"Dispatch a job — one turn, or a fan-out of several — and wait until it ends."`
+	Collect CollectCmd `cmd:"" help:"Print a job's result, or how it ended, and the one action to take next."`
+	Wait    WaitCmd    `cmd:"" help:"Block until a running job ends, then say how it ended."`
+	Pending PendingCmd `cmd:"" help:"List the jobs still needing attention after a missed completion."`
+	Version VersionCmd `cmd:"" help:"Print the version."`
 
-THE LOOP
-  1. Write the whole prompt to a file. The session starts cold — it has none
-     of your conversation — so that file carries every fact it needs.
-  2. Name the job and dispatch. Run the command in the background and let it
-     run to completion (minutes to hours); the process exiting is the
-     completion signal. You chose the name, so there is nothing to read back.
-  3. Collect by that name. It prints the result and, when something went
-     wrong, the one action to take next.
+	// The two processes a dispatch starts to detach its turn. Their names are
+	// detach.SpawnEntry and detach.DetachedEntry, and an installed binary can
+	// be replaced between a waiter starting and its exec, so they never change.
+	Spawn    SpawnCmd    `cmd:"" name:"__envoy-spawn" hidden:"" passthrough:"" help:"Start the detached process and exit."`
+	Detached DetachedCmd `cmd:"" name:"__envoy-detached" hidden:"" help:"Run a dispatch detached from its caller."`
+}
 
-    envoy run review-r1 --prompt-file brief.md --with codex --timeout-min 30
-    envoy collect review-r1
+type RunCmd struct {
+	Job              string   `arg:"" help:"A name for the job, which you collect it by: one path segment of letters, digits, '.', '_' and '-', kept in this project's store. Or a directory path."`
+	With             []string `required:"" sep:"none" placeholder:"VOICE[=FILE]" help:"A voice: provider[:model[:effort]] for a cold session, or @<job> to continue a finished job's conversation; =FILE gives that voice a prompt of its own. Once per voice, in the order they are listed. See Voices."`
+	PromptFile       string   `placeholder:"FILE" help:"The whole prompt, for every voice without a FILE of its own; required unless each voice carries one. Copied into the job directory."`
+	InstructionsFile string   `placeholder:"FILE" help:"Standing instructions for each conversation the job starts, sent as system-level text beside every turn's prompt. See Standing instructions."`
+	TimeoutMin       float64  `default:"30" placeholder:"MINUTES" help:"Wall-clock safety cap; 0 runs without one. Each member of a fan-out gets it separately."`
+	Cwd              string   `placeholder:"DIR" help:"The directory the session works in, instead of the current one (or a continued job's own)."`
+	Baseline         string   `placeholder:"SHA" help:"The commit collect diffs the working tree against; a write turn defaults to HEAD."`
+	AllowWrite       bool     `help:"Record that a single voice will edit files, so collect diffs its work. It restricts nothing; see What the flags cannot tell you."`
+	MaxBudgetUSD     *float64 `name:"max-budget-usd" placeholder:"USD" help:"Spend cap for a single claude voice: the safety net of a program dispatching unattended turns."`
+}
 
-  The turn runs in a process of its own, not inside your command. If your
-  session ends or the background task is stopped, only the waiting stops:
-  the turn runs on to its end or its cap. Run envoy wait <job> in the
-  background to be told again when it ends; envoy pending lists a job of yours
-  still running. To stop the turn itself, run the stop: command the dispatch
-  prints as it starts, which envoy collect --status-only <job> also prints
-  while it runs; Ctrl-C on the dispatch stops it too.
+// Run is the waiter: the dispatch runs in a process of its own, which parses
+// the same words with this same declaration, and this one relays its output
+// and exits with its code.
+func (c *RunCmd) Run(ctx *kong.Context) error {
+	tail := ctx.Args[slices.Index(ctx.Args, "run")+1:]
+	return clikit.Exit(detach.Dispatch(c.Job, tail, ctx.Stdout, ctx.Stderr))
+}
 
-  A <job> is a name (one path segment; letters, digits, . _ -) kept in this
-  project's store under ~/.local/state/envoy, or a directory path. A name
-  means the latest job your session dispatched under it, so sessions that
-  share a checkout use the same names without reading each other's jobs.
-  Every dispatch runs in a directory of its own — <name>, then <name>+2, +3
-  — and each stays readable by that path. A session that has dispatched
-  nothing under a name reads the newest job under it, which is how work from
-  an earlier session is picked up; the block then carries a "note:" line
-  saying another session dispatched it, so read that line when you expected
-  a job of your own.
-
-  Another session's job never refuses your dispatch. Only your own earlier
-  job under the name does, while it is still running or uncollected — so
-  once you have collected a job its name is free to reuse. A round 2 takes
-  its own name anyway (review-r2), because that keeps round 1 readable by
-  name.
-
-  Your session is what your harness exports: ENVOY_CALLER, else Claude
-  Code's CLAUDE_CODE_SESSION_ID. A caller with neither is the exception to
-  both rules: to it a name means the newest job of anyone's, and its jobs
-  and everyone else's refuse each other's dispatches under a shared name
-  while running or uncollected.
-
-VOICES
-  --with provider[:model[:effort]]   a cold session
-    --with codex                     the provider's own configured model
-    --with claude:opus               a named model
-    --with codex:gpt-6-astra:high    model and effort
-    --with codex::high               effort alone; the model slot stays empty
-  --with @<job>                      continue that finished job's conversation
-    --with @consult-r1                        round 2 in the same session
-    --with @consult-r1/codex --with claude:opus
-                                     one member warm beside a cold voice
-    --with @consult-r1  (alone)      continue every member of a fan-out
-  --with <voice>=<file>              that voice's own prompt file
-    --with codex=landscape.md --with claude:opus=critique.md
-                                     two voices, two prompts, one job
-    --with @consult-r1=round2.md     one NEW prompt to every member
-
-  One voice is a single turn; several are a fan-out — each voice sent its own
-  prompt file, or the job's --prompt-file when it names none — supervised as
-  one job that exits once every member is done, and collected once. A fan-out
-  reference counts as its members. Members never see each other's output. A
-  fan-out is read-only: its members share one working tree.
-
-  A continued voice takes its provider, session, model, effort, tree, baseline,
-  write intent and standing instructions from the job's own records; --cwd
-  and --baseline override.
-  Provider and model cannot change across a continuation. A fan-out reference
-  stands alone: to seat one of its members beside others, name the member.
-
-FLAGS
-  --prompt-file F   the whole prompt for every voice without its own; required
-                    unless each voice carries one. Copied into the job dir
-  --with VOICE      once per voice (required); see VOICES
-  --instructions-file F
-                    standing instructions for each conversation the job
-                    starts, sent as system-level text beside every turn's
-                    prompt; see Standing instructions below
-  --timeout-min N   wall-clock safety cap in minutes, 0 = off (default 30);
-                    each member of a fan-out gets it separately
-  --cwd DIR         directory the session works in (default: current dir)
-  --baseline SHA    diff anchor collect prints; write turns default to HEAD
-  --allow-write     a single voice will edit files: collect diffs its work
-  --max-budget-usd  spend cap for a single claude voice (a program's safety net)
-
-RUNNING PROVIDERS THROUGH A LAUNCHER
-  ENVOY_CODEX_CMD and ENVOY_CLAUDE_CMD replace the bare provider command with
-  a prefix. One possible launcher is headroom:
-    export ENVOY_CODEX_CMD="headroom launch --vendor codex --"
-    export ENVOY_CLAUDE_CMD="headroom launch --"
-  Unset, empty or whitespace-only values keep the bare binary from PATH.
-  Prefixes split on whitespace; no shell, quoting or expansion. Paths and
-  arguments with spaces need a wrapper executable on PATH. Provider arguments
-  are appended intact. Each fresh or resumed turn reads the current setting;
-  fan-out members use their own provider's setting. meta.json records it as
-  commandPrefix. Launcher failures are infra (exit 2), with no fallback;
-  stderr.log preserves launcher stderr, and stderr alone does not mean failure.
-
-WHAT A JOB LEAVES BEHIND
-  result.md        the answer — this is the return value
-  prompt.md        exactly what was sent
-  instructions.md  the standing instructions it was sent, when its
-                   conversation has them
-  meta.json        status, session id, and recovery coordinates
-  progress.log     lifecycle milestones and a heartbeat
-  raw.log          the provider's own event stream, verbatim
-  stderr.log       the provider's stderr
-  A fan-out holds group.json and one such directory per member, named after
-  the member (codex, claude-opus, codex-2 …).
-
-FACTS THE FLAGS CANNOT TELL YOU
-  Model and effort. Leaving them off puts the provider's own configuration in
-  charge; envoy never substitutes a model of its own and reports
-  `+"`(provider default)`"+` rather than guessing. The model the provider says it ran is
-  recorded either way; `+"`collect --status-only`"+` prints it, and a difference from the
-  request is the provider's own aliasing, not a substitution.
-
-  Write intent, not a sandbox. envoy restricts no session: claude runs with
-  its permission prompts bypassed, since a headless turn has no one to answer
-  them, and codex under its own configuration. --allow-write records the
-  intent and anchors the diff; any turn can still write, so "analyse only,
-  change nothing" belongs in the prompt.
-
-  Continuing. A finished job that holds a session prints `+"`resume:`"+`, the exact
-  command that continues its conversation as a new job — for a fan-out, the
-  whole set when every member can continue; each member's section prints its
-  own. It takes a NEW prompt file, since re-sending the original repeats work
-  the provider already did. One live turn per session: continuing a job that
-  is still running, or whose session may belong to another job, is refused.
-
-  Standing instructions. Rules that hold for every turn of a conversation —
-  working unattended, what stays out of commits — go in --instructions-file
-  once, when the conversation starts, instead of in each turn's prompt. The
-  provider receives them as system-level text, codex as its
-  developer_instructions setting, replacing any in its own config. Every turn
-  that continues the conversation passes them again from the job's records,
-  so the session keeps them after its context is compacted; a turn's prompt
-  never needs to repeat them. A conversation keeps the instructions it
-  started with: a continuation accepts --instructions-file only when the file
-  matches them, and refuses a different one, or any for a conversation that
-  started without, because the session would go on holding its first text.
-  A turn's prompt can add to them for that turn, but not reliably lift one:
-  the model weighs system-level text above the prompt, so a changed rule
-  takes a new conversation.
-
-  The cap bounds wall-clock time as a safety net, not a stall detector — it
-  counts healthy work, so reaching it never proves a hang.
-
-EXIT CODES OF A RUN, AND WHAT EACH ONE LICENSES
-  0 ok           result.md holds the answer
-  1 failed       the provider ran and reported a failure; partial work may exist
-  2 infra        envoy or the environment failed, not the model
-  3 usage        flags were rejected, the name is held, or a session is
-                 locked; for a single turn, nothing ran
-  4 timeout      the cap elapsed — not evidence the provider hung
-  5 interrupted  a signal stopped the turn — Ctrl-C on the dispatch, or its
-                 stop: command
-  6 partial      fan-out only: some members returned a result and others did
-                 not — the results that landed are usable, and only the members
-                 that failed need a decision
-  A dispatch that receives SIGTERM or SIGHUP — your session ending, a stopped
-  task, timeout, kill — stops only its waiting and exits by that signal, with
-  none of these codes; its turn runs on, and envoy wait <job> waits for it
-  again. Only Ctrl-C on the dispatch and the stop: command stop the turn.
-  A fan-out where no member returned a result exits with its worst member's
-  code, so a non-zero code says nothing about the other members: collect
-  it and read each member's own status. Collect exits 0 whenever it printed
-  the job, whatever the job's status.
-
-  A dispatch that exits 3 without ever printing a "job:" line ran nothing,
-  so collecting its name reads an earlier job if there is one, never this
-  dispatch. Its message says what to do instead: a "usage error:" names what
-  to change (for a held name, pick another) before dispatching again; a
-  "lock error:" names the job that owns the session, which is the one to
-  collect. For every other non-zero exit, a fan-out's 3 included, collect
-  the job and follow its `+"`next:`"+` line instead of re-dispatching: whether the
-  provider accepted the prompt decides between a safe retry and duplicating
-  work that already changed the tree, and the job knows which happened.
-  After a crash or restart, `+"`envoy pending`"+` finds the jobs whose completion
-  you may have missed, including ones still running.
-
-  Efforts — %s
-`, efforts())
-
-// efforts renders each provider's effort vocabulary for the help page.
-func efforts() string {
-	var parts []string
-	for _, name := range provider.Names() {
-		parts = append(parts, name+": "+strings.Join(provider.EffortList(name), " "))
+// request is the dispatch the flags describe. The command line keeps
+// --timeout-min 0 for no cap; the engine spells that NoTimeout so the
+// uncapped state is never a zero value.
+func (c *RunCmd) request(ctx *kong.Context) dispatch.Request {
+	req := dispatch.Request{
+		Job:              c.Job,
+		With:             c.With,
+		PromptFile:       c.PromptFile,
+		InstructionsFile: c.InstructionsFile,
+		Baseline:         c.Baseline,
+		AllowWrite:       c.AllowWrite,
+		Cwd:              c.Cwd,
+		MaxBudgetUSD:     c.MaxBudgetUSD,
+		Stdout:           ctx.Stdout,
+		Stderr:           ctx.Stderr,
 	}
-	return strings.Join(parts, " · ")
+	if c.TimeoutMin == 0 {
+		req.NoTimeout = true
+	} else {
+		req.TimeoutMin = c.TimeoutMin
+	}
+	return req
+}
+
+type DetachedCmd struct {
+	RunCmd `embed:""`
+}
+
+func (c *DetachedCmd) Run(ctx *kong.Context) error {
+	return outcome(dispatch.Run(c.request(ctx)))
+}
+
+type SpawnCmd struct {
+	Args []string `arg:"" optional:"" help:"The words of the run being detached."`
+}
+
+func (c *SpawnCmd) Run() error {
+	return clikit.Exit(detach.Spawn(c.Args))
+}
+
+type CollectCmd struct {
+	Job        string `arg:"" help:"The job: the name it was run as, or its directory."`
+	ResultOnly bool   `xor:"mode" help:"Print an ok job's result alone. A job that is not ok prints its whole block, since its status and next action are its result."`
+	StatusOnly bool   `xor:"mode" help:"Print everything but the result, including the diagnostics an ok job's block holds back. Marks nothing collected."`
+}
+
+func (c *CollectCmd) Run(ctx *kong.Context) error {
+	mode := collect.ModeFull
+	switch {
+	case c.ResultOnly:
+		mode = collect.ModeResultOnly
+	case c.StatusOnly:
+		mode = collect.ModeStatusOnly
+	}
+	return outcome(collect.Collect(c.Job, mode, ctx.Stdout, ctx.Stderr))
+}
+
+type WaitCmd struct {
+	Job string `arg:"" help:"The job to wait for: the name it was run as, or its directory."`
+}
+
+func (c *WaitCmd) Run(ctx *kong.Context) error {
+	return outcome(collect.Wait(c.Job, ctx.Stdout, ctx.Stderr))
+}
+
+type PendingCmd struct {
+	Base string `placeholder:"DIR" help:"The job store to search, instead of the current project's."`
+}
+
+func (c *PendingCmd) Run(ctx *kong.Context) error {
+	return outcome(collect.Pending(c.Base, ctx.Stdout, ctx.Stderr))
+}
+
+type VersionCmd struct{}
+
+func (VersionCmd) Run(ctx *kong.Context) error {
+	_, err := ctx.Stdout.Write([]byte("envoy " + version + "\n"))
+	return err
+}
+
+// outcome ends a command with the engine's exit code. A refusal the engine
+// made before it reported anything is printed here, once, as the command's
+// error; everything else the engine has already printed.
+func outcome(code int, err error) error {
+	if err != nil {
+		return clikit.Fail(code, err)
+	}
+	return clikit.Exit(code)
+}
+
+var app = clikit.App{
+	Name:        "envoy",
+	Description: "envoy runs headless claude or codex turns as jobs you name, and returns each as files.",
+	New:         func() any { return &CLI{} },
+	Options:     []kong.Option{kong.Vars{"version": "envoy " + version}},
+	UsageCode:   job.ExitUsage,
+	FailureCode: job.ExitInfra,
+	ExitCodes: map[int]string{
+		job.ExitFailed:      "failed: the provider ran and reported a failure; partial work may exist",
+		job.ExitInfra:       "infra: envoy or the environment failed, not the model",
+		job.ExitUsage:       "refused: the command, a held name or a locked session",
+		job.ExitTimeout:     "timeout: the cap elapsed, which is not evidence the provider hung",
+		job.ExitInterrupted: "interrupted: Ctrl-C on the dispatch, or its stop: command",
+		job.ExitPartial:     "partial, a fan-out only: some members returned a result and others did not",
+	},
 }
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(run(os.Args[1:]))
 }
 
-func run(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 {
-		fmt.Fprint(stderr, usageText)
-		return job.ExitUsage
+// run is main without the exit. The detached process reports its PID before
+// the dispatch and its exit code after, around the whole run, so even a run
+// that fails to parse tells its waiter how it ended.
+func run(args []string) int {
+	if len(args) > 0 && args[0] == detach.DetachedEntry {
+		return detach.Serve(func() int { return app.Run(args) })
 	}
-	switch args[0] {
-	case "run":
-		// The turn runs in a process of its own; this one waits for it.
-		return detach.Dispatch(args[1:], stdout, stderr)
-	case detach.SpawnEntry:
-		return detach.Spawn(args[1:])
-	case detach.DetachedEntry:
-		return detach.Serve(func() int { return cmdRun(args[1:], stdout, stderr) })
-	case "collect":
-		return cmdCollect(args[1:], stdout, stderr)
-	case "wait":
-		return cmdWait(args[1:], stdout, stderr)
-	case "pending":
-		return cmdPending(args[1:], stdout, stderr)
-	case "version", "--version", "-v":
-		fmt.Fprintf(stdout, "envoy %s\n", version)
-		return 0
-	case "help", "-h", "--help":
-		fmt.Fprint(stdout, usageText)
-		return 0
-	default:
-		fmt.Fprintf(stderr, "usage error: unknown command %q\n\n", args[0])
-		fmt.Fprint(stderr, usageText)
-		return job.ExitUsage
-	}
-}
-
-func newFlagSet(name string, stderr io.Writer) *flag.FlagSet {
-	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	fs.Usage = func() { fmt.Fprint(stderr, usageText) }
-	return fs
-}
-
-// parseFlags runs fs over args. An explicit help request prints usage to
-// stdout and reports success — an agent reading exit codes must not see a
-// "usage error" for asking for help.
-func parseFlags(fs *flag.FlagSet, args []string, stdout io.Writer) (proceed bool, code int) {
-	err := fs.Parse(args)
-	if err == nil {
-		return true, 0
-	}
-	if errors.Is(err, flag.ErrHelp) {
-		fmt.Fprint(stdout, usageText)
-		return false, 0
-	}
-	return false, job.ExitUsage
-}
-
-// stringList collects a repeatable flag in the order it was given, which is
-// the order voices are dispatched and listed.
-type stringList []string
-
-func (s *stringList) String() string     { return strings.Join(*s, " ") }
-func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
-
-// isHelp reports an explicit help request in a positional slot.
-func isHelp(arg string) bool { return arg == "-h" || arg == "--help" || arg == "-help" }
-
-func cmdRun(args []string, stdout, stderr io.Writer) int {
-	fs := newFlagSet("run", stderr)
-	var req dispatch.Request
-	var with stringList
-	fs.Var(&with, "with", "")
-	fs.StringVar(&req.PromptFile, "prompt-file", "", "")
-	fs.StringVar(&req.InstructionsFile, "instructions-file", "", "")
-	fs.StringVar(&req.Baseline, "baseline", "", "")
-	fs.BoolVar(&req.AllowWrite, "allow-write", false, "")
-	fs.StringVar(&req.Cwd, "cwd", "", "")
-	timeoutMin := fs.Float64("timeout-min", 30, "")
-	budget := fs.Float64("max-budget-usd", math.NaN(), "")
-	// The job comes first, then the flags: `envoy run <job> --with …`.
-	if len(args) > 0 && isHelp(args[0]) {
-		fmt.Fprint(stdout, usageText)
-		return 0
-	}
-	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		fmt.Fprintln(stderr, "usage error: a job name is required, and it comes first: envoy run <job> --prompt-file <F> --with <voice>")
-		return job.ExitUsage
-	}
-	if proceed, code := parseFlags(fs, args[1:], stdout); !proceed {
-		return code
-	}
-	if fs.NArg() > 0 {
-		fmt.Fprintf(stderr, "usage error: unexpected argument %q; a run takes one job name, and each voice is passed as --with\n", fs.Arg(0))
-		return job.ExitUsage
-	}
-	// The CLI contract keeps `--timeout-min 0` = no cap; the library spells
-	// that NoTimeout so the dangerous state is never a zero value.
-	if *timeoutMin == 0 {
-		req.NoTimeout = true
-	} else {
-		req.TimeoutMin = *timeoutMin
-	}
-	if !math.IsNaN(*budget) {
-		req.MaxBudgetUSD = budget
-	}
-	req.Job = args[0]
-	req.With = with
-	req.Stdout = stdout
-	req.Stderr = stderr
-	return dispatch.Run(req)
-}
-
-func cmdCollect(args []string, stdout, stderr io.Writer) int {
-	fs := newFlagSet("collect", stderr)
-	resultOnly := fs.Bool("result-only", false, "")
-	statusOnly := fs.Bool("status-only", false, "")
-	// The flags come first, then the job: `envoy collect [--status-only] <job>`.
-	if proceed, code := parseFlags(fs, args, stdout); !proceed {
-		return code
-	}
-	if fs.NArg() > 1 {
-		fmt.Fprintf(stderr, "usage error: collect takes exactly one job; %q is extra\n", fs.Arg(1))
-		return job.ExitUsage
-	}
-	if *resultOnly && *statusOnly {
-		fmt.Fprintln(stderr, "usage error: --result-only and --status-only are mutually exclusive: one asks for the payload alone, the other for everything but the payload")
-		return job.ExitUsage
-	}
-	mode := collect.ModeFull
-	switch {
-	case *resultOnly:
-		mode = collect.ModeResultOnly
-	case *statusOnly:
-		mode = collect.ModeStatusOnly
-	}
-	return collect.Collect(fs.Arg(0), mode, stdout, stderr)
-}
-
-func cmdWait(args []string, stdout, stderr io.Writer) int {
-	fs := newFlagSet("wait", stderr)
-	if proceed, code := parseFlags(fs, args, stdout); !proceed {
-		return code
-	}
-	if fs.NArg() > 1 {
-		fmt.Fprintf(stderr, "usage error: wait takes exactly one job; %q is extra\n", fs.Arg(1))
-		return job.ExitUsage
-	}
-	return collect.Wait(fs.Arg(0), stdout, stderr)
-}
-
-func cmdPending(args []string, stdout, stderr io.Writer) int {
-	fs := newFlagSet("pending", stderr)
-	base := fs.String("base", "", "")
-	if proceed, code := parseFlags(fs, args, stdout); !proceed {
-		return code
-	}
-	if fs.NArg() > 0 {
-		fmt.Fprintln(stderr, "usage error: pending does not take a job; use --base to choose the job root")
-		return job.ExitUsage
-	}
-	return collect.Pending(*base, stdout, stderr)
+	return app.Run(args)
 }

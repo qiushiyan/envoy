@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/qiushiyan/clikit/clikittest"
 )
 
 // The contract suite: what envoy's callers read, byte for byte. Each scenario
@@ -128,9 +130,8 @@ func invoke(t *testing.T, args []string) (code int, stdout, stderr string) {
 		}
 		return code, out.String(), errb.String()
 	}
-	var out, errb strings.Builder
-	code = run(args, &out, &errb)
-	return code, out.String(), errb.String()
+	r := clikittest.Run(app, args...)
+	return r.Code, r.Stdout, r.Stderr
 }
 
 // step runs one command and appends its transcript to the scenario's.
@@ -279,6 +280,12 @@ func TestContracts(t *testing.T) {
 				{"run", "job", "--with", "claude", "--with", "codex", "--prompt-file", brief, "--max-budget-usd", "1"},
 				{"run", "job", "--with", "claude", "--prompt-file", brief, "--version"},
 				{"run", "job", "--with", "codex", "--prompt-file", brief, "--instructions-file", w.path("absent.md")},
+				// A later seat's mistake, or one member's prompt that cannot
+				// be read from its own seat or the default, refuses its
+				// siblings too.
+				{"run", "job", "--with", "codex=" + brief, "--with", "claude:opus"},
+				{"run", "job", "--with", "codex=" + brief, "--with", "claude:opus=" + w.path("absent.md")},
+				{"run", "job", "--with", "codex", "--with", "claude:opus=" + brief, "--prompt-file", w.path("absent.md")},
 				{"collect"},
 				{"collect", "--result-only", "--status-only", "job"},
 				{"collect", "never-ran"},

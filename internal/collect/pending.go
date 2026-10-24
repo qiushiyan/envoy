@@ -189,13 +189,14 @@ func pendingOtherFan(dir string, stamp *job.GroupStamp, other *job.SchemaError, 
 // jobs, does not print full results, and does not mark anything collected.
 //
 // base "" is the store of the project the current directory belongs to.
-func Pending(base string, w, errW io.Writer) int {
+// code is the process exit code; a current directory that cannot be read comes
+// back as err, unprinted, and everything else is reported here.
+func Pending(base string, w, errW io.Writer) (code int, err error) {
 	baseWasDerived := base == ""
 	if baseWasDerived {
 		cwd, err := os.Getwd()
 		if err != nil {
-			fmt.Fprintf(errW, "pending error: cannot determine cwd: %s\n", err)
-			return job.ExitInfra
+			return job.ExitInfra, fmt.Errorf("cannot determine cwd: %s", err)
 		}
 		base = job.DefaultBase(cwd)
 	}
@@ -212,13 +213,13 @@ func Pending(base string, w, errW io.Writer) int {
 	firstRun := baseWasDerived && errors.Is(err, fs.ErrNotExist)
 	if err != nil && !firstRun {
 		fmt.Fprintf(errW, "pending error: %s\n", prose.UnreadableStore(base, err))
-		return job.ExitInfra
+		return job.ExitInfra, nil
 	}
 	pending := pendingJobs(dirs, caller)
 	fmt.Fprintf(w, "pending jobs: %d (under %s)\n", len(pending), base)
 	if len(pending) == 0 {
 		fmt.Fprintf(w, "next: %s\n", prose.PendingNone())
-		return 0
+		return 0, nil
 	}
 	for _, item := range pending {
 		fmt.Fprintf(w, "\n[%s] %s\n", item.label, item.dir)
@@ -228,5 +229,5 @@ func Pending(base string, w, errW io.Writer) int {
 			fmt.Fprintf(w, "stop: %s\n", item.stop)
 		}
 	}
-	return 0
+	return 0, nil
 }

@@ -27,12 +27,12 @@ var waitPoll = time.Second
 // caller to collect, which delivers. It reconciles nothing either; a turn
 // whose process ended without a final record is reported as such, and collect
 // decides what that record means.
-func Wait(ref string, w, errW io.Writer) int {
-	dir, note, code, ok := resolve(ref, "wait", "wait takes the job to wait for: the name it was run as, or its directory", errW)
-	if !ok {
-		return code
+func Wait(ref string, w, errW io.Writer) (code int, err error) {
+	dir, note, code, err := resolve(ref)
+	if err != nil {
+		return code, err
 	}
-	return waitDir(dir, note, w, errW)
+	return waitDir(dir, note, w, errW), nil
 }
 
 // waitDir waits for the job in dir, under the note its name resolved with.

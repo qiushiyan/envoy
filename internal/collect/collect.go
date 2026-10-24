@@ -45,19 +45,20 @@ const (
 // Collect prints the job ref names — a name in this project's store, or a
 // directory — whether a single turn, or a whole fan-out with a section per
 // member — and stamps first terminal collection once the block has reached
-// the caller. Returns a process exit code.
+// the caller. code is the process exit code; a ref that names no job comes
+// back as err, unprinted, and everything else is reported here.
 //
 // Reading, writing and acknowledgment are separate steps: everything the
 // block depends on is read first, the block is rendered in full and written to
 // the caller second, and only a write that succeeded stamps anything. A caller
 // whose output broke mid-block is still owed the job, and pending discovery
 // keeps listing it.
-func Collect(ref string, mode Mode, w, errW io.Writer) int {
-	dir, note, code, ok := resolve(ref, "collect", "collect takes the job to print: the name it was run as, or its directory", errW)
-	if !ok {
-		return code
+func Collect(ref string, mode Mode, w, errW io.Writer) (code int, err error) {
+	dir, note, code, err := resolve(ref)
+	if err != nil {
+		return code, err
 	}
-	return collectDir(dir, note, mode, w, errW)
+	return collectDir(dir, note, mode, w, errW), nil
 }
 
 // collectDir prints the job in dir, under the note its name resolved with.

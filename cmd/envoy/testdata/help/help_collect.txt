@@ -1,0 +1,87 @@
+Usage: envoy collect <job> [flags]
+
+Print a job's result, or how it ended, and the one action to take next.
+
+Collect prints the job as one block: its status, the result body for a turn
+that produced one, and a next: line naming the one action to take. A fan-out
+prints a section per member under one status. A finished job that holds a
+session also prints resume:, the command that continues its conversation.
+
+Collecting marks the job collected once the block has reached you;
+--status-only never does, and neither do wait or pending. Collect exits 0
+whenever it printed the job, whatever the job's status: read the block, not
+the code.
+
+Arguments:
+  <job>                The job: the name it was run as, or its directory.
+
+Flags:
+      --result-only    Print an ok job's result alone. A job that is not ok prints its whole block,
+                       since its status and next action are its result.
+      --status-only    Print everything but the result, including the diagnostics an ok job's block
+                       holds back. Marks nothing collected.
+
+Inherited flags:
+  -h, --help           Show context-sensitive help.
+      --version        Print the version and exit.
+
+Constraints:
+  At most one of --result-only, --status-only.
+
+Your command and the turn:
+  The turn runs in a process of its own, not inside your command. If your
+  session ends or the background task is stopped, only the waiting stops: the
+  turn runs on to its end or its cap. Run envoy wait <job> in the background to
+  be told again when it ends; envoy pending lists a job of yours still running.
+  To stop the turn itself, run the stop: command the dispatch prints as it
+  starts, which envoy collect --status-only <job> also prints while it runs;
+  Ctrl-C on the dispatch stops it too.
+
+  After any non-zero exit of a dispatch, collect the job and follow its next:
+  line instead of re-dispatching: whether the provider accepted the prompt
+  decides between a safe retry and duplicating work that already changed the
+  tree, and the job knows which happened. The one exception is a refusal that
+  ran nothing; envoy run --help says how to recognise it.
+
+Job names:
+  A <job> is a name (one path segment; letters, digits, . _ -) kept in this
+  project's store under ~/.local/state/envoy, or a directory path. A name means
+  the latest job your session dispatched under it, so sessions that share a
+  checkout use the same names without reading each other's jobs. Every dispatch
+  runs in a directory of its own — <name>, then <name>+2, +3 — and each stays
+  readable by that path. A session that has dispatched nothing under a name
+  reads the newest job under it, which is how work from an earlier session is
+  picked up; the block then carries a "note:" line saying another session
+  dispatched it, so read that line when you expected a job of your own.
+
+  Another session's job never refuses your dispatch. Only your own earlier job
+  under the name does, while it is still running or uncollected — so once you
+  have collected a job its name is free to reuse. A round 2 takes its own name
+  anyway (review-r2), because that keeps round 1 readable by name.
+
+  Your session is what your harness exports: ENVOY_CALLER, else Claude Code's
+  CLAUDE_CODE_SESSION_ID. A caller with neither is the exception to both rules:
+  to it a name means the newest job of anyone's, and its jobs and everyone
+  else's refuse each other's dispatches under a shared name while running or
+  uncollected.
+
+What a job leaves behind:
+  result.md        the answer — this is the return value
+  prompt.md        exactly what was sent
+  instructions.md  the standing instructions it was sent, when its
+                   conversation has them
+  meta.json        status, session id, and recovery coordinates
+  progress.log     lifecycle milestones and a heartbeat
+  raw.log          the provider's own event stream, verbatim
+  stderr.log       the provider's stderr
+  A fan-out holds group.json and one such directory per member, named after
+  the member (codex, claude-opus, codex-2 …).
+
+Exit codes:
+  0    success
+  1    failed: the provider ran and reported a failure; partial work may exist
+  2    infra: envoy or the environment failed, not the model
+  3    refused: the command, a held name or a locked session
+  4    timeout: the cap elapsed, which is not evidence the provider hung
+  5    interrupted: Ctrl-C on the dispatch, or its stop: command
+  6    partial, a fan-out only: some members returned a result and others did not

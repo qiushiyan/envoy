@@ -19,7 +19,7 @@ import (
 // the engine and change what it prints.
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && (os.Args[1] == detach.SpawnEntry || os.Args[1] == detach.DetachedEntry) {
-		os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+		os.Exit(run(os.Args[1:]))
 	}
 	kept := map[string]string{}
 	for _, k := range []string{"PATH", "TMPDIR", "ENVOY_CONTRACT_OLD", "ENVOY_CONTRACT_UPDATE", "CLIKIT_UPDATE"} {

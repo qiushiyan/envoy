@@ -1,18 +1,20 @@
 $ envoy version
 exit 0
 --- stdout
-envoy 0.14.2
+envoy 0.15.0
 --- stderr
 
 $ envoy --version
 exit 0
 --- stdout
-envoy 0.14.2
+envoy 0.15.0
 --- stderr
 
 $ envoy -v
-exit 0
+exit 3
 --- stdout
-envoy 0.14.2
 --- stderr
+envoy: error: unknown flag -v
+Usage: envoy <command> [flags]
+Run "envoy --help" for details.
 

@@ -3,7 +3,6 @@ package collect
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 
 	"github.com/qiushiyan/envoy/internal/job"
@@ -28,29 +27,22 @@ func Unresolvable(err error) (string, bool) {
 // a directory — to the directory it means to this caller, and the note a name
 // that fell back to another caller's job carries: the engine cannot tell work
 // picked up on purpose from a caller whose identity changed, so it reports
-// which happened and leaves the judgment. verb labels its errors and missing
-// words the refusal of an empty job; ok false means code is the exit.
-func resolve(arg, verb, missing string, stderr io.Writer) (dir, note string, code int, ok bool) {
+// which happened and leaves the judgment. A ref that resolves to nothing comes
+// back as err, unprinted, with its exit code.
+func resolve(ref string) (dir, note string, code int, err error) {
 	invocationCwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintf(stderr, "%s error: cannot determine cwd: %s\n", verb, err)
-		return "", "", job.ExitInfra, false
+		return "", "", job.ExitInfra, fmt.Errorf("cannot determine cwd: %s", err)
 	}
-	if arg == "" {
-		fmt.Fprintf(stderr, "usage error: %s\n", missing)
-		return "", "", job.ExitUsage, false
-	}
-	ref, err := job.ResolveRef(arg, invocationCwd, job.CallerFromEnv())
+	resolved, err := job.ResolveRef(ref, invocationCwd, job.CallerFromEnv())
 	if msg, unres := Unresolvable(err); unres {
-		fmt.Fprintf(stderr, "%s error: %s\n", verb, msg)
-		return "", "", job.ExitInfra, false
+		return "", "", job.ExitInfra, errors.New(msg)
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "usage error: %s\n", err)
-		return "", "", job.ExitUsage, false
+		return "", "", job.ExitUsage, err
 	}
-	if ref.FellBack {
-		note = prose.NameFellBack(ref.Name, ref.Owner != "")
+	if resolved.FellBack {
+		note = prose.NameFellBack(resolved.Name, resolved.Owner != "")
 	}
-	return ref.Dir, note, 0, true
+	return resolved.Dir, note, 0, nil
 }

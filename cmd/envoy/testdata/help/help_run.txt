@@ -1,0 +1,188 @@
+Usage: envoy run --with=VOICE[=FILE] <job> [flags]
+
+Dispatch a job — one turn, or a fan-out of several — and wait until it ends.
+
+Dispatching prints the job's directory, its settings and a stop: command,
+then blocks until the turn ends and prints how it ended. One voice is a single
+turn; several are a fan-out — each voice sent its own prompt file, or
+--prompt-file when it names none — supervised as one job that exits once
+every member is done, and collected once.
+
+    envoy run review-r1 --prompt-file brief.md --with codex --timeout-min 30
+    envoy run consult-r1 --prompt-file brief.md --with codex --with claude:opus
+
+Arguments:
+  <job>                           A name for the job, which you collect it by: one path segment of
+                                  letters, digits, '.', '_' and '-', kept in this project's store.
+                                  Or a directory path.
+
+Flags:
+      --with=VOICE[=FILE]         A voice: provider[:model[:effort]] for a cold session, or @<job>
+                                  to continue a finished job's conversation; =FILE gives that voice
+                                  a prompt of its own. Once per voice, in the order they are listed.
+                                  See Voices (required; repeatable).
+      --prompt-file=FILE          The whole prompt, for every voice without a FILE of its own;
+                                  required unless each voice carries one. Copied into the job
+                                  directory.
+      --instructions-file=FILE    Standing instructions for each conversation the job starts, sent
+                                  as system-level text beside every turn's prompt. See Standing
+                                  instructions.
+      --timeout-min=MINUTES       Wall-clock safety cap; 0 runs without one. Each member of a
+                                  fan-out gets it separately (default: 30).
+      --cwd=DIR                   The directory the session works in, instead of the current one (or
+                                  a continued job's own).
+      --baseline=SHA              The commit collect diffs the working tree against; a write turn
+                                  defaults to HEAD.
+      --allow-write               Record that a single voice will edit files, so collect diffs its
+                                  work. It restricts nothing; see What the flags cannot tell you.
+      --max-budget-usd=USD        Spend cap for a single claude voice: the safety net of a program
+                                  dispatching unattended turns.
+
+Inherited flags:
+  -h, --help                      Show context-sensitive help.
+      --version                   Print the version and exit.
+
+Voices:
+  --with provider[:model[:effort]]   a cold session
+    --with codex                     the provider's own configured model
+    --with claude:opus               a named model
+    --with codex:gpt-6-astra:high    model and effort
+    --with codex::high               effort alone; the model slot stays empty
+  --with @<job>                      continue that finished job's conversation
+    --with @consult-r1                        round 2 in the same session
+    --with @consult-r1/codex --with claude:opus
+                                     one member warm beside a cold voice
+    --with @consult-r1  (alone)      continue every member of a fan-out
+  --with <voice>=<file>              that voice's own prompt file
+    --with codex=landscape.md --with claude:opus=critique.md
+                                     two voices, two prompts, one job
+    --with @consult-r1=round2.md     one NEW prompt to every member
+
+  Efforts — claude: low medium high xhigh max · codex: none minimal low medium high xhigh max ultra
+
+  Members never see each other's output. A fan-out reference counts as its
+  members, and it stands alone: to seat one of its members beside others, name
+  the member. A continued voice takes its provider, session, model, effort,
+  tree, baseline, write intent and standing instructions from the job's own
+  records; --cwd and --baseline override. Provider and model cannot change
+  across a continuation.
+
+Standing instructions:
+  Rules that hold for every turn of a conversation — working unattended, what
+  stays out of commits — go in --instructions-file once, when the conversation
+  starts, instead of in each turn's prompt. The provider receives them as
+  system-level text, codex as its developer_instructions setting, replacing any
+  in its own config. Every turn that continues the conversation passes them
+  again from the job's records, so the session keeps them after its context is
+  compacted; a turn's prompt never needs to repeat them. A conversation keeps
+  the instructions it started with: a continuation accepts --instructions-file
+  only when the file matches them, and refuses a different one, or any for a
+  conversation that started without, because the session would go on holding
+  its first text. A turn's prompt can add to them for that turn, but not
+  reliably lift one: the model weighs system-level text above the prompt, so a
+  changed rule takes a new conversation.
+
+Running providers through a launcher:
+  ENVOY_CODEX_CMD and ENVOY_CLAUDE_CMD replace the bare provider command with a
+  prefix. One possible launcher is headroom:
+    export ENVOY_CODEX_CMD="headroom launch --vendor codex --"
+    export ENVOY_CLAUDE_CMD="headroom launch --"
+  Unset, empty or whitespace-only values keep the bare binary from PATH.
+  Prefixes split on whitespace; no shell, quoting or expansion. Paths and
+  arguments with spaces need a wrapper executable on PATH. Provider arguments
+  are appended intact. Each fresh or resumed turn reads the current setting;
+  fan-out members use their own provider's setting. meta.json records it as
+  commandPrefix. Launcher failures are infra (exit 2), with no fallback;
+  stderr.log preserves launcher stderr, and stderr alone does not mean failure.
+
+What the flags cannot tell you:
+  Model and effort. Leaving them off puts the provider's own configuration in
+  charge; envoy never substitutes a model of its own and reports
+  `(provider default)` rather than guessing. The model the provider says it ran is
+  recorded either way; `collect --status-only` prints it, and a difference from the
+  request is the provider's own aliasing, not a substitution.
+
+  Write intent, not a sandbox. envoy restricts no session: claude runs with its
+  permission prompts bypassed, since a headless turn has no one to answer them,
+  and codex under its own configuration. --allow-write records the intent and
+  anchors the diff; any turn can still write, so "analyse only, change nothing"
+  belongs in the prompt. A fan-out is read-only: its members share one working
+  tree.
+
+  Continuing. A finished job that holds a session prints `resume:`, the exact
+  command that continues its conversation as a new job — for a fan-out, the
+  whole set when every member can continue; each member's section prints its
+  own. It takes a NEW prompt file, since re-sending the original repeats work
+  the provider already did. One live turn per session: continuing a job that is
+  still running, or whose session may belong to another job, is refused.
+
+  The cap bounds wall-clock time as a safety net, not a stall detector — it
+  counts healthy work, so reaching it never proves a hang.
+
+What each exit code licenses:
+  A dispatch that exits 3 without ever printing a "job:" line ran nothing, so
+  collecting its name reads an earlier job if there is one, never this
+  dispatch. Its message says what to do instead: an "envoy: error:" line names
+  what to change (for a held name, pick another) before dispatching again; a
+  "lock error:" line names the job that owns the session, which is the one to
+  collect. For every other non-zero exit, a fan-out's 3 included, collect the
+  job and follow its `next:` line instead of re-dispatching. After a crash or
+  restart, `envoy pending` finds the jobs whose completion you may have missed,
+  including ones still running.
+
+  A fan-out exits 6 when some members returned a result and others did not:
+  the results that landed are usable, and only the members that failed need a
+  decision. A fan-out where no member returned a result exits with its worst
+  member's code, so a non-zero code says nothing about the other members:
+  collect it and read each member's own status.
+
+  A dispatch that receives SIGTERM or SIGHUP — your session ending, a stopped
+  task, timeout, kill — stops only its waiting and exits by that signal, with
+  none of these codes; its turn runs on, and envoy wait <job> waits for it
+  again. Only Ctrl-C on the dispatch and the stop: command stop the turn.
+
+Your command and the turn:
+  The turn runs in a process of its own, not inside your command. If your
+  session ends or the background task is stopped, only the waiting stops: the
+  turn runs on to its end or its cap. Run envoy wait <job> in the background to
+  be told again when it ends; envoy pending lists a job of yours still running.
+  To stop the turn itself, run the stop: command the dispatch prints as it
+  starts, which envoy collect --status-only <job> also prints while it runs;
+  Ctrl-C on the dispatch stops it too.
+
+  After any non-zero exit of a dispatch, collect the job and follow its next:
+  line instead of re-dispatching: whether the provider accepted the prompt
+  decides between a safe retry and duplicating work that already changed the
+  tree, and the job knows which happened. The one exception is a refusal that
+  ran nothing; envoy run --help says how to recognise it.
+
+Job names:
+  A <job> is a name (one path segment; letters, digits, . _ -) kept in this
+  project's store under ~/.local/state/envoy, or a directory path. A name means
+  the latest job your session dispatched under it, so sessions that share a
+  checkout use the same names without reading each other's jobs. Every dispatch
+  runs in a directory of its own — <name>, then <name>+2, +3 — and each stays
+  readable by that path. A session that has dispatched nothing under a name
+  reads the newest job under it, which is how work from an earlier session is
+  picked up; the block then carries a "note:" line saying another session
+  dispatched it, so read that line when you expected a job of your own.
+
+  Another session's job never refuses your dispatch. Only your own earlier job
+  under the name does, while it is still running or uncollected — so once you
+  have collected a job its name is free to reuse. A round 2 takes its own name
+  anyway (review-r2), because that keeps round 1 readable by name.
+
+  Your session is what your harness exports: ENVOY_CALLER, else Claude Code's
+  CLAUDE_CODE_SESSION_ID. A caller with neither is the exception to both rules:
+  to it a name means the newest job of anyone's, and its jobs and everyone
+  else's refuse each other's dispatches under a shared name while running or
+  uncollected.
+
+Exit codes:
+  0    success
+  1    failed: the provider ran and reported a failure; partial work may exist
+  2    infra: envoy or the environment failed, not the model
+  3    refused: the command, a held name or a locked session
+  4    timeout: the cap elapsed, which is not evidence the provider hung
+  5    interrupted: Ctrl-C on the dispatch, or its stop: command
+  6    partial, a fan-out only: some members returned a result and others did not

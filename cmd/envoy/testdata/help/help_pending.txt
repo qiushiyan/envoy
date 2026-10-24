@@ -1,0 +1,25 @@
+Usage: envoy pending [flags]
+
+List the jobs still needing attention after a missed completion.
+
+Pending is the recovery index for a completion you may have missed, after a
+compaction, a crash or a restart: it lists each job of yours still running or
+finished but uncollected, with why it is listed and the next action. It prints
+no results and marks nothing collected. A store that cannot be read is
+reported as such, never as a store with no jobs.
+
+Flags:
+      --base=DIR    The job store to search, instead of the current project's.
+
+Inherited flags:
+  -h, --help        Show context-sensitive help.
+      --version     Print the version and exit.
+
+Exit codes:
+  0    success
+  1    failed: the provider ran and reported a failure; partial work may exist
+  2    infra: envoy or the environment failed, not the model
+  3    refused: the command, a held name or a locked session
+  4    timeout: the cap elapsed, which is not evidence the provider hung
+  5    interrupted: Ctrl-C on the dispatch, or its stop: command
+  6    partial, a fan-out only: some members returned a result and others did not

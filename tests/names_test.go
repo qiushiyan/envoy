@@ -218,7 +218,7 @@ func TestNamedJobsLiveInTheCentralStore(t *testing.T) {
 	if bare.code != 3 {
 		t.Fatalf("bare collect: exit = %d, want 3\nstderr:\n%s", bare.code, bare.stderr)
 	}
-	mustContain(t, "stderr", bare.stderr, "collect takes the job to print")
+	mustContain(t, "stderr", bare.stderr, `expected "<job>"`, "Usage: envoy collect <job>")
 }
 
 // For a caller with no identity — this rig, a Codex session, a terminal — a

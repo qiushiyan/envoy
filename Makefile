@@ -32,7 +32,7 @@ check: vet fix test
 
 # Rewrite the golden help pages after an intended change; review the diff.
 golden:
-	CLIKIT_UPDATE=1 go test ./cmd/envoy -run TestHelpPages -count=1
+	CLIKIT_UPDATE=1 go test ./cmd/envoy -run 'TestHelpPages$$' -count=1
 
 clean:
 	rm -f $(BIN)

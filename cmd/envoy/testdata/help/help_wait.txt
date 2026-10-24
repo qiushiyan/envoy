@@ -1,0 +1,62 @@
+Usage: envoy wait <job> [flags]
+
+Block until a running job ends, then say how it ended.
+
+Wait blocks until the job's own process has finished it, then prints the
+block its dispatch prints on ending and exits with the dispatch's code. It is
+how a caller that lost its dispatch — a session that ended, a background task
+that was stopped — is told again when the turn ends. It delivers nothing: it
+prints no result and marks nothing collected, so collect the job after it.
+
+Arguments:
+  <job>            The job to wait for: the name it was run as, or its directory.
+
+Inherited flags:
+  -h, --help       Show context-sensitive help.
+      --version    Print the version and exit.
+
+Your command and the turn:
+  The turn runs in a process of its own, not inside your command. If your
+  session ends or the background task is stopped, only the waiting stops: the
+  turn runs on to its end or its cap. Run envoy wait <job> in the background to
+  be told again when it ends; envoy pending lists a job of yours still running.
+  To stop the turn itself, run the stop: command the dispatch prints as it
+  starts, which envoy collect --status-only <job> also prints while it runs;
+  Ctrl-C on the dispatch stops it too.
+
+  After any non-zero exit of a dispatch, collect the job and follow its next:
+  line instead of re-dispatching: whether the provider accepted the prompt
+  decides between a safe retry and duplicating work that already changed the
+  tree, and the job knows which happened. The one exception is a refusal that
+  ran nothing; envoy run --help says how to recognise it.
+
+Job names:
+  A <job> is a name (one path segment; letters, digits, . _ -) kept in this
+  project's store under ~/.local/state/envoy, or a directory path. A name means
+  the latest job your session dispatched under it, so sessions that share a
+  checkout use the same names without reading each other's jobs. Every dispatch
+  runs in a directory of its own — <name>, then <name>+2, +3 — and each stays
+  readable by that path. A session that has dispatched nothing under a name
+  reads the newest job under it, which is how work from an earlier session is
+  picked up; the block then carries a "note:" line saying another session
+  dispatched it, so read that line when you expected a job of your own.
+
+  Another session's job never refuses your dispatch. Only your own earlier job
+  under the name does, while it is still running or uncollected — so once you
+  have collected a job its name is free to reuse. A round 2 takes its own name
+  anyway (review-r2), because that keeps round 1 readable by name.
+
+  Your session is what your harness exports: ENVOY_CALLER, else Claude Code's
+  CLAUDE_CODE_SESSION_ID. A caller with neither is the exception to both rules:
+  to it a name means the newest job of anyone's, and its jobs and everyone
+  else's refuse each other's dispatches under a shared name while running or
+  uncollected.
+
+Exit codes:
+  0    success
+  1    failed: the provider ran and reported a failure; partial work may exist
+  2    infra: envoy or the environment failed, not the model
+  3    refused: the command, a held name or a locked session
+  4    timeout: the cap elapsed, which is not evidence the provider hung
+  5    interrupted: Ctrl-C on the dispatch, or its stop: command
+  6    partial, a fan-out only: some members returned a result and others did not

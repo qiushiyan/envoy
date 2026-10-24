@@ -307,7 +307,7 @@ func TestCollectResultOnly(t *testing.T) {
 	if res.code != 3 {
 		t.Fatalf("exit = %d, want 3\nstderr:\n%s", res.code, res.stderr)
 	}
-	mustContain(t, "stderr", res.stderr, "mutually exclusive")
+	mustContain(t, "stderr", res.stderr, "--result-only and --status-only can't be used together")
 }
 
 // collectedAt means the result body reached a caller. A turn that reports ok
