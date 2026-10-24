@@ -46,7 +46,17 @@ diff, and "analyse only" is a prompt convention.
   read-only sandbox by another name.
 - **codex** runs under its own configuration. A derived read-only sandbox once
   broke the calling session's own tooling, so the engine passes no sandbox
-  flag.
+  flag. It does pass `--skip-git-repo-check` on every launch, a resume
+  included, whatever the write intent: `codex exec` refuses a cwd with no git
+  root above it before its thread starts — trust entries in its config do not
+  count, whatever its message says — and a caller dispatches from wherever its
+  shell stands, a session scratchpad or a new project as often as a checkout
+  (`EVIDENCE.md`, 2026-10-23). The flag is a launch precondition, not a
+  permission, and inside a repository it changes nothing. Refusing such a cwd
+  before launch would strand those callers and copy codex's git-root rule
+  into the engine; reading the refusal out of stderr as `not_started` would
+  break the rule in § Launchers, and the retry it licensed would fail the same
+  way.
 
 There are no allow-lists and no `--add-dir`. The signal to revisit this is a
 read-only claude turn whose `git status` changed under it: the prompt was not

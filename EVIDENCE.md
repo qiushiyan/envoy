@@ -489,3 +489,20 @@ each workaround.
   Compare next pass: whether steward's turns carry only their job once it
   passes the flag, whether any instructed conversation is refused for a lost
   archive, and whether a caller asks to change a conversation's rules.
+- **2026-10-23 — codex refused every cwd that was not a checkout.** Store,
+  every turn record (572, counted 2026-10-23): all 8 `infra` records were
+  codex exiting before its thread started with `Not inside a trusted
+  directory and --skip-git-repo-check was not specified.`, 0 events and
+  prompt state `unknown`, from 7 sessions since 2026-09-18 — 7 cwds a Claude
+  Code scratchpad, one `~/dev` — under consult's dispatch, which passes no
+  `--cwd`. The wording sent one caller to `~/dev`, which codex's config
+  trusts, for the same refusal before it moved to a checkout; another ran
+  its next turns from a repository it made inside its scratchpad within the
+  minute. codex-cli 0.162.1's exec gate is a git-root check that reads no
+  trust (its source, and a bare probe from `~/dev` under the default home);
+  with the flag, a fresh turn from a non-git directory and a resume of it
+  ran, through headroom too, and without it the resume was refused as well.
+  What stands (0.14.1): every codex launch carries `--skip-git-repo-check`
+  (`docs/providers.md` § Permissions). Compare next pass: whether any codex
+  turn from a non-checkout still ends `infra`, and whether another refusal
+  at startup appears in a zero-event exit.
