@@ -53,7 +53,7 @@ func writeClaimedGroup(t *testing.T, dir string, members ...string) {
 func waitOn(t *testing.T, dir string) (int, string) {
 	t.Helper()
 	var out, errOut strings.Builder
-	code := Wait(dir, "", &out, &errOut)
+	code := waitDir(dir, "", &out, &errOut)
 	return code, out.String() + errOut.String()
 }
 
@@ -231,7 +231,7 @@ func TestCollectDefersToMembersWhenTheFanOutsProcessIsGone(t *testing.T) {
 	}
 	for _, mode := range []Mode{ModeFull, ModeStatusOnly} {
 		var out, errOut strings.Builder
-		Collect(dir, "", mode, &out, &errOut)
+		collectDir(dir, "", mode, &out, &errOut)
 		block := out.String()
 		closing := block[strings.LastIndex(block, "\nnext: "):]
 		if strings.Contains(closing, "envoy wait") || !strings.Contains(closing, "its own action in its section") {

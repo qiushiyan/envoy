@@ -1,4 +1,4 @@
-package envoy
+package dispatch
 
 import (
 	"errors"
@@ -44,10 +44,10 @@ type voice struct {
 // member named directly would be, so there is one eligibility rule and one
 // set of roster checks whatever the caller spelled. An error is a refusal
 // worded for the caller — or, for a job named by a store that cannot be read,
-// the resolver's own error (unresolvable), which no change to the command
+// the resolver's own error (collect.Unresolvable), which no change to the command
 // fixes. instructions is the roster's standing instructions, read from
 // --instructions-file ("" = none).
-func resolveTurns(req RunRequest, instructions, invocationCwd, caller string, timeoutMin float64) ([]fan.Turn, error) {
+func resolveTurns(req Request, instructions, invocationCwd, caller string, timeoutMin float64) ([]fan.Turn, error) {
 	var voices []voice
 	for _, seat := range req.With {
 		seated, err := seatVoices(seat, req, invocationCwd, caller)
@@ -98,7 +98,7 @@ func resolveTurns(req RunRequest, instructions, invocationCwd, caller string, ti
 // seatVoices resolves one --with seat into the voices it seats, each with
 // the prompt it is sent: one for a cold voice or a continued turn, every
 // member for a fan-out reference, which therefore stands alone.
-func seatVoices(seat string, req RunRequest, invocationCwd, caller string) ([]voice, error) {
+func seatVoices(seat string, req Request, invocationCwd, caller string) ([]voice, error) {
 	spec, promptFile, err := splitSeat(seat)
 	if err != nil {
 		return nil, err
@@ -120,7 +120,7 @@ func seatVoices(seat string, req RunRequest, invocationCwd, caller string) ([]vo
 	// A store that cannot be read is no refusal of the caller's spelling: it
 	// stops the dispatch the way it stops the dispatch's own name.
 	resolved, err := job.ResolveRef(strings.TrimPrefix(spec, "@"), invocationCwd, caller)
-	if _, storeFailed := unresolvable(err); storeFailed {
+	if _, storeFailed := collect.Unresolvable(err); storeFailed {
 		return nil, err
 	}
 	if err != nil {
@@ -166,7 +166,7 @@ type roster struct {
 // the record naming one text while the session holds another until a moment
 // no one can observe. The same text again is no change, and a caller that
 // passes it on every turn is accepted.
-func shareRoster(voices []voice, req RunRequest, instructions string, timeoutMin float64) (roster, error) {
+func shareRoster(voices []voice, req Request, instructions string, timeoutMin float64) (roster, error) {
 	shared := roster{cwd: req.Cwd, baseline: req.Baseline}
 	sessions := map[string]string{}
 	inheritedCwdFrom, inheritedBaselineFrom := "", ""

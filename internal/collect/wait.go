@@ -27,7 +27,16 @@ var waitPoll = time.Second
 // caller to collect, which delivers. It reconciles nothing either; a turn
 // whose process ended without a final record is reported as such, and collect
 // decides what that record means.
-func Wait(dir, note string, w, errW io.Writer) int {
+func Wait(ref string, w, errW io.Writer) int {
+	dir, note, code, ok := resolve(ref, "wait", "wait takes the job to wait for: the name it was run as, or its directory", errW)
+	if !ok {
+		return code
+	}
+	return waitDir(dir, note, w, errW)
+}
+
+// waitDir waits for the job in dir, under the note its name resolved with.
+func waitDir(dir, note string, w, errW io.Writer) int {
 	// The job is named before the wait blocks, so whoever runs it sees at
 	// once which job it waits on — and, from the note, when the name meant
 	// another session's. A coordinate delivers nothing.

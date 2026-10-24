@@ -17,9 +17,16 @@ import (
 	"os"
 	"strings"
 
-	"github.com/qiushiyan/envoy"
+	"github.com/qiushiyan/envoy/internal/collect"
 	"github.com/qiushiyan/envoy/internal/detach"
+	"github.com/qiushiyan/envoy/internal/dispatch"
+	"github.com/qiushiyan/envoy/internal/job"
+	"github.com/qiushiyan/envoy/internal/provider"
 )
+
+// version is the engine's, printed by `envoy version`. It changes with every
+// change to what callers read.
+const version = "0.14.2"
 
 // usageText is the tool description an agent reads before driving envoy. It
 // carries the loop, the voice grammar, and the facts that decide whether a
@@ -222,8 +229,8 @@ EXIT CODES OF A RUN, AND WHAT EACH ONE LICENSES
 // efforts renders each provider's effort vocabulary for the help page.
 func efforts() string {
 	var parts []string
-	for _, name := range envoy.Providers() {
-		parts = append(parts, name+": "+strings.Join(envoy.Efforts(name), " "))
+	for _, name := range provider.Names() {
+		parts = append(parts, name+": "+strings.Join(provider.EffortList(name), " "))
 	}
 	return strings.Join(parts, " · ")
 }
@@ -235,7 +242,7 @@ func main() {
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usageText)
-		return envoy.ExitUsage
+		return job.ExitUsage
 	}
 	switch args[0] {
 	case "run":
@@ -252,7 +259,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "pending":
 		return cmdPending(args[1:], stdout, stderr)
 	case "version", "--version", "-v":
-		fmt.Fprintf(stdout, "envoy %s\n", envoy.Version)
+		fmt.Fprintf(stdout, "envoy %s\n", version)
 		return 0
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usageText)
@@ -260,7 +267,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	default:
 		fmt.Fprintf(stderr, "usage error: unknown command %q\n\n", args[0])
 		fmt.Fprint(stderr, usageText)
-		return envoy.ExitUsage
+		return job.ExitUsage
 	}
 }
 
@@ -283,7 +290,7 @@ func parseFlags(fs *flag.FlagSet, args []string, stdout io.Writer) (proceed bool
 		fmt.Fprint(stdout, usageText)
 		return false, 0
 	}
-	return false, envoy.ExitUsage
+	return false, job.ExitUsage
 }
 
 // stringList collects a repeatable flag in the order it was given, which is
@@ -298,7 +305,7 @@ func isHelp(arg string) bool { return arg == "-h" || arg == "--help" || arg == "
 
 func cmdRun(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("run", stderr)
-	var req envoy.RunRequest
+	var req dispatch.Request
 	var with stringList
 	fs.Var(&with, "with", "")
 	fs.StringVar(&req.PromptFile, "prompt-file", "", "")
@@ -315,14 +322,14 @@ func cmdRun(args []string, stdout, stderr io.Writer) int {
 	}
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
 		fmt.Fprintln(stderr, "usage error: a job name is required, and it comes first: envoy run <job> --prompt-file <F> --with <voice>")
-		return envoy.ExitUsage
+		return job.ExitUsage
 	}
 	if proceed, code := parseFlags(fs, args[1:], stdout); !proceed {
 		return code
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintf(stderr, "usage error: unexpected argument %q; a run takes one job name, and each voice is passed as --with\n", fs.Arg(0))
-		return envoy.ExitUsage
+		return job.ExitUsage
 	}
 	// The CLI contract keeps `--timeout-min 0` = no cap; the library spells
 	// that NoTimeout so the dangerous state is never a zero value.
@@ -338,7 +345,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) int {
 	req.With = with
 	req.Stdout = stdout
 	req.Stderr = stderr
-	return envoy.Run(req)
+	return dispatch.Run(req)
 }
 
 func cmdCollect(args []string, stdout, stderr io.Writer) int {
@@ -351,15 +358,20 @@ func cmdCollect(args []string, stdout, stderr io.Writer) int {
 	}
 	if fs.NArg() > 1 {
 		fmt.Fprintf(stderr, "usage error: collect takes exactly one job; %q is extra\n", fs.Arg(1))
-		return envoy.ExitUsage
+		return job.ExitUsage
 	}
-	return envoy.Collect(envoy.CollectRequest{
-		Job:        fs.Arg(0),
-		ResultOnly: *resultOnly,
-		StatusOnly: *statusOnly,
-		Stdout:     stdout,
-		Stderr:     stderr,
-	})
+	if *resultOnly && *statusOnly {
+		fmt.Fprintln(stderr, "usage error: --result-only and --status-only are mutually exclusive: one asks for the payload alone, the other for everything but the payload")
+		return job.ExitUsage
+	}
+	mode := collect.ModeFull
+	switch {
+	case *resultOnly:
+		mode = collect.ModeResultOnly
+	case *statusOnly:
+		mode = collect.ModeStatusOnly
+	}
+	return collect.Collect(fs.Arg(0), mode, stdout, stderr)
 }
 
 func cmdWait(args []string, stdout, stderr io.Writer) int {
@@ -369,9 +381,9 @@ func cmdWait(args []string, stdout, stderr io.Writer) int {
 	}
 	if fs.NArg() > 1 {
 		fmt.Fprintf(stderr, "usage error: wait takes exactly one job; %q is extra\n", fs.Arg(1))
-		return envoy.ExitUsage
+		return job.ExitUsage
 	}
-	return envoy.Wait(envoy.WaitRequest{Job: fs.Arg(0), Stdout: stdout, Stderr: stderr})
+	return collect.Wait(fs.Arg(0), stdout, stderr)
 }
 
 func cmdPending(args []string, stdout, stderr io.Writer) int {
@@ -382,7 +394,7 @@ func cmdPending(args []string, stdout, stderr io.Writer) int {
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintln(stderr, "usage error: pending does not take a job; use --base to choose the job root")
-		return envoy.ExitUsage
+		return job.ExitUsage
 	}
-	return envoy.Pending(*base, stdout, stderr)
+	return collect.Pending(*base, stdout, stderr)
 }

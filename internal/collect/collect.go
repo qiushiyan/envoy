@@ -42,7 +42,8 @@ const (
 	ModeStatusOnly
 )
 
-// Collect prints one job — a single turn, or a whole fan-out with a section per
+// Collect prints the job ref names — a name in this project's store, or a
+// directory — whether a single turn, or a whole fan-out with a section per
 // member — and stamps first terminal collection once the block has reached
 // the caller. Returns a process exit code.
 //
@@ -51,7 +52,16 @@ const (
 // the caller second, and only a write that succeeded stamps anything. A caller
 // whose output broke mid-block is still owed the job, and pending discovery
 // keeps listing it.
-func Collect(dir, note string, mode Mode, w, errW io.Writer) int {
+func Collect(ref string, mode Mode, w, errW io.Writer) int {
+	dir, note, code, ok := resolve(ref, "collect", "collect takes the job to print: the name it was run as, or its directory", errW)
+	if !ok {
+		return code
+	}
+	return collectDir(dir, note, mode, w, errW)
+}
+
+// collectDir prints the job in dir, under the note its name resolved with.
+func collectDir(dir, note string, mode Mode, w, errW io.Writer) int {
 	if job.IsGroupDir(dir) {
 		return collectGroup(dir, note, mode, w, errW)
 	}

@@ -1,12 +1,11 @@
-// Package envoy runs headless AI-session turns (claude or codex) as named,
-// background-friendly jobs and returns them as durable data: result.md is the
-// return value, meta.json the coordinates and recovery state, progress.log
-// the live semantic view.
+// Package dispatch runs one job: it checks what the caller asked for,
+// resolves the roster of voices into the turns they run, reserves the job's
+// directory, and runs one turn flat in it or several as a fan-out. Every
+// refusal is decided before a directory is reserved or a session locked.
 //
-// This package is the embeddable facade over the engine; cmd/envoy is the CLI
-// skin. Functions return process exit codes and write agent-facing text to the
-// provided writers, because the primary caller is an agent reading stdout.
-package envoy
+// The command line is the only caller; it runs a dispatch in a process of its
+// own, so the turn outlives the command that started it.
+package dispatch
 
 import (
 	"errors"
@@ -26,22 +25,7 @@ import (
 	"github.com/qiushiyan/envoy/internal/runner"
 )
 
-// Version of the engine, reported by `envoy version`.
-const Version = "0.14.2"
-
-// Exit codes: 0 ok · 1 provider failure · 2 infra · 3 usage · 4 timeout ·
-// 5 interrupted · 6 partial (several voices only).
-const (
-	ExitOK          = job.ExitOK
-	ExitFailed      = job.ExitFailed
-	ExitInfra       = job.ExitInfra
-	ExitUsage       = job.ExitUsage
-	ExitTimeout     = job.ExitTimeout
-	ExitInterrupted = job.ExitInterrupted
-	ExitPartial     = job.ExitPartial
-)
-
-// RunRequest describes one job: a caller-chosen name (or directory), a
+// Request describes one job: a caller-chosen name (or directory), a
 // prompt per voice, and one voice per turn. With holds each voice as the
 // caller spells it — provider[:model[:effort]] for a cold session, or @<job>
 // to continue a finished job's conversation (a fan-out reference continues
@@ -64,7 +48,7 @@ const (
 // prompt, archived in the job directory and passed again on every turn that
 // continues the conversation. A conversation keeps the instructions it
 // started with, so on a continued voice the file must match them.
-type RunRequest struct {
+type Request struct {
 	Job              string
 	With             []string
 	PromptFile       string
@@ -78,8 +62,8 @@ type RunRequest struct {
 	// dispatching unattended turns needs; nil = no cap.
 	MaxBudgetUSD *float64
 
-	Stdout io.Writer // dispatch and terminal blocks; defaults to os.Stdout
-	Stderr io.Writer // errors and warnings; defaults to os.Stderr
+	Stdout io.Writer // dispatch and terminal blocks
+	Stderr io.Writer // errors and warnings
 }
 
 // defaultTimeoutMin is the engine's safety cap when the caller sets none.
@@ -103,26 +87,20 @@ func resolveTimeout(timeoutMin float64, noTimeout bool) (float64, error) {
 	return timeoutMin, nil
 }
 
-// Providers lists the providers the engine drives, so callers can render
-// them instead of hardcoding a copy that drifts.
-func Providers() []string { return provider.Names() }
-
-// Efforts lists the effort values a provider accepts, for the same reason.
-func Efforts(providerName string) []string { return provider.EffortList(providerName) }
-
 func usageError(w io.Writer, format string, args ...any) int {
 	fmt.Fprintf(w, "usage error: "+format+"\n", args...)
-	return ExitUsage
+	return job.ExitUsage
 }
 
-// Run validates the request, reserves the job, and runs it to terminal state.
-func Run(req RunRequest) int {
-	stdout, stderr := defaultWriters(req.Stdout, req.Stderr)
+// Run validates the request, reserves the job, and runs it to terminal state,
+// returning the process exit code.
+func Run(req Request) int {
+	stdout, stderr := req.Stdout, req.Stderr
 
 	invocationCwd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(stderr, "envoy: cannot determine cwd: %s\n", err)
-		return ExitInfra
+		return job.ExitInfra
 	}
 	dir, err := job.ResolveName(req.Job, invocationCwd)
 	if err != nil {
@@ -152,9 +130,9 @@ func Run(req RunRequest) int {
 
 	caller := job.CallerFromEnv()
 	turns, err := resolveTurns(req, instructions, invocationCwd, caller, timeoutMin)
-	if msg, storeFailed := unresolvable(err); storeFailed {
+	if msg, storeFailed := collect.Unresolvable(err); storeFailed {
 		fmt.Fprintf(stderr, "envoy: %s\n", msg)
-		return ExitInfra
+		return job.ExitInfra
 	}
 	if err != nil {
 		return usageError(stderr, "%s", err)
@@ -187,13 +165,13 @@ func Run(req RunRequest) int {
 	if refusal != "" {
 		return usageError(stderr, "%s", refusal)
 	}
-	if msg, ok := unresolvable(err); ok {
+	if msg, ok := collect.Unresolvable(err); ok {
 		fmt.Fprintf(stderr, "envoy: %s\n", msg)
-		return ExitInfra
+		return job.ExitInfra
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "envoy: cannot create job dir: %s\n", err)
-		return ExitInfra
+		return job.ExitInfra
 	}
 
 	// Cardinality decides layout only: one voice runs flat in the job
@@ -209,22 +187,6 @@ func Run(req RunRequest) int {
 	code := fan.Run(fan.Options{Turns: turns, OutDir: dir, Stdout: stdout, Stderr: stderr})
 	releaseIfUnstarted(dir)
 	return code
-}
-
-// unresolvable words the two ways a name can fail to resolve that are the
-// store's fault rather than the caller's — the job's own name, a continued
-// voice's, or a read's: each stops with exit 2 instead of letting an older
-// job answer to the name.
-func unresolvable(err error) (string, bool) {
-	var unreadable *job.StoreUnreadableError
-	var unattributed *job.UnattributedError
-	switch {
-	case errors.As(err, &unreadable):
-		return prose.UnreadableStore(unreadable.Base, unreadable.Err), true
-	case errors.As(err, &unattributed):
-		return prose.UnattributedGeneration(unattributed.Name, unattributed.Dir, unattributed.Err), true
-	}
-	return "", false
 }
 
 // reserve claims the directory this dispatch runs in. A path is an identity
@@ -331,111 +293,6 @@ func releaseIfUnstarted(dir string) {
 	if !job.HasRecord(dir) {
 		os.RemoveAll(dir)
 	}
-}
-
-// CollectRequest selects one job and which of its sections to print.
-type CollectRequest struct {
-	Job        string // the job's name in this project's store, or its directory
-	ResultOnly bool   // an ok job's result body alone; a non-ok job prints its full block
-	StatusOnly bool   // everything except the result body; marks nothing collected
-	Stdout     io.Writer
-	Stderr     io.Writer
-}
-
-// Collect prints one job and stamps first terminal collection once the block
-// has reached Stdout — except under StatusOnly, which delivers no result and
-// therefore stamps nothing.
-func Collect(req CollectRequest) int {
-	stdout, stderr := defaultWriters(req.Stdout, req.Stderr)
-	if req.ResultOnly && req.StatusOnly {
-		return usageError(stderr, "--result-only and --status-only are mutually exclusive: one asks for the payload alone, the other for everything but the payload")
-	}
-	mode := collect.ModeFull
-	switch {
-	case req.ResultOnly:
-		mode = collect.ModeResultOnly
-	case req.StatusOnly:
-		mode = collect.ModeStatusOnly
-	}
-	dir, note, code, ok := resolveJob(req.Job, "collect", "collect takes the job to print: the name it was run as, or its directory", stderr)
-	if !ok {
-		return code
-	}
-	return collect.Collect(dir, note, mode, stdout, stderr)
-}
-
-// WaitRequest selects the job to wait for.
-type WaitRequest struct {
-	Job    string // the job's name in this project's store, or its directory
-	Stdout io.Writer
-	Stderr io.Writer
-}
-
-// Wait blocks until the job's own process has finished it, then prints the
-// block its dispatch prints on ending and returns the dispatch's exit code.
-// It delivers nothing: collect is still what reads the result.
-func Wait(req WaitRequest) int {
-	stdout, stderr := defaultWriters(req.Stdout, req.Stderr)
-	dir, note, code, ok := resolveJob(req.Job, "wait", "wait takes the job to wait for: the name it was run as, or its directory", stderr)
-	if !ok {
-		return code
-	}
-	return collect.Wait(dir, note, stdout, stderr)
-}
-
-// resolveJob resolves the job a read names — a name in this project's store,
-// or a directory — to the directory it means to this caller, and the note a
-// name that fell back to another caller's job carries: the engine cannot tell
-// work picked up on purpose from a caller whose identity changed, so it
-// reports which happened and leaves the judgment. verb labels its errors and
-// missing words the refusal of an empty job; ok false means code is the exit.
-func resolveJob(arg, verb, missing string, stderr io.Writer) (dir, note string, code int, ok bool) {
-	invocationCwd, err := os.Getwd()
-	if err != nil {
-		fmt.Fprintf(stderr, "%s error: cannot determine cwd: %s\n", verb, err)
-		return "", "", ExitInfra, false
-	}
-	if arg == "" {
-		return "", "", usageError(stderr, "%s", missing), false
-	}
-	ref, err := job.ResolveRef(arg, invocationCwd, job.CallerFromEnv())
-	if msg, unres := unresolvable(err); unres {
-		fmt.Fprintf(stderr, "%s error: %s\n", verb, msg)
-		return "", "", ExitInfra, false
-	}
-	if err != nil {
-		return "", "", usageError(stderr, "%s", err), false
-	}
-	if ref.FellBack {
-		note = prose.NameFellBack(ref.Name, ref.Owner != "")
-	}
-	return ref.Dir, note, 0, true
-}
-
-// Pending prints the discovery-only recovery index for base ("" = the default
-// job root for the current directory).
-func Pending(base string, stdout, stderr io.Writer) int {
-	stdout, stderr = defaultWriters(stdout, stderr)
-	derived := base == ""
-	if base == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			fmt.Fprintf(stderr, "pending error: cannot determine cwd: %s\n", err)
-			return ExitInfra
-		}
-		base = job.DefaultBase(cwd)
-	}
-	return collect.Pending(absOrSelf(base), derived, job.CallerFromEnv(), stdout, stderr)
-}
-
-func defaultWriters(stdout, stderr io.Writer) (io.Writer, io.Writer) {
-	if stdout == nil {
-		stdout = os.Stdout
-	}
-	if stderr == nil {
-		stderr = os.Stderr
-	}
-	return stdout, stderr
 }
 
 func absOrSelf(p string) string {

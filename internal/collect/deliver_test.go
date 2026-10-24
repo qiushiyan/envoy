@@ -1,4 +1,4 @@
-package envoy
+package collect
 
 import (
 	"bytes"
@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qiushiyan/envoy/internal/collect"
 	"github.com/qiushiyan/envoy/internal/job"
 )
 
@@ -34,7 +33,7 @@ func TestCollectStampsOnlyWhatReachedTheCaller(t *testing.T) {
 	os.WriteFile(ws.ResultPath(), []byte("the answer"), 0o644)
 
 	var errBuf bytes.Buffer
-	if code := Collect(CollectRequest{Job: dir, Stdout: failingWriter{}, Stderr: &errBuf}); code == 0 {
+	if code := Collect(dir, ModeFull, failingWriter{}, &errBuf); code == 0 {
 		t.Fatalf("collect into a dead writer reported success\nstderr:\n%s", errBuf.String())
 	}
 	got, err := job.ReadMeta(dir)
@@ -46,7 +45,7 @@ func TestCollectStampsOnlyWhatReachedTheCaller(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if code := Collect(CollectRequest{Job: dir, Stdout: &out, Stderr: &errBuf}); code != 0 {
+	if code := Collect(dir, ModeFull, &out, &errBuf); code != 0 {
 		t.Fatalf("collect = %d\n%s", code, errBuf.String())
 	}
 	if got, _ := job.ReadMeta(dir); got.CollectedAt == nil {
@@ -91,7 +90,7 @@ func TestCollectStampsAFanOutOnlyOnceItsBlockArrived(t *testing.T) {
 	}
 
 	var errBuf bytes.Buffer
-	if code := collect.Collect(dir, "", collect.ModeFull, failingWriter{}, &errBuf); code == 0 {
+	if code := collectDir(dir, "", ModeFull, failingWriter{}, &errBuf); code == 0 {
 		t.Fatalf("collect into a dead writer reported success\nstderr:\n%s", errBuf.String())
 	}
 	if n := stamped(); n != 0 {
@@ -99,7 +98,7 @@ func TestCollectStampsAFanOutOnlyOnceItsBlockArrived(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if code := collect.Collect(dir, "picked up", collect.ModeFull, &out, &errBuf); code != 0 {
+	if code := collectDir(dir, "picked up", ModeFull, &out, &errBuf); code != 0 {
 		t.Fatalf("collect = %d\n%s", code, errBuf.String())
 	}
 	if !strings.HasPrefix(out.String(), "fan-out: "+dir+"\nnote: picked up\n") {

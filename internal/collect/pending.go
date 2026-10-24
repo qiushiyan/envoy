@@ -188,8 +188,21 @@ func pendingOtherFan(dir string, stamp *job.GroupStamp, other *job.SchemaError, 
 // Pending prints the discovery-only recovery index: it skips provably live
 // jobs, does not print full results, and does not mark anything collected.
 //
-// caller is the identity of the session asking, "" for none.
-func Pending(base string, baseWasDerived bool, caller string, w, errW io.Writer) int {
+// base "" is the store of the project the current directory belongs to.
+func Pending(base string, w, errW io.Writer) int {
+	baseWasDerived := base == ""
+	if baseWasDerived {
+		cwd, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintf(errW, "pending error: cannot determine cwd: %s\n", err)
+			return job.ExitInfra
+		}
+		base = job.DefaultBase(cwd)
+	}
+	if abs, err := filepath.Abs(base); err == nil {
+		base = abs
+	}
+	caller := job.CallerFromEnv()
 	// "no recovery action is needed" over a store that could not be read is the
 	// most reassuring thing this command can say and the least earned. The one
 	// benign error is a derived store that does not exist yet — a project
