@@ -506,3 +506,22 @@ each workaround.
   (`docs/providers.md` § Permissions). Compare next pass: whether any codex
   turn from a non-checkout still ends `infra`, and whether another refusal
   at startup appears in a zero-event exit.
+- **2026-10-24 — the command line moved onto clikit, and the pins found a
+  silent uncapped turn.** Pinning every caller's invocation against the 0.14.2
+  binary before the switch (28 refusals, the skills', the steward's and
+  claude-steps' shapes) showed `--max-budget-usd NaN` dispatching uncapped
+  with exit 0: the flag's NaN sentinel for "unset" swallowed it. A consult
+  (`consult-r1`, codex) found that accepting options before the job breaks
+  claude-steps, whose list of value-taking options lacked
+  `--instructions-file` and so read `rules.md` as the job; a test reproduced
+  it and the fix went to claude-steps with this change. A cold agent given only
+  the new pages answered 9 of 10 real tasks; the one it could not was what
+  `--max-budget-usd` does on a codex voice, and it named three ambiguities
+  (collect's exit table, fan-out write wording, whose jobs `pending` lists),
+  all reworded. Cost, 30 runs each: `envoy version` 2.9 → 3.4 ms median,
+  binary 5.4 → 7.3 MB. What stands (0.15.0): `docs/README.md` § The command
+  line, `docs/turn-lifecycle-and-recovery.md` § A turn outlives its caller,
+  and the pins in `cmd/envoy/testdata/contract`. Compare next pass: whether a
+  caller hits an `envoy: error:` from an argv form 0.14 accepted (a one-dash
+  long option, `-v`), and whether agents read `envoy run --help` before a
+  first dispatch or stop at `envoy -h`.

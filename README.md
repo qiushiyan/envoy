@@ -46,8 +46,9 @@ with the session and settings read from its records, and `@<job>/<member>`
 names one member of a fan-out. `--instructions-file` gives a new conversation
 standing instructions — rules that hold for every turn — which the provider
 receives as system-level text, and every continuation passes them again from
-the job's records, so each turn's prompt carries only that turn's job. `envoy -h` is the full contract, written for
-the agent that drives the engine.
+the job's records, so each turn's prompt carries only that turn's job.
+`envoy -h` and the command pages it routes to (`envoy run --help` first) are
+the full contract, written for the agent that drives the engine.
 
 Stdout is written for the agent driving it: every status carries what it
 rules out, and every failure ends in one runnable next command. `envoy collect`
@@ -136,34 +137,22 @@ callers decide when to dispatch, what to ask, and whether to resume or retry.
 Why envoy is shaped this way, the alternatives it rejected and its settled
 non-goals are in `docs/README.md`, which routes to a doc per domain.
 
-## Library
-
-The root package is an embeddable facade over the same engine:
-
-```go
-// TimeoutMin's zero value is the 30-minute safety cap, not "uncapped";
-// running without a cap takes an explicit NoTimeout: true.
-envoy.Run(envoy.RunRequest{Job: "review-r1", With: []string{"codex"}, PromptFile: "brief.md"})
-envoy.Run(envoy.RunRequest{Job: "consult-r1", With: []string{"codex", "claude:opus"}, PromptFile: "brief.md"})
-envoy.Run(envoy.RunRequest{Job: "consult-r1", With: []string{"codex=survey.md", "claude:opus=critique.md"}})
-envoy.Collect(envoy.CollectRequest{Job: "review-r1"})
-envoy.Wait(envoy.WaitRequest{Job: "review-r1"})
-envoy.Pending(base, os.Stdout, os.Stderr)
-```
-
-The library runs a dispatch in the calling process; running it in a process of
-its own is the CLI's.
-
 ## Development
 
 ```sh
-make test     # unit + integration (integration runs a race-instrumented binary)
-make vet
+make check    # vet, go fix -diff, the race suite, gofmt
+make golden   # rewrite the help pages after an intended change; review the diff
 ```
 
-Integration tests drive the built binary against a fake provider in
-`tests/fake-bin/` (needs `node` on PATH), without billing a model; the
-`ENVOY_*_MS` variables shrink the lifecycle for them and are not user
-configuration. `CLAUDE.md` maps the packages and the output contract and names
-the provider CLI versions the drivers were verified against; after a provider
-CLI upgrade, re-check `--help` and the stream shapes before blaming a parser.
+The suites run against a fake provider in `tests/fake-bin/` (needs `node` on
+PATH), without billing a model; the `ENVOY_*_MS` variables shrink the
+lifecycle for them and are not user configuration. `cmd/envoy` runs the
+command line in process, through the same App `main` runs: the golden help
+pages, and a contract suite pinning every invocation a caller uses
+(`ENVOY_CONTRACT_UPDATE=1` accepts an intended change, reviewed as a diff).
+`tests/` drives the built binary for what needs real processes: detaching,
+signals, process groups.
+
+`CLAUDE.md` maps the packages and the output contract and names the provider
+CLI versions the drivers were verified against; after a provider CLI upgrade,
+re-check `--help` and the stream shapes before blaming a parser.

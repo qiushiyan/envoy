@@ -72,9 +72,9 @@ ledger the fan-out exists to absorb (`EVIDENCE.md`, 2026-09-14).
 The first `=` splits: no provider, model, effort or job name contains one, a
 prompt path may, and a job named by a directory path containing `=` is refused
 by name rather than split into a job and a file nobody meant. Prompt selection
-lives in the facade: every effective file is checked readable before the name
-is reserved, and fan and runner receive a complete turn with no fallback rule
-to learn.
+lives in `internal/dispatch`: every effective file is checked readable before
+the name is reserved, and fan and runner receive a complete turn with no
+fallback rule to learn.
 
 Rejected shapes:
 

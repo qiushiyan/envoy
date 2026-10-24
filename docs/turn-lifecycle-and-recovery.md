@@ -28,19 +28,33 @@ every interrupted turn in both stores was that collateral, none a decision
 (`EVIDENCE.md`, 2026-10-08). So the turn runs in a process the caller does not
 own, and the caller only waits for it:
 
-1. **The waiter** is the `envoy run` the caller started. It relays the
-   dispatch's stdout and stderr, reads the dispatch's PID and exit code from a
-   control pipe, and exits with that code, so a caller that keeps waiting reads
-   what an attached dispatch printed.
+1. **The waiter** is the `envoy run` the caller started. It parses the
+   command line, so a malformed one is refused before anything starts, and
+   hands the detached process its words unchanged. It relays the dispatch's
+   stdout and stderr, reads the dispatch's PID and exit code from a control
+   pipe, and exits with that code, so a caller that keeps waiting reads what
+   an attached dispatch printed.
 2. **An intermediate** leads a new session, starts the dispatch in it and exits
    at once, handing it to init: outside the caller's process group, outside the
    caller's tree once its parent is gone, and never a session leader, so it
    never acquires a controlling terminal. Go cannot fork, which is why it
    exists.
-3. **The detached process** runs the dispatch exactly as an attached one would —
-   validation, name reservation, the runner or the fan-out — and the waiter
-   reads no flag or record of it. A detached process that cannot start
-   dispatches nothing: there is one way a turn runs.
+3. **The detached process** parses those words with the same declaration and
+   runs the dispatch exactly as an attached one would — validation, name
+   reservation, the runner or the fan-out — and the waiter reads no record of
+   it. Everything a dispatch does to the world happens here, so a caller torn
+   down mid-dispatch cannot leave a name reserved by one process and a turn
+   run by another. A detached process that cannot start dispatches nothing:
+   there is one way a turn runs.
+
+The hidden entries the waiter and the intermediate start (`__envoy-spawn`,
+`__envoy-detached`) and the words they carry are a protocol across installs:
+`make install` renames a new binary into place, and a waiter that started on
+the old one execs whatever the path holds a moment later. So the detached
+process accepts every command line a caller dispatches as the waiter received
+it, unparsed, and the entries keep their names
+(`TestAnOlderWaitersArgvRunsInTheDetachedProcess`); the install's rename is
+what keeps a half-written binary from ever being exec'd.
 
 The signals split by who sends them. **SIGINT** — Ctrl-C on a dispatch, which a
 harness never sends a task — is forwarded, so an interrupt, and a second one,

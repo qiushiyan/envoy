@@ -22,9 +22,10 @@ rather than a byproduct all follow from it.
 The engine is a single Go binary on PATH, with a real provider seam rather than
 provider conditionals, one owner for the record schemas so the writer (the
 runner) and the reader (collect) cannot drift, and the stdlib closing the
-process-lifecycle traps. **Zero third-party dependencies** is load-bearing: it
-keeps the whole program auditable in one sitting and removes an entire class
-of maintenance.
+process-lifecycle traps. Below the command line the standard library is the
+whole toolkit, which keeps the engine auditable in one sitting; the command
+line itself is declared on clikit and Kong, the layer the owner's Go tools
+share (§ The command line).
 
 ## Division of labor
 
@@ -78,6 +79,37 @@ envoy is **not a sandbox**: `--allow-write` is intent, not enforcement
   caller that lost it; a wait prints nothing until the end, so it reports a
   completion, never live evidence.
 
+## The command line
+
+`cmd/envoy` declares the grammar once, as Kong structs, and translates each
+command into one call into `internal/`; clikit (`~/dev/clikit`) renders every
+help page from that declaration and ends every run. Help therefore cannot
+offer a flag the parser refuses or omit one it takes, which a hand-written
+page kept in step by a phrase list could only promise. How help renders, how
+an argv error reads and which errors are usage errors are clikit's: a change
+there is a clikit release and a `go.mod` bump, reviewed through the golden
+pages in `cmd/envoy/testdata/help`.
+
+The pages are written for an agent holding nothing else. `envoy -h` carries
+the loop, how a turn outlives the command that dispatched it and what a name
+means, and sends a first dispatch to `envoy run --help`, which carries voices,
+continuations, standing instructions and what each exit code licenses. A
+section several pages need is one value each of them returns.
+
+Each diagnostic has one owner. A refusal the command layer makes before
+anything runs — the parse, `internal/dispatch`'s checks, a read whose name
+resolves to nothing — comes back unprinted with its exit code, and clikit
+prints it once as `envoy: error: <body>`, body intact. A line the engine
+prints while it reads records or runs a turn — `lock error:`, `collect
+error:`, the runner's — is the engine's and is already reported. A second
+owner prints a refusal twice or rewords a recovery instruction.
+
+Callers read these bytes: the skills' dispatch lines, the planlab steward,
+which tells a held session from a usage error by `lock error:` on exit 3, and
+claude-steps, which reads `envoy run|collect <job>` and the block's `job:` and
+`status:` lines out of transcripts. `cmd/envoy`'s contract suite pins every
+invocation they use, byte for byte, in `cmd/envoy/testdata/contract`.
+
 ## Where each decision lives
 
 - **Job names, callers, generations, name holds and the store:**
@@ -113,6 +145,9 @@ envoy is **not a sandbox**: `--allow-write` is intent, not enforcement
   (`docs/turn-lifecycle-and-recovery.md`).
 - **No prompt templating:** prompts arrive as files, whole — one per voice when
   the voices' questions differ.
+- **No Go library.** The command line is the one interface, and it runs each
+  dispatch in a process of its own; an embedded engine would be a second
+  surface with a compatibility promise of its own and no consumer.
 - **No Windows support, and no migration from sidekick-era state.**
 
 ## Documentation bindings
@@ -133,9 +168,11 @@ repository and win where they narrow it.
   The check block's `<live docs>` are the git pathspecs
   `':(glob)docs/*.md' CLAUDE.md README.md`.
 - **Paths** are written from the repository root.
-- **The protected set:** the caller-facing strings in `internal/prose` and the
-  `envoy -h` page are a contract the tests pin exactly, so a doc quotes them
-  verbatim or not at all; the dated measurements in `EVIDENCE.md`;
+- **The protected set:** the caller-facing strings in `internal/prose`, the
+  help pages (`cmd/envoy/testdata/help`) and the contract pins
+  (`cmd/envoy/testdata/contract`) are a contract the tests pin exactly, so a
+  doc quotes them verbatim or not at all; the dated measurements in
+  `EVIDENCE.md`;
   the commands in `CLAUDE.md` § Commands.
 - **Own check:** no live doc presents a retired surface as current.
 
