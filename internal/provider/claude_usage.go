@@ -58,7 +58,7 @@ func (c *claudeUsage) observe(event map[string]any) bool {
 		}
 		if model != c.model {
 			u.Attribution = job.AttributionIncomplete
-			u.UnexpectedModel = job.Ptr(model)
+			u.UnexpectedModel = new(model)
 			u.AddIssue(job.IssueModelMismatch)
 			break
 		}
@@ -70,11 +70,11 @@ func (c *claudeUsage) observe(event map[string]any) bool {
 			break
 		}
 		context := *input + *read + *creation
-		u.LatestContextTokens = job.Ptr(context)
+		u.LatestContextTokens = new(context)
 		if u.PeakContextTokens == nil || context > *u.PeakContextTokens {
-			u.PeakContextTokens = job.Ptr(context)
+			u.PeakContextTokens = new(context)
 		}
-		u.SampledAt = job.Ptr(job.ISO(time.Now()))
+		u.SampledAt = new(job.ISO(time.Now()))
 		u.InputTokens = addUsage(u.InputTokens, *input)
 		u.CacheReadInputTokens = addUsage(u.CacheReadInputTokens, *read)
 		u.CacheCreationInputTokens = addUsage(u.CacheCreationInputTokens, *creation)
@@ -147,12 +147,12 @@ func usageInt(m map[string]any, key string) *int64 {
 	if !ok || f < 0 || f > 1<<53-1 || math.Trunc(f) != f {
 		return nil
 	}
-	return job.Ptr(int64(f))
+	return new(int64(f))
 }
 
 func addUsage(previous *int64, value int64) *int64 {
 	if previous != nil {
 		value += *previous
 	}
-	return job.Ptr(value)
+	return new(value)
 }

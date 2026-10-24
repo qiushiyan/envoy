@@ -132,7 +132,7 @@ func stampCollected(dir string, meta *job.Meta) {
 	if meta.CollectedAt != nil {
 		return
 	}
-	meta.CollectedAt = job.Ptr(job.ISO(time.Now()))
+	meta.CollectedAt = new(job.ISO(time.Now()))
 	meta.WriteFile(job.Workspace{Dir: dir}.MetaPath())
 }
 

@@ -187,7 +187,7 @@ func TestResolveScopesANameToItsCaller(t *testing.T) {
 		}
 		m := &Meta{SchemaVersion: MetaSchemaVersion, Status: StatusOK, Provider: "codex"}
 		if caller != "" {
-			m.Caller = Ptr(caller)
+			m.Caller = new(caller)
 		}
 		if err := m.WriteFile(Workspace{Dir: dir}.MetaPath()); err != nil {
 			t.Fatal(err)
@@ -201,7 +201,7 @@ func TestResolveScopesANameToItsCaller(t *testing.T) {
 	if err := os.MkdirAll(fan, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	g := &Group{SchemaVersion: GroupSchemaVersion, Members: []string{"codex"}, Caller: Ptr("b")}
+	g := &Group{SchemaVersion: GroupSchemaVersion, Members: []string{"codex"}, Caller: new("b")}
 	if err := g.WriteFile(GroupWorkspace{Dir: fan}.GroupPath()); err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +227,7 @@ func TestResolveRefReportsAFallback(t *testing.T) {
 	if err := os.MkdirAll(first, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	m := &Meta{SchemaVersion: MetaSchemaVersion, Status: StatusOK, Provider: "codex", Caller: Ptr("session-a")}
+	m := &Meta{SchemaVersion: MetaSchemaVersion, Status: StatusOK, Provider: "codex", Caller: new("session-a")}
 	if err := m.WriteFile(Workspace{Dir: first}.MetaPath()); err != nil {
 		t.Fatal(err)
 	}
@@ -355,7 +355,7 @@ func TestInstructionsArchiveIsReadAgainstItsRecord(t *testing.T) {
 	if data, _ := os.ReadFile(ws.InstructionsPath()); string(data) != "stay read-only\n" {
 		t.Fatalf("instructions.md = %q", data)
 	}
-	recorded := &Meta{InstructionsSha256: Ptr(Digest("stay read-only\n"))}
+	recorded := &Meta{InstructionsSha256: new(Digest("stay read-only\n"))}
 	if text, problem := ReadInstructions(ws.Dir, recorded); text != "stay read-only\n" || problem != "" {
 		t.Fatalf("intact archive = %q, %q", text, problem)
 	}

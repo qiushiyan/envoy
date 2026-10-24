@@ -11,10 +11,10 @@ func TestAbandonedUsagePreservesTheLastObservation(t *testing.T) {
 	for _, terminal := range []bool{false, true} {
 		dir := t.TempDir()
 		u := job.NewUsage()
-		u.LatestContextTokens, u.PeakContextTokens = job.Ptr(int64(100)), job.Ptr(int64(200))
+		u.LatestContextTokens, u.PeakContextTokens = new(int64(100)), new(int64(200))
 		u.Final = terminal
 		if terminal {
-			u.OutputTokens = job.Ptr(int64(42))
+			u.OutputTokens = new(int64(42))
 		}
 		u.RefreshState()
 		m := &job.Meta{SchemaVersion: job.MetaSchemaVersion, Status: job.StatusRunning, Usage: u}

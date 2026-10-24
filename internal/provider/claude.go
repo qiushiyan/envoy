@@ -216,14 +216,14 @@ func (c *claude) recovery(parsed claudeParse) Evidence {
 	var envelopePartial, transcriptPartial *string
 	switch parsed.kind {
 	case envelopeOK:
-		envelopePartial = job.Ptr(parsed.text)
+		envelopePartial = new(parsed.text)
 	case envelopeFailed, envelopeBudget:
-		envelopePartial = job.Ptr(parsed.partial)
+		envelopePartial = new(parsed.partial)
 	}
 	if transcript != nil {
-		transcriptPartial = job.Ptr(joinReplies(transcript.replies, exclude))
+		transcriptPartial = new(joinReplies(transcript.replies, exclude))
 	}
-	ev.Partial = firstText(envelopePartial, job.Ptr(joinReplies(c.replies, exclude)), transcriptPartial)
+	ev.Partial = firstText(envelopePartial, new(joinReplies(c.replies, exclude)), transcriptPartial)
 	if parsed.kind != envelopeMissing {
 		ev.Tokens = parsed.tokens
 		ev.CostUSD = parsed.costUSD
@@ -260,7 +260,7 @@ func (c *claude) Conclude(exit ExitInfo) Outcome {
 		return Outcome{
 			Status:      job.StatusFailed,
 			Failure:     &job.Failure{Cause: job.CauseBudgetCap},
-			Partial:     job.Ptr(parsed.partial),
+			Partial:     new(parsed.partial),
 			Tokens:      parsed.tokens,
 			CostUSD:     parsed.costUSD,
 			PromptState: job.PromptAccepted,
@@ -335,15 +335,15 @@ func (c *claude) parse() claudeParse {
 
 	out := claudeParse{sessionID: str(envelope, "session_id")}
 	if cost, ok := num(envelope, "total_cost_usd"); ok {
-		out.costUSD = job.Ptr(cost)
+		out.costUSD = new(cost)
 	}
 	if usage, ok := envelope["usage"].(map[string]any); ok {
 		if input, ok := num(usage, "input_tokens"); ok {
 			out.tokens = &job.Tokens{
-				Input:         job.Ptr(int64(input)),
-				CacheRead:     job.Ptr(numOr(usage, "cache_read_input_tokens", 0)),
-				CacheCreation: job.Ptr(numOr(usage, "cache_creation_input_tokens", 0)),
-				Output:        job.Ptr(numOr(usage, "output_tokens", 0)),
+				Input:         new(int64(input)),
+				CacheRead:     new(numOr(usage, "cache_read_input_tokens", 0)),
+				CacheCreation: new(numOr(usage, "cache_creation_input_tokens", 0)),
+				Output:        new(numOr(usage, "output_tokens", 0)),
 			}
 		}
 	}

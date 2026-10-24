@@ -25,32 +25,32 @@ func TestFailureIsWordedFromTheRecord(t *testing.T) {
 		meta *job.Meta
 		want string
 	}{
-		{"spawn", bare(job.Meta{Provider: "codex", Failure: &job.Failure{Cause: job.CauseSpawnFailed, Message: job.Ptr("exec: not found")}}),
+		{"spawn", bare(job.Meta{Provider: "codex", Failure: &job.Failure{Cause: job.CauseSpawnFailed, Message: new("exec: not found")}}),
 			"envoy could not start codex: exec: not found"},
-		{"verdict", bare(job.Meta{Provider: "codex", Failure: &job.Failure{Cause: job.CauseProviderVerdict, Message: job.Ptr("model exploded")}}),
+		{"verdict", bare(job.Meta{Provider: "codex", Failure: &job.Failure{Cause: job.CauseProviderVerdict, Message: new("model exploded")}}),
 			"Codex reported a provider failure: model exploded"},
-		{"verdict without words, with a code", bare(job.Meta{Provider: "claude", Failure: &job.Failure{Cause: job.CauseProviderVerdict, Code: job.Ptr("error_during_execution")}}),
+		{"verdict without words, with a code", bare(job.Meta{Provider: "claude", Failure: &job.Failure{Cause: job.CauseProviderVerdict, Code: new("error_during_execution")}}),
 			"Claude reported a provider failure: turn failed (error_during_execution)"},
 		{"verdict without words", bare(job.Meta{Provider: "codex", Failure: &job.Failure{Cause: job.CauseProviderVerdict}}),
 			"Codex reported a provider failure: turn failed"},
-		{"refusal", bare(job.Meta{Provider: "claude", Failure: &job.Failure{Cause: job.CauseProviderRefusal, Code: job.Ptr("reasoning_extraction"), Message: job.Ptr("This request was blocked.")}}),
+		{"refusal", bare(job.Meta{Provider: "claude", Failure: &job.Failure{Cause: job.CauseProviderRefusal, Code: new("reasoning_extraction"), Message: new("This request was blocked.")}}),
 			"Claude refused this turn (category reasoning_extraction): This request was blocked."},
-		{"refusal without an explanation", bare(job.Meta{Provider: "claude", Failure: &job.Failure{Cause: job.CauseProviderRefusal, Code: job.Ptr("reasoning_extraction")}}),
+		{"refusal without an explanation", bare(job.Meta{Provider: "claude", Failure: &job.Failure{Cause: job.CauseProviderRefusal, Code: new("reasoning_extraction")}}),
 			"Claude refused this turn (category reasoning_extraction)."},
-		{"refusal without a category", bare(job.Meta{Provider: "claude", Failure: &job.Failure{Cause: job.CauseProviderRefusal, Message: job.Ptr("This request was blocked.")}}),
+		{"refusal without a category", bare(job.Meta{Provider: "claude", Failure: &job.Failure{Cause: job.CauseProviderRefusal, Message: new("This request was blocked.")}}),
 			"Claude refused this turn: This request was blocked."},
 		{"budget", bare(job.Meta{Provider: "claude", MaxBudgetUSD: &budget, Failure: &job.Failure{Cause: job.CauseBudgetCap}}),
 			"Claude stopped at the --max-budget-usd 0.25 cap after accepting the prompt."},
-		{"exit after response", bare(job.Meta{Provider: "codex", ChildExitCode: job.Ptr(7), Failure: &job.Failure{Cause: job.CauseExitedAfterResponse}}),
+		{"exit after response", bare(job.Meta{Provider: "codex", ChildExitCode: new(7), Failure: &job.Failure{Cause: job.CauseExitedAfterResponse}}),
 			"Codex exited with code 7 after producing a response."},
-		{"exit without result", bare(job.Meta{Provider: "codex", ChildExitCode: job.Ptr(1),
-			Failure: &job.Failure{Cause: job.CauseExitedWithoutResult, StderrTail: []string{"b", "c"}, LastErrorEvent: job.Ptr("Reconnecting...")}}),
+		{"exit without result", bare(job.Meta{Provider: "codex", ChildExitCode: new(1),
+			Failure: &job.Failure{Cause: job.CauseExitedWithoutResult, StderrTail: []string{"b", "c"}, LastErrorEvent: new("Reconnecting...")}}),
 			`Codex exited with code 1 but returned no usable result. Last provider detail: last error event "Reconnecting..."; stderr: b | c`},
 		{"launcher exit without envelope", launched(job.Meta{Provider: "claude", Failure: &job.Failure{Cause: job.CauseExitedWithoutEnvelope}}),
 			`Command "headroom" exited with code null but returned no parseable result envelope. Last command detail: (no stderr detail)`},
-		{"foreign signal", bare(job.Meta{Provider: "claude", ChildExitSignal: job.Ptr("SIGKILL"), Failure: &job.Failure{Cause: job.CauseForeignSignal}}),
+		{"foreign signal", bare(job.Meta{Provider: "claude", ChildExitSignal: new("SIGKILL"), Failure: &job.Failure{Cause: job.CauseForeignSignal}}),
 			"claude was killed by signal SIGKILL, which envoy did not send."},
-		{"interrupted", bare(job.Meta{Provider: "codex", InterruptionSignal: job.Ptr("SIGINT"), Failure: &job.Failure{Cause: job.CauseInterrupted}}),
+		{"interrupted", bare(job.Meta{Provider: "codex", InterruptionSignal: new("SIGINT"), Failure: &job.Failure{Cause: job.CauseInterrupted}}),
 			"envoy stopped codex after receiving SIGINT."},
 		{"session conflict", bare(job.Meta{Provider: "codex", Failure: &job.Failure{Cause: job.CauseSessionConflict}}),
 			"Codex reported a session id that another turn already holds, so this turn was stopped."},
@@ -70,7 +70,7 @@ func TestFailureIsWordedFromTheRecord(t *testing.T) {
 // result.md for a turn that did not deliver carries the status, the failure
 // and any output recovered, in that order.
 func TestFailedResultCarriesWhyAndWhatSurvived(t *testing.T) {
-	m := &job.Meta{Status: job.StatusFailed, Provider: "codex", Failure: &job.Failure{Cause: job.CauseProviderVerdict, Message: job.Ptr("boom")}}
+	m := &job.Meta{Status: job.StatusFailed, Provider: "codex", Failure: &job.Failure{Cause: job.CauseProviderVerdict, Message: new("boom")}}
 	want := "# Turn failed\n\nCodex reported a provider failure: boom\n\n## Partial output recovered before the failure\n\nhalf\n"
 	if got := FailedResult(m, "half"); got != want {
 		t.Fatalf("got %q\nwant %q", got, want)

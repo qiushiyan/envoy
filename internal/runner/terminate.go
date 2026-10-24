@@ -73,9 +73,9 @@ func (r *run) requestTermination(reason stopReason, received os.Signal) {
 		}
 	}
 	r.writeMeta(func(m *job.Meta) {
-		m.TerminationRequestedAt = job.Ptr(job.ISO(requestedAt))
+		m.TerminationRequestedAt = new(job.ISO(requestedAt))
 		if reason == stopInterrupted {
-			m.InterruptionSignal = job.Ptr(r.term.signal)
+			m.InterruptionSignal = new(r.term.signal)
 		}
 	})
 	r.progress.Append("stopping",

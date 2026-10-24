@@ -27,7 +27,7 @@ func TestCollectStampsOnlyWhatReachedTheCaller(t *testing.T) {
 		t.Fatal(err)
 	}
 	meta := &job.Meta{SchemaVersion: job.MetaSchemaVersion, Status: job.StatusOK, Provider: "codex",
-		SessionID: job.Ptr("sess-1"), PromptState: job.PromptAccepted, TimeoutMin: 5, ResultKind: job.ResultFinal}
+		SessionID: new("sess-1"), PromptState: job.PromptAccepted, TimeoutMin: 5, ResultKind: job.ResultFinal}
 	if err := meta.WriteFile(ws.MetaPath()); err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestCollectStampsAFanOutOnlyOnceItsBlockArrived(t *testing.T) {
 			t.Fatal(err)
 		}
 		meta := &job.Meta{SchemaVersion: job.MetaSchemaVersion, Status: job.StatusOK, Provider: name,
-			SessionID: job.Ptr("sess-" + name), PromptState: job.PromptAccepted, TimeoutMin: 5, ResultKind: job.ResultFinal}
+			SessionID: new("sess-" + name), PromptState: job.PromptAccepted, TimeoutMin: 5, ResultKind: job.ResultFinal}
 		if err := meta.WriteFile(ws.MetaPath()); err != nil {
 			t.Fatal(err)
 		}

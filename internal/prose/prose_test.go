@@ -20,13 +20,13 @@ func TestContextUsage(t *testing.T) {
 	}{
 		{"unsupported", nil, ""},
 		{"unmeasured", job.NewUsage(), "context: no measurement yet"},
-		{"live", &job.Usage{LatestContextTokens: job.Ptr(int64(138000)), PeakContextTokens: job.Ptr(int64(210000)), Responses: 1},
+		{"live", &job.Usage{LatestContextTokens: new(int64(138000)), PeakContextTokens: new(int64(210000)), Responses: 1},
 			"context: 138k, window unknown, peak 210k, 1 response"},
-		{"settled", &job.Usage{Final: true, State: "settled", LatestContextTokens: job.Ptr(int64(210000)), PeakContextTokens: job.Ptr(int64(210000)), ContextWindowTokens: job.Ptr(int64(1000000)), Responses: 58},
+		{"settled", &job.Usage{Final: true, State: "settled", LatestContextTokens: new(int64(210000)), PeakContextTokens: new(int64(210000)), ContextWindowTokens: new(int64(1000000)), Responses: 58},
 			"context: 210k of 1M (21%), peak 210k, 58 responses"},
-		{"missing terminal", &job.Usage{Final: true, State: "incomplete", LatestContextTokens: job.Ptr(int64(138000)), Issues: []string{"missing_terminal"}},
+		{"missing terminal", &job.Usage{Final: true, State: "incomplete", LatestContextTokens: new(int64(138000)), Issues: []string{"missing_terminal"}},
 			"context: 138k, window unknown, 0 responses; incomplete (no terminal record)"},
-		{"unattributed", &job.Usage{Issues: []string{"model_mismatch"}, UnexpectedModel: job.Ptr("other\nmodel")},
+		{"unattributed", &job.Usage{Issues: []string{"model_mismatch"}, UnexpectedModel: new("other\nmodel")},
 			`context: no measurement yet; incomplete (unexpected model "other\nmodel")`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -102,8 +102,8 @@ func TestTimeoutCarriesTheStreamItObserved(t *testing.T) {
 // every recorded CLI setting rides along, the spend cap included; a model that
 // was omitted stays omitted.
 func TestRedispatchRepeatsTheDispatch(t *testing.T) {
-	warm := &job.Meta{Provider: "claude", Model: job.Ptr("opus"), ResumedFrom: job.Ptr("/jobs/consult-r1"),
-		Cwd: "/repo", GitBaseline: job.Ptr("abc123"), MaxBudgetUSD: job.Ptr(0.25), TimeoutMin: 9}
+	warm := &job.Meta{Provider: "claude", Model: new("opus"), ResumedFrom: new("/jobs/consult-r1"),
+		Cwd: "/repo", GitBaseline: new("abc123"), MaxBudgetUSD: new(0.25), TimeoutMin: 9}
 	got := RedispatchCommand("/jobs/review", warm, "")
 	for _, want := range []string{
 		"envoy run <new-job-name>", "--with @'/jobs/consult-r1'", "--prompt-file '/jobs/review/prompt.md'",
@@ -116,7 +116,7 @@ func TestRedispatchRepeatsTheDispatch(t *testing.T) {
 	if strings.Contains(got, "--with claude") {
 		t.Fatalf("a continuation's retry must not become a cold voice: %q", got)
 	}
-	cold := &job.Meta{Provider: "codex", Effort: job.Ptr("xhigh"), AllowWrite: true, TimeoutMin: 180}
+	cold := &job.Meta{Provider: "codex", Effort: new("xhigh"), AllowWrite: true, TimeoutMin: 180}
 	got = RedispatchCommand("/jobs/delegate", cold, "")
 	for _, want := range []string{"--with codex::xhigh", "--allow-write", "--timeout-min 180"} {
 		if !strings.Contains(got, want) {
@@ -216,7 +216,7 @@ func TestStatusLineGlossesEveryNonOKStatus(t *testing.T) {
 // prescription is exactly the one its prompt state licenses.
 func TestARefusalCarriesNoRemedy(t *testing.T) {
 	const resume, redispatch = "RESUME", "REDISPATCH"
-	refusal := &job.Failure{Cause: job.CauseProviderRefusal, Code: job.Ptr("cyber"), Message: job.Ptr("flagged")}
+	refusal := &job.Failure{Cause: job.CauseProviderRefusal, Code: new("cyber"), Message: new("flagged")}
 	for _, state := range []string{job.PromptAccepted, job.PromptNotStarted, job.PromptUnknown} {
 		refused := Recovery(&job.Meta{Provider: "claude", PromptState: state, Failure: refusal}, resume, redispatch, "")
 		plain := Recovery(&job.Meta{Provider: "claude", PromptState: state}, resume, redispatch, "")
@@ -247,7 +247,7 @@ func TestSessionLockSaysWhoHoldsItAndTheOneSafeStep(t *testing.T) {
 		{"unreadable lock file", job.LockConflict{SessionID: "s1", LockPath: "/locks/s1.lock"},
 			[]string{"Automatic takeover is refused", "remove the stale lock and retry"},
 			[]string{"envoy collect"}},
-		{"a failure that was not a conflict", job.LockConflict{SessionID: "s1", Error: job.Ptr("permission denied")},
+		{"a failure that was not a conflict", job.LockConflict{SessionID: "s1", Error: new("permission denied")},
 			[]string{"permission denied"}, []string{"Automatic takeover", "envoy collect"}},
 	} {
 		got := SessionLock(&c.conflict)
@@ -343,7 +343,7 @@ func TestContinueVocabulary(t *testing.T) {
 	// A damaged archive's refusal ends in the repair, which is a command
 	// either way: the copy from an intact earlier turn, or the new
 	// conversation that starts over from the caller's own copy.
-	m := &job.Meta{Provider: "claude", Model: job.Ptr("opus"), InstructionsSha256: job.Ptr("abc123")}
+	m := &job.Meta{Provider: "claude", Model: new("opus"), InstructionsSha256: new("abc123")}
 	fromSource := InstructionsRepair("/jobs/j2", m, "/jobs/j1/instructions.md")
 	if want := "cp '/jobs/j1/instructions.md' '/jobs/j2/instructions.md'"; !strings.Contains(fromSource, want) {
 		t.Fatalf("repair from an intact turn %q is missing %q", fromSource, want)
@@ -358,8 +358,8 @@ func TestContinueVocabulary(t *testing.T) {
 	// Starting over keeps everything else the job was dispatched with: the
 	// tree, its write intent and anchor, the cap and the spend cap.
 	budget := 0.25
-	settled := &job.Meta{Provider: "claude", InstructionsSha256: job.Ptr("abc123"), ResumedFrom: job.Ptr("/jobs/j1"),
-		Cwd: "/work tree", AllowWrite: true, GitBaseline: job.Ptr("deadbeef"), TimeoutMin: 7, MaxBudgetUSD: &budget}
+	settled := &job.Meta{Provider: "claude", InstructionsSha256: new("abc123"), ResumedFrom: new("/jobs/j1"),
+		Cwd: "/work tree", AllowWrite: true, GitBaseline: new("deadbeef"), TimeoutMin: 7, MaxBudgetUSD: &budget}
 	over := InstructionsRepair("/jobs/j2", settled, "")
 	for _, want := range []string{"--with claude --prompt-file <your-follow-up.md> --instructions-file <your-instructions.md>",
 		"--allow-write", "--baseline deadbeef", "--cwd '/work tree'", "--max-budget-usd 0.25", "--timeout-min 7"} {

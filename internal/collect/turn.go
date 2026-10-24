@@ -292,7 +292,7 @@ func classifyRunning(dir string, meta *job.Meta) prose.RunObservation {
 func reconcileAbandoned(dir string, meta *job.Meta) *job.Meta {
 	ws := job.Workspace{Dir: dir}
 	meta.Status = job.StatusAbandoned
-	meta.ReconciledAt = job.Ptr(job.ISO(time.Now()))
+	meta.ReconciledAt = new(job.ISO(time.Now()))
 	meta.Usage.End()
 	meta.Failure = &job.Failure{Cause: job.CauseAbandoned}
 	if _, err := os.Stat(ws.ResultPath()); os.IsNotExist(err) {

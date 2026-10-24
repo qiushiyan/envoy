@@ -256,7 +256,7 @@ func (r *run) execute(promptText string) Result {
 		r.done = true
 		r.finish(provider.Outcome{
 			Status:      job.StatusInfra,
-			Failure:     &job.Failure{Cause: job.CauseSpawnFailed, Message: job.Ptr(err.Error())},
+			Failure:     &job.Failure{Cause: job.CauseSpawnFailed, Message: new(err.Error())},
 			PromptState: job.PromptNotStarted,
 			Evidence:    "provider spawn error",
 		}, exitResult{})
@@ -266,8 +266,8 @@ func (r *run) execute(promptText string) Result {
 	r.writeMeta(func(m *job.Meta) {
 		// With a non-exec launcher this PID names the wrapper; the PGID
 		// still supervises the entire launcher/provider tree.
-		m.ProviderPid = job.Ptr(child.pid)
-		m.ProviderPgid = job.Ptr(child.pid) // detached child leads its own group
+		m.ProviderPid = new(child.pid)
+		m.ProviderPgid = new(child.pid) // detached child leads its own group
 	})
 	r.progress.Append("running",
 		job.KV{K: "provider_process", V: "alive"},
@@ -366,7 +366,7 @@ func lockConflict(sessionID string, err error) *job.LockConflict {
 	if c, ok := errors.AsType[*lock.Conflict](err); ok {
 		return &c.LockConflict
 	}
-	return &job.LockConflict{SessionID: sessionID, Error: job.Ptr(err.Error())}
+	return &job.LockConflict{SessionID: sessionID, Error: new(err.Error())}
 }
 
 func (r *run) releaseLock() {
@@ -415,7 +415,7 @@ func (r *run) onStderr(chunk []byte) {
 
 func (r *run) noteOutput(n int) {
 	r.meta.ProviderOutputBytes += int64(n)
-	r.meta.LastProviderOutputAt = job.Ptr(job.ISO(time.Now()))
+	r.meta.LastProviderOutputAt = new(job.ISO(time.Now()))
 }
 
 // noteConnectionError tallies one provider connection-error event. Recorded
@@ -428,9 +428,9 @@ func (r *run) noteConnectionError() {
 	ce := r.meta.ConnectionErrors
 	ce.Count++
 	if ce.FirstAt == nil {
-		ce.FirstAt = job.Ptr(now)
+		ce.FirstAt = new(now)
 	}
-	ce.LastAt = job.Ptr(now)
+	ce.LastAt = new(now)
 	r.progress.Append("provider-connection-error", job.KV{K: "count", V: fmt.Sprint(ce.Count)})
 }
 
@@ -443,15 +443,15 @@ func (r *run) handleEvents(events []provider.Event) {
 		switch ev.Kind {
 		case provider.KindActivity:
 			r.meta.ProviderEventCount++
-			r.meta.LastProviderActivityAt = job.Ptr(job.ISO(time.Now()))
-			r.meta.LastProviderEventType = job.Ptr(ev.Type)
+			r.meta.LastProviderActivityAt = new(job.ISO(time.Now()))
+			r.meta.LastProviderEventType = new(ev.Type)
 		case provider.KindNote:
 			r.progress.Append(ev.State, ev.Fields...)
 		case provider.KindModelReported:
 			// The provider's own statement of what it resolved — recorded as
 			// an observation, never inferred.
 			model := ev.Model
-			r.writeMeta(func(m *job.Meta) { m.ProviderReportedModel = job.Ptr(model) })
+			r.writeMeta(func(m *job.Meta) { m.ProviderReportedModel = new(model) })
 		case provider.KindConnectionError:
 			r.noteConnectionError()
 		case provider.KindUsage:
@@ -508,8 +508,8 @@ func (r *run) markPromptAccepted(evidence string) {
 	acceptedAt := job.ISO(time.Now())
 	r.writeMeta(func(m *job.Meta) {
 		m.PromptState = job.PromptAccepted
-		m.PromptStateEvidence = job.Ptr(evidence)
-		m.PromptAcceptedAt = job.Ptr(acceptedAt)
+		m.PromptStateEvidence = new(evidence)
+		m.PromptAcceptedAt = new(acceptedAt)
 	})
 	session := job.Deref(r.meta.SessionID)
 	if session == "" {
@@ -527,8 +527,8 @@ func (r *run) markProviderTerminal(label string) {
 		return
 	}
 	r.writeMeta(func(m *job.Meta) {
-		m.ProviderTerminalAt = job.Ptr(job.ISO(time.Now()))
-		m.ProviderTerminalEventType = job.Ptr(label)
+		m.ProviderTerminalAt = new(job.ISO(time.Now()))
+		m.ProviderTerminalEventType = new(label)
 	})
 	r.progress.Append("provider-terminal",
 		job.KV{K: "event", V: label},
@@ -550,7 +550,7 @@ func (r *run) heartbeat() {
 		providerAlive = "alive"
 	}
 	r.writeMeta(func(m *job.Meta) {
-		m.LastHeartbeatAt = job.Ptr(job.ISO(now))
+		m.LastHeartbeatAt = new(job.ISO(now))
 	})
 	r.progress.Append("running",
 		job.KV{K: "elapsed", V: prose.FormatDuration(now.Sub(r.startedAt))},

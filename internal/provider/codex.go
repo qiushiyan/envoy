@@ -166,15 +166,15 @@ func (c *codex) Feed(line string) []Event {
 		events = append(events, Event{Kind: KindAccepted, Evidence: "codex thread.started"})
 	case "item.completed":
 		if item, ok := event["item"].(map[string]any); ok && str(item, "type") == "agent_message" {
-			c.finalText = job.Ptr(str(item, "text"))
+			c.finalText = new(str(item, "text"))
 		}
 	case "turn.completed":
 		if usage, ok := event["usage"].(map[string]any); ok {
 			c.tokens = &job.Tokens{
-				Input:           job.Ptr(numOr(usage, "input_tokens", 0)),
-				CachedInput:     job.Ptr(numOr(usage, "cached_input_tokens", 0)),
-				Output:          job.Ptr(numOr(usage, "output_tokens", 0)),
-				ReasoningOutput: job.Ptr(numOr(usage, "reasoning_output_tokens", 0)),
+				Input:           new(numOr(usage, "input_tokens", 0)),
+				CachedInput:     new(numOr(usage, "cached_input_tokens", 0)),
+				Output:          new(numOr(usage, "output_tokens", 0)),
+				ReasoningOutput: new(numOr(usage, "reasoning_output_tokens", 0)),
 			}
 		}
 		c.completed = true
@@ -190,7 +190,7 @@ func (c *codex) Feed(line string) []Event {
 		// attempt and then carries on, and a turn that later completes is a
 		// success. Only turn.failed is the provider's verdict.
 		if m := str(event, "message"); m != "" {
-			c.lastErrorText = job.Ptr(m)
+			c.lastErrorText = new(m)
 			if isConnectionError(m) {
 				events = append(events, Event{Kind: KindConnectionError})
 			}
@@ -211,7 +211,7 @@ func (c *codex) recoveredText() *string {
 	if err != nil {
 		return nil
 	}
-	return job.Ptr(string(data))
+	return new(string(data))
 }
 
 func (c *codex) Recovery() Evidence {

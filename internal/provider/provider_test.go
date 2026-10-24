@@ -212,7 +212,7 @@ func TestClaudeStreamParsing(t *testing.T) {
 		t.Fatalf("result event must be terminal: %+v", events)
 	}
 
-	out := c.Conclude(ExitInfo{Code: job.Ptr(0)})
+	out := c.Conclude(ExitInfo{Code: new(0)})
 	if out.Status != job.StatusOK || out.Text != "done" {
 		t.Fatalf("outcome = %+v", out)
 	}
@@ -229,7 +229,7 @@ func TestClaudeFailureExcludesErrorEcho(t *testing.T) {
 	c.Feed(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"boom"}]}}`)
 	c.Feed(`{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s1","errors":["boom"]}`)
 
-	out := c.Conclude(ExitInfo{Code: job.Ptr(7)})
+	out := c.Conclude(ExitInfo{Code: new(7)})
 	if out.Status != job.StatusFailed {
 		t.Fatalf("status = %s", out.Status)
 	}
@@ -269,7 +269,7 @@ func TestClaudeRefusalIsItsOwnCause(t *testing.T) {
 		for _, line := range tc.lines {
 			c.Feed(line)
 		}
-		out := c.Conclude(ExitInfo{Code: job.Ptr(1)})
+		out := c.Conclude(ExitInfo{Code: new(1)})
 		if out.Status != job.StatusFailed || out.PromptState != job.PromptAccepted {
 			t.Fatalf("%s: status %s, prompt state %s", tc.name, out.Status, out.PromptState)
 		}
@@ -286,7 +286,7 @@ func TestClaudeRefusalIsItsOwnCause(t *testing.T) {
 	// when its words mention one: the cause is what the stream named.
 	c := newClaude(Options{}, job.Workspace{}, time.Now())
 	c.Feed(envelope)
-	if f := c.Conclude(ExitInfo{Code: job.Ptr(1)}).Failure; f.Cause != job.CauseProviderVerdict || job.Deref(f.Message) != terminal {
+	if f := c.Conclude(ExitInfo{Code: new(1)}).Failure; f.Cause != job.CauseProviderVerdict || job.Deref(f.Message) != terminal {
 		t.Fatalf("an unnamed refusal must stay a verdict, got %+v", f)
 	}
 }
@@ -312,7 +312,7 @@ func TestClaudeFailureExcludesErrorEchoFromTheTranscript(t *testing.T) {
 			c := newClaude(Options{}, job.Workspace{}, time.Now().Add(-time.Minute))
 			c.Feed(`{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s1","errors":["boom"]}`)
 
-			out := c.Conclude(ExitInfo{Code: job.Ptr(1)})
+			out := c.Conclude(ExitInfo{Code: new(1)})
 			if got := job.Deref(out.Partial); got != tc.want {
 				t.Fatalf("partial = %q, want %q", got, tc.want)
 			}
@@ -331,7 +331,7 @@ func TestClaudeRecoversWorkAcrossMessages(t *testing.T) {
 	c.Feed(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"second "},{"type":"tool_use","name":"Read"},{"type":"text","text":"half"}]}}`)
 	c.Feed(`{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s1","errors":["boom"]}`)
 
-	out := c.Conclude(ExitInfo{Code: job.Ptr(1)})
+	out := c.Conclude(ExitInfo{Code: new(1)})
 	if got := job.Deref(out.Partial); got != "first\n\nsecond half" {
 		t.Fatalf("partial = %q", got)
 	}
@@ -342,7 +342,7 @@ func TestClaudeRecoversWorkAcrossMessages(t *testing.T) {
 func TestAVerdictWithoutWordsRecordsNoMessage(t *testing.T) {
 	c := newClaude(Options{}, job.Workspace{}, time.Now())
 	c.Feed(`{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s1"}`)
-	if f := c.Conclude(ExitInfo{Code: job.Ptr(1)}).Failure; f.Cause != job.CauseProviderVerdict || f.Message != nil ||
+	if f := c.Conclude(ExitInfo{Code: new(1)}).Failure; f.Cause != job.CauseProviderVerdict || f.Message != nil ||
 		job.Deref(f.Code) != "error_during_execution" {
 		t.Fatalf("claude failure = %+v", f)
 	}
@@ -350,7 +350,7 @@ func TestAVerdictWithoutWordsRecordsNoMessage(t *testing.T) {
 	x := newCodex(Options{}, job.Workspace{Dir: t.TempDir()})
 	x.Feed(`{"type":"thread.started","thread_id":"tid"}`)
 	x.Feed(`{"type":"turn.failed"}`)
-	if f := x.Conclude(ExitInfo{Code: job.Ptr(1)}).Failure; f.Cause != job.CauseProviderVerdict || f.Message != nil {
+	if f := x.Conclude(ExitInfo{Code: new(1)}).Failure; f.Cause != job.CauseProviderVerdict || f.Message != nil {
 		t.Fatalf("codex failure = %+v", f)
 	}
 }
@@ -383,7 +383,7 @@ func TestClaudeBudgetStop(t *testing.T) {
 	c.Feed(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"partial"}]}}`)
 	c.Feed(`{"type":"result","subtype":"error_max_budget_usd","session_id":"s1","usage":{"input_tokens":1}}`)
 
-	out := c.Conclude(ExitInfo{Code: job.Ptr(1)})
+	out := c.Conclude(ExitInfo{Code: new(1)})
 	if out.Status != job.StatusFailed || out.Failure.Cause != job.CauseBudgetCap {
 		t.Fatalf("budget outcome = %+v", out)
 	}
@@ -417,7 +417,7 @@ func TestCodexFailureAndRecovery(t *testing.T) {
 	c.Feed(`{"type":"thread.started","thread_id":"tid-3"}`)
 	c.Feed(`{"type":"turn.failed","error":{"message":"model exploded"}}`)
 
-	out := c.Conclude(ExitInfo{Code: job.Ptr(1)})
+	out := c.Conclude(ExitInfo{Code: new(1)})
 	if out.Status != job.StatusFailed || job.Deref(out.Failure.Message) != "model exploded" {
 		t.Fatalf("outcome = %+v", out)
 	}
@@ -438,7 +438,7 @@ func TestCodexFailureWithOutputButNoThreadNamesItsEvidence(t *testing.T) {
 	c := newCodex(Options{}, ws)
 	c.Feed(`{"type":"item.completed","item":{"type":"agent_message","text":"half"}}`)
 	c.Feed(`{"type":"turn.failed","error":{"message":"model exploded"}}`)
-	out := c.Conclude(ExitInfo{Code: job.Ptr(1)})
+	out := c.Conclude(ExitInfo{Code: new(1)})
 	if out.PromptState != job.PromptAccepted || out.Evidence != "codex recovered output" || out.Partial == nil || *out.Partial != "half" {
 		t.Fatalf("outcome = %+v", out)
 	}
@@ -447,7 +447,7 @@ func TestCodexFailureWithOutputButNoThreadNamesItsEvidence(t *testing.T) {
 func TestCodexNoResultUsesStderrTail(t *testing.T) {
 	ws := job.Workspace{Dir: t.TempDir()}
 	c := newCodex(Options{}, ws)
-	out := c.Conclude(ExitInfo{Code: job.Ptr(23), StderrTail: "a\n\nb\nc\nd\n"})
+	out := c.Conclude(ExitInfo{Code: new(23), StderrTail: "a\n\nb\nc\nd\n"})
 	if out.Status != job.StatusInfra {
 		t.Fatalf("status = %s", out.Status)
 	}
@@ -466,7 +466,7 @@ func TestCodexTransientErrorIsDetailWithoutResult(t *testing.T) {
 	c := newCodex(Options{}, ws)
 	c.Feed(`{"type":"thread.started","thread_id":"tid-5"}`)
 	c.Feed(`{"type":"error","message":"Reconnecting... 5/5 (stream disconnected before completion)"}`)
-	out := c.Conclude(ExitInfo{Code: job.Ptr(1), StderrTail: "tail"})
+	out := c.Conclude(ExitInfo{Code: new(1), StderrTail: "tail"})
 	if out.Status != job.StatusInfra || !strings.Contains(job.Deref(out.Failure.LastErrorEvent), "stream disconnected") {
 		t.Fatalf("outcome = %+v", out)
 	}

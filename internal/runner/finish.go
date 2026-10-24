@@ -21,11 +21,11 @@ func (r *run) initMeta() {
 	}
 	var deadlineAt *string
 	if !r.deadline.IsZero() {
-		deadlineAt = job.Ptr(job.ISO(r.deadline))
+		deadlineAt = new(job.ISO(r.deadline))
 	}
 	var instructions *string
 	if r.opts.Turn.Instructions != "" {
-		instructions = job.Ptr(job.Digest(r.opts.Turn.Instructions))
+		instructions = new(job.Digest(r.opts.Turn.Instructions))
 	}
 	// Compute native argv once; record its launch prefix alongside it before spawn.
 	r.argv = r.driver.Argv()
@@ -112,8 +112,8 @@ func (r *run) finish(out provider.Outcome, exit exitResult) {
 	endedAt := time.Now()
 	m := r.meta
 	m.Status = out.Status
-	m.EndedAt = job.Ptr(job.ISO(endedAt))
-	m.DurationMs = job.Ptr(endedAt.Sub(r.startedAt).Milliseconds())
+	m.EndedAt = new(job.ISO(endedAt))
+	m.DurationMs = new(endedAt.Sub(r.startedAt).Milliseconds())
 	m.Tokens = out.Tokens
 	m.Usage = r.driver.Usage()
 	m.Usage.End()
