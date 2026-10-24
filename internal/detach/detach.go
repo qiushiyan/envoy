@@ -100,12 +100,10 @@ func Dispatch(runArgs []string, stdout, stderr io.Writer) int {
 		from *os.File
 		to   io.Writer
 	}{{outR, stdout}, {errR, stderr}} {
-		relays.Add(1)
-		go func() {
-			defer relays.Done()
+		relays.Go(func() {
 			io.Copy(pipe.to, pipe.from)
 			pipe.from.Close()
-		}()
+		})
 	}
 	relayed := make(chan struct{})
 	go func() { relays.Wait(); close(relayed) }()

@@ -22,7 +22,7 @@ func usageCapture(t *testing.T) []map[string]any {
 		t.Fatal(err)
 	}
 	var records []map[string]any
-	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(b)), "\n") {
 		var record map[string]any
 		if err := json.Unmarshal([]byte(line), &record); err != nil {
 			t.Fatal(err)

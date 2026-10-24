@@ -77,7 +77,7 @@ func ResolveRef(arg, invocationCwd, caller string) (Ref, error) {
 		dir, err := filepath.Abs(arg)
 		return Ref{Dir: dir}, err
 	}
-	for _, segment := range strings.Split(arg, "/") {
+	for segment := range strings.SplitSeq(arg, "/") {
 		if !namePattern.MatchString(segment) {
 			return Ref{}, fmt.Errorf("job %q: a name is one segment of letters, digits, '.', '_' or '-' (a fan-out member is name/member); use a path (starting with / or ./) for anything else", arg)
 		}

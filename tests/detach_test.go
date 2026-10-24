@@ -57,7 +57,7 @@ func descendants(t *testing.T, root int) []int {
 		t.Fatal(err)
 	}
 	children := map[int][]int{}
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		var pid, ppid int
 		if _, err := fmt.Sscan(line, &pid, &ppid); err == nil {
 			children[ppid] = append(children[ppid], pid)

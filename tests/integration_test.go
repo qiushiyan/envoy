@@ -15,6 +15,7 @@ package integration
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -247,9 +248,7 @@ func killDispatch(cmd *exec.Cmd, outDir string) {
 // with its own identity, or — caller "" — one that exports none.
 func (e *env) as(caller, codexSession string) *env {
 	extra := map[string]string{}
-	for k, v := range e.extra {
-		extra[k] = v
-	}
+	maps.Copy(extra, e.extra)
 	delete(extra, "ENVOY_CALLER")
 	if caller != "" {
 		extra["ENVOY_CALLER"] = caller

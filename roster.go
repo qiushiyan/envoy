@@ -245,18 +245,15 @@ func continuedVoice(dir string, cont *collect.Continuation, name string) voice {
 // at — but only when such a directory actually exists, since otherwise the
 // spelling can only have meant an attachment.
 func splitSeat(seat string) (spec, promptFile string, err error) {
-	i := strings.IndexByte(seat, '=')
-	if i < 0 {
+	spec, promptFile, ok := strings.Cut(seat, "=")
+	if !ok {
 		return seat, "", nil
 	}
-	if strings.HasPrefix(seat, "@") {
-		if whole := strings.TrimPrefix(seat, "@"); job.IsPath(whole) {
-			if info, err := os.Stat(whole); err == nil && info.IsDir() {
-				return "", "", errors.New(prose.JobPathHasEquals(seat))
-			}
+	if whole, ok := strings.CutPrefix(seat, "@"); ok && job.IsPath(whole) {
+		if info, err := os.Stat(whole); err == nil && info.IsDir() {
+			return "", "", errors.New(prose.JobPathHasEquals(seat))
 		}
 	}
-	spec, promptFile = seat[:i], seat[i+1:]
 	if promptFile == "" {
 		return "", "", fmt.Errorf("--with %s: give the prompt file after '=' (--with %s<file>), or drop the '=' to use --prompt-file", seat, seat)
 	}

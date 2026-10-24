@@ -138,8 +138,7 @@ func groupLive(dir string, stamp *job.GroupStamp, readErr error) bool {
 	if stamp.RunnerLock {
 		return true
 	}
-	var other *job.SchemaError
-	if errors.As(readErr, &other) {
+	if _, ok := errors.AsType[*job.SchemaError](readErr); ok {
 		// Another version's roster is not read; its members are found by
 		// the records they hold.
 		members, err := job.RecordedMembers(dir)
