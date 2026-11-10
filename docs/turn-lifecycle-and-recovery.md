@@ -18,6 +18,15 @@ the stdio pipes, the stream-close event never fired, and the runner hung
 the whole group, and the runner passes raw pipe fds rather than exec's managed
 pipes, so waiting on the process observes its exit alone.
 
+A provider that exits while its group still has members gets the same
+escalation over that residue before the record is published. That cleanup is
+envoy's action on the tree, not a stop of the turn: it records
+`residualCleanupStartedAt` and a `residual-cleanup` progress line, but no
+termination, so the ending stays the provider's and a cap or interrupt that
+arrives during it is recorded as itself. It is recorded because its seconds
+are part of the turn's duration, and unrecorded they read as the provider
+still running.
+
 ## A turn outlives its caller
 
 A Claude Code session that ends — its tmux server dies, a dropped network
@@ -108,6 +117,17 @@ answers after a crash or a reboot can belong to any process; read as a live
 runner, it would make a wait block forever and point a stop at a stranger. The
 claim's descriptor is close-on-exec, so a provider never inherits it.
 
+A PID is therefore evidence only while the records leave the work unfinished.
+Once they establish it finished — a turn record with any status but
+`running`, or a fan-out whose every rostered member has one — an answering PID
+reads as gone.
+Finished is established, never assumed: a member with no record may still
+start, and another schema's fan-out cannot establish it at all, since its
+roster is unreadable and a member that never wrote a record is invisible on
+disk. Each record type builds what `proc.RunnerLiveness` weighs (its
+`Runner`), so every reader takes claim, then completion, then PID, and keeps
+only its own policy for an unknown answer.
+
 ## The timeout is a safety cap, not a stall detector
 
 The cap is a wall-clock deadline compared against a fixed instant, so laptop
@@ -141,7 +161,10 @@ return a result, and each value licenses one action:
 
 Re-sending a prompt the provider already accepted duplicates work that may
 already have changed the tree — the expensive mistake this rule exists to
-prevent. What the session and the process show outranks prompt state, because
+prevent. So prompt state only gains proof (`job.AdvancePrompt`, the runner's
+one route to the record): `not_started` is reached only from `unknown`, and
+acceptance, once observed, outranks any later claim that the prompt never
+started. What the session and the process show outranks prompt state, because
 acting on it beside them would put two turns on one conversation or one tree
 (`recoveryAction`, `recoveryForStale` in `internal/collect`):
 
