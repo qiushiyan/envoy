@@ -103,12 +103,11 @@ func (r *run) finish(out provider.Outcome, exit exitResult) {
 	if out.SessionID != "" {
 		r.setSession(out.SessionID)
 	}
-	// An ending proved at the last moment goes through the same path a
-	// streamed proof takes, so its time and progress line are recorded too;
-	// a turn already accepted keeps its first evidence.
-	if out.PromptState == job.PromptAccepted {
-		r.markPromptAccepted(out.Evidence)
-	}
+	// What the ending proves about the prompt goes through the same path a
+	// streamed proof takes, so an acceptance proved at the last moment gets
+	// its time and progress line too, and an ending can never take back an
+	// acceptance the stream proved.
+	r.advancePrompt(out.PromptState, out.Evidence)
 	endedAt := time.Now()
 	m := r.meta
 	m.Status = out.Status
@@ -119,10 +118,6 @@ func (r *run) finish(out provider.Outcome, exit exitResult) {
 	m.Usage.End()
 	m.CostUSD = out.CostUSD
 	m.Failure = out.Failure
-	if out.PromptState == job.PromptNotStarted {
-		m.PromptState = out.PromptState
-		m.PromptStateEvidence = job.PtrIfNonEmpty(out.Evidence)
-	}
 	m.ChildExitCode = exit.code
 	m.ChildExitSignal = exit.signal
 	m.CollectedAt = nil

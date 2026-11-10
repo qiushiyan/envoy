@@ -47,6 +47,22 @@ const (
 	PromptNotStarted = "not_started"
 )
 
+// AdvancePrompt is the prompt state a turn holds once an observation proves
+// observed, given the state it holds now. Prompt state only gains proof:
+// unknown proves nothing and moves nothing; not_started is reached only from
+// unknown; and acceptance is never taken back and outranks a contradicting
+// not_started, which would license sending the prompt again and repeating
+// work an accepted prompt may already have done.
+func AdvancePrompt(current, observed string) string {
+	switch {
+	case observed == PromptAccepted:
+		return PromptAccepted
+	case observed == PromptNotStarted && current != PromptAccepted:
+		return PromptNotStarted
+	}
+	return current
+}
+
 // Result kinds recorded in meta.json.
 const (
 	ResultNone    = "none"

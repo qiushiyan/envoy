@@ -113,7 +113,7 @@ func TestAnEndingThatProvesAcceptanceStampsItLikeTheStream(t *testing.T) {
 	}
 
 	r, _ = usageRun(t)
-	r.markPromptAccepted("claude assistant")
+	r.advancePrompt(job.PromptAccepted, "claude assistant")
 	r.finish(provider.Outcome{Status: job.StatusOK, PromptState: job.PromptAccepted, Evidence: "claude result/success"}, exitResult{})
 	if got := job.Deref(diskUsage(t, r).PromptStateEvidence); got != "claude assistant" {
 		t.Fatalf("an accepted turn keeps its first evidence, got %q", got)
@@ -172,5 +172,23 @@ func TestATurnWhoseInstructionsCannotBeArchivedNeverSpawns(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatal("the provider was launched without its instructions archive")
+	}
+}
+
+// Acceptance is never taken back. An ending that claims the prompt never
+// started, after the stream proved it accepted, contradicts what was observed;
+// not_started would license sending the prompt again and repeating work that
+// may already exist, so the record keeps the acceptance and its first proof.
+func TestAcceptanceIsNeverTakenBack(t *testing.T) {
+	r, _ := usageRun(t)
+	r.advancePrompt(job.PromptAccepted, "claude assistant")
+	accepted := diskUsage(t, r)
+	r.finish(provider.Outcome{Status: job.StatusInfra, Failure: &job.Failure{Cause: job.CauseSpawnFailed},
+		PromptState: job.PromptNotStarted, Evidence: "provider spawn error"}, exitResult{})
+	m := diskUsage(t, r)
+	if m.PromptState != job.PromptAccepted || job.Deref(m.PromptStateEvidence) != "claude assistant" ||
+		job.Deref(m.PromptAcceptedAt) != job.Deref(accepted.PromptAcceptedAt) {
+		t.Fatalf("after a not_started ending: state %s evidence %v at %v, want the acceptance kept as first proven",
+			m.PromptState, job.Deref(m.PromptStateEvidence), job.Deref(m.PromptAcceptedAt))
 	}
 }

@@ -457,7 +457,7 @@ func (r *run) handleEvents(events []provider.Event) {
 		case provider.KindUsage:
 			r.writeMeta(func(m *job.Meta) { m.Usage = ev.Usage })
 		case provider.KindAccepted:
-			r.markPromptAccepted(ev.Evidence)
+			r.advancePrompt(job.PromptAccepted, ev.Evidence)
 		case provider.KindTerminal:
 			r.markProviderTerminal(ev.Terminal)
 		case provider.KindSessionStarted:
@@ -487,7 +487,7 @@ func (r *run) onSessionStarted(ev provider.Event, rest []provider.Event) (abort 
 					break
 				}
 			}
-			r.markPromptAccepted(evidence + " with conflicting session lock")
+			r.advancePrompt(job.PromptAccepted, evidence+" with conflicting session lock")
 			fmt.Fprintf(r.opts.Stderr, "lock error: %s\n", err)
 			r.progress.Append("lock-conflict",
 				job.KV{K: "session", V: ev.SessionID},
@@ -501,16 +501,27 @@ func (r *run) onSessionStarted(ev provider.Event, rest []provider.Event) (abort 
 	return false
 }
 
-func (r *run) markPromptAccepted(evidence string) {
-	if r.meta.PromptState == job.PromptAccepted {
+// advancePrompt records what an observation proves about the prompt — the
+// stream's, or an ending's — by job.AdvancePrompt's one rule, and is the only
+// writer of the prompt state. A move is recorded whole: the state, how it was
+// proven and, for acceptance, when, with acceptance's progress line. An
+// observation that proves nothing new leaves the first proof standing.
+func (r *run) advancePrompt(observed, evidence string) {
+	next := job.AdvancePrompt(r.meta.PromptState, observed)
+	if next == r.meta.PromptState {
 		return
 	}
-	acceptedAt := job.ISO(time.Now())
+	at := job.ISO(time.Now())
 	r.writeMeta(func(m *job.Meta) {
-		m.PromptState = job.PromptAccepted
-		m.PromptStateEvidence = new(evidence)
-		m.PromptAcceptedAt = new(acceptedAt)
+		m.PromptState = next
+		m.PromptStateEvidence = job.PtrIfNonEmpty(evidence)
+		if next == job.PromptAccepted {
+			m.PromptAcceptedAt = new(at)
+		}
 	})
+	if next != job.PromptAccepted {
+		return
+	}
 	session := job.Deref(r.meta.SessionID)
 	if session == "" {
 		session = "pending"

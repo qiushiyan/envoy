@@ -384,3 +384,28 @@ func TestInstructionsArchiveIsReadAgainstItsRecord(t *testing.T) {
 		t.Fatalf("a conversation without instructions archives none: %v", err)
 	}
 }
+
+// Prompt state only gains proof. Every pair is listed, because the one move
+// that must never happen — acceptance taken back — is the one that would send
+// an accepted prompt again.
+func TestPromptStateOnlyGainsProof(t *testing.T) {
+	states := []string{PromptUnknown, PromptAccepted, PromptNotStarted}
+	want := map[[2]string]string{
+		{PromptUnknown, PromptUnknown}:       PromptUnknown,
+		{PromptUnknown, PromptAccepted}:      PromptAccepted,
+		{PromptUnknown, PromptNotStarted}:    PromptNotStarted,
+		{PromptAccepted, PromptUnknown}:      PromptAccepted,
+		{PromptAccepted, PromptAccepted}:     PromptAccepted,
+		{PromptAccepted, PromptNotStarted}:   PromptAccepted,
+		{PromptNotStarted, PromptUnknown}:    PromptNotStarted,
+		{PromptNotStarted, PromptAccepted}:   PromptAccepted,
+		{PromptNotStarted, PromptNotStarted}: PromptNotStarted,
+	}
+	for _, current := range states {
+		for _, observed := range states {
+			if got := AdvancePrompt(current, observed); got != want[[2]string{current, observed}] {
+				t.Errorf("AdvancePrompt(%s, %s) = %s, want %s", current, observed, got, want[[2]string{current, observed}])
+			}
+		}
+	}
+}
