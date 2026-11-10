@@ -85,7 +85,7 @@ func pendingTurn(r job.Record, caller string) (pendingItem, bool) {
 		// whether anything is still owed — skipped while its own engine is
 		// provably running it, like any live job — and this engine reads no
 		// further.
-		if stamp.Status == job.StatusRunning && proc.RunnerLiveness(dir, stamp.RunnerPid, stamp.RunnerLock) == proc.Live {
+		if stamp.Status == job.StatusRunning && proc.RunnerLiveness(stamp.Runner(dir)) == proc.Live {
 			return pendingItem{}, false
 		}
 		if stamp.Status != job.StatusRunning && stamp.CollectedAt != nil {
@@ -132,17 +132,19 @@ func pendingGroup(dir, caller string) (pendingItem, bool) {
 			why: prose.PendingUnreadable("group.json", err), next: prose.PendingUnreadableNext(dir)}, true
 	}
 	// Every member runs in the fan-out's one process, so while it lives the
-	// fan-out is one running job, listed like a running turn.
-	if proc.RunnerLiveness(dir, group.RunnerPid, group.RunnerLock) == proc.Live {
+	// fan-out is one running job, listed like a running turn. Its liveness is
+	// read from its members, so one whose members all ended is listed by what
+	// they owe, never as running behind a PID that may since be another's.
+	fan := job.Fan{Group: group, Members: job.ReadMembers(dir, group)}
+	if proc.RunnerLiveness(fan.Runner(dir)) == proc.Live {
 		if !job.SharesName(caller, job.Deref(group.Caller)) {
 			return pendingItem{}, false
 		}
 		return pendingItem{label: "running", dir: dir, why: prose.PendingRunning(prose.PendingFanAlive()), next: prose.PendingRunningNext(dir),
 			stop: prose.StopCommand(group.RunnerPid)}, true
 	}
-	members := job.ReadMembers(dir, group)
 	var reasons []string
-	for _, m := range members {
+	for _, m := range fan.Members {
 		// A member the roster names but that never wrote a record is the one
 		// case the member's own files cannot report; the roster is the only
 		// evidence it was meant to run, so the group carries it.
@@ -158,7 +160,7 @@ func pendingGroup(dir, caller string) (pendingItem, bool) {
 		return pendingItem{}, false
 	}
 	return pendingItem{label: "group", dir: dir,
-		why: prose.PendingMembers(reasons, len(members)), next: prose.CollectCommand(dir)}, true
+		why: prose.PendingMembers(reasons, len(fan.Members)), next: prose.CollectCommand(dir)}, true
 }
 
 // pendingOtherFan classifies another engine version's fan-out, which is not
@@ -168,7 +170,7 @@ func pendingGroup(dir, caller string) (pendingItem, bool) {
 // a directory that cannot be listed cannot show that nothing is. This engine
 // reads no further, so the entry names the files, not a member.
 func pendingOtherFan(dir string, stamp *job.GroupStamp, other *job.SchemaError, caller string) (pendingItem, bool) {
-	if proc.RunnerLiveness(dir, stamp.RunnerPid, stamp.RunnerLock) == proc.Live {
+	if proc.RunnerLiveness(stamp.Runner(dir)) == proc.Live {
 		return pendingItem{}, false
 	}
 	item := pendingItem{label: "other-schema", dir: dir,

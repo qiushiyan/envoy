@@ -94,12 +94,15 @@ func Acquire(sessionID, outDir, runnerInstanceID string) (*Handle, error) {
 		// Only a provably live owner is waited on; every other probe answer is
 		// refused as well, and reclaims nothing either. The owner is read the
 		// way every runner is: by its claim on its job directory when its
-		// record says it holds one, by its PID otherwise.
-		claimed := false
+		// record says it holds one, otherwise by the PID that took the lock
+		// while its record leaves its turn unfinished. A record that cannot be
+		// read establishes nothing, so the PID is all there is.
+		owner := proc.Runner{Dir: held.OutDir, Pid: held.Pid}
 		if stamp, err := job.ReadStamp(held.OutDir); err == nil {
-			claimed = stamp.RunnerLock
+			owner = stamp.Runner(held.OutDir)
+			owner.Pid = held.Pid
 		}
-		conflict.HolderLive = proc.RunnerLiveness(held.OutDir, held.Pid, claimed) == proc.Live
+		conflict.HolderLive = proc.RunnerLiveness(owner) == proc.Live
 	}
 	return nil, conflict
 }

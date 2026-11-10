@@ -12,6 +12,7 @@ import (
 
 	"github.com/qiushiyan/envoy/internal/job"
 	"github.com/qiushiyan/envoy/internal/proc"
+	"github.com/qiushiyan/envoy/internal/prose"
 )
 
 // writeClaimedTurn writes a turn record whose runner recorded its claim. The
@@ -240,5 +241,28 @@ func TestCollectDefersToMembersWhenTheFanOutsProcessIsGone(t *testing.T) {
 		if !strings.Contains(block, "still alive") {
 			t.Errorf("mode %d: the member's own section must say its provider is still alive:\n%s", mode, block)
 		}
+	}
+}
+
+// Another schema's fan-out is read by its manifest's stamp alone: its roster
+// cannot be read, and the member records its directory holds cannot show the
+// work finished, since a member that never wrote one is invisible there. So
+// while the process it recorded may be alive, a wait keeps waiting, the name
+// stays held and pending skips it — the same reading in all three, where a
+// wait once returned on the strength of the members it happened to find.
+func TestAnotherSchemasFanOutIsReadByItsStampAlone(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "job")
+	writeOtherGroup(t, dir, os.Getpid())
+	writeTurn(t, filepath.Join(dir, "codex"), "ok", false)
+
+	runner, named := fanRunner(dir)()
+	if !named || runner.Finished || proc.RunnerLiveness(runner) != proc.Live {
+		t.Errorf("wait reads %+v (named %v), want a live process its members cannot show finished", runner, named)
+	}
+	if hold, held := NameHold(dir, ""); !held || hold.Kind != prose.HoldOtherVersion {
+		t.Errorf("NameHold = %+v held=%v, want the name held by another version's live fan-out", hold, held)
+	}
+	if item, listed := pendingGroup(dir, ""); listed {
+		t.Errorf("pending listed %+v, want a fan-out its own engine may still be running skipped", item)
 	}
 }

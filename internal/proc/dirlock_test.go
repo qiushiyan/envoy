@@ -1,6 +1,8 @@
 package proc
 
 import (
+	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -52,4 +54,36 @@ func TestAwaitDirUnlockReturnsOnRelease(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("did not return after the claim was released")
 	}
+}
+
+// A runner's liveness is read from its claim when it recorded one, whatever
+// its records say of the work; without one, records that establish the work
+// finished make a PID that answers no evidence, and only records that leave
+// it unfinished fall back on the PID.
+func TestRunnerLivenessReadsTheClaimThenCompletionThenThePID(t *testing.T) {
+	dir := t.TempDir()
+	alive := os.Getpid() // stands in for a PID another process may now hold
+	exited := exec.Command("true")
+	if err := exited.Run(); err != nil {
+		t.Fatal(err)
+	}
+	gone := exited.Process.Pid
+	read := func(name string, r Runner, want Liveness) {
+		t.Helper()
+		if got := RunnerLiveness(r); got != want {
+			t.Errorf("%s: RunnerLiveness(%+v) = %v, want %v", name, r, got, want)
+		}
+	}
+	read("claimed, claim free, its PID answering", Runner{Dir: dir, Pid: alive, Claimed: true}, Gone)
+	read("unclaimed, work finished, its PID answering", Runner{Dir: dir, Pid: alive, Finished: true}, Gone)
+	read("unclaimed, work unfinished, its PID answering", Runner{Dir: dir, Pid: alive}, Live)
+	read("unclaimed, work unfinished, its PID gone", Runner{Dir: dir, Pid: gone}, Gone)
+	read("unclaimed, work unfinished, no PID recorded", Runner{Dir: dir}, Unknown)
+
+	claim, err := LockDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer claim.Release()
+	read("claimed, claim held, work finished", Runner{Dir: dir, Claimed: true, Finished: true}, Live)
 }

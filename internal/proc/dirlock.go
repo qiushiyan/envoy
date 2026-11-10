@@ -56,15 +56,35 @@ func DirLockLiveness(dir string) Liveness {
 	return Unknown
 }
 
+// Runner is what a job's records say about the process supervising it: the
+// directory it claims, its PID, whether it recorded holding that claim, and
+// whether the records establish that the work it supervised is finished.
+// Finished is established, never assumed: a record that is missing, or one
+// whose meaning cannot be read, leaves it false.
+type Runner struct {
+	Dir      string
+	Pid      int
+	Claimed  bool
+	Finished bool
+}
+
 // RunnerLiveness is the single reading of whether the process supervising a
-// job is alive. A runner that recorded its claim on dir is alive exactly while
-// the claim is held, which a reused PID cannot fake; one that did not — an
-// older record, or a claim that could not be taken — is known only by its PID.
-func RunnerLiveness(dir string, pid int, claimed bool) Liveness {
-	if claimed {
-		return DirLockLiveness(dir)
+// job is alive. A runner that recorded its claim on its directory is alive
+// exactly while the claim is held — past its final record, until it returns —
+// which a reused PID cannot fake. One that did not (an older record, or a
+// claim that could not be taken) is known only by its PID, and a PID is
+// evidence only while the work it supervised is unfinished: once the records
+// establish that work finished, the number may since belong to any process,
+// so the runner reads as gone. Records that leave it unfinished leave the PID
+// the only evidence there is, which no reading can tell from a reuse.
+func RunnerLiveness(r Runner) Liveness {
+	switch {
+	case r.Claimed:
+		return DirLockLiveness(r.Dir)
+	case r.Finished:
+		return Gone
 	}
-	return PidLiveness(pid)
+	return PidLiveness(r.Pid)
 }
 
 // AwaitDirUnlock blocks until no claim on dir is held.

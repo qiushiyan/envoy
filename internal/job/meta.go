@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/qiushiyan/envoy/internal/proc"
 )
 
 // ConnectionErrors is the observed tally of a provider's connection-error
@@ -292,6 +294,27 @@ func ReadMeta(dir string) (*Meta, error) {
 	r := ReadRecord(dir)
 	return r.Meta, r.Err
 }
+
+// Runner is what the stamp says about the process supervising its turn in
+// dir.
+func (s *Stamp) Runner(dir string) proc.Runner {
+	return turnRunner(dir, s.Status, s.RunnerPid, s.RunnerLock)
+}
+
+// Runner is what the record says about the process supervising its turn in
+// dir, read as its stamp is (Stamp.Runner).
+func (m *Meta) Runner(dir string) proc.Runner {
+	return turnRunner(dir, m.Status, m.RunnerPid, m.RunnerLock)
+}
+
+func turnRunner(dir, status string, pid int, claimed bool) proc.Runner {
+	return proc.Runner{Dir: dir, Pid: pid, Claimed: claimed, Finished: finished(status)}
+}
+
+// finished is whether a recorded status establishes its turn over: any status
+// but running, in a record of any schema version, since no schema has changed
+// what running means.
+func finished(status string) bool { return status != StatusRunning }
 
 // ReadStamp reads the stamp of the turn record in dir, from a record of any
 // schema version, ErrNoRecord when it has none.

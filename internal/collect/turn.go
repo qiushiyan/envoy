@@ -260,7 +260,7 @@ func classifyRunning(dir string, meta *job.Meta) prose.RunObservation {
 	if meta.Status != job.StatusRunning {
 		return prose.RunObservation{}
 	}
-	runnerAlive := proc.RunnerLiveness(dir, meta.RunnerPid, meta.RunnerLock)
+	runnerAlive := proc.RunnerLiveness(meta.Runner(dir))
 	pgid := 0
 	if meta.ProviderPgid != nil {
 		pgid = *meta.ProviderPgid

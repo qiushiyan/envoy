@@ -77,8 +77,9 @@ func collectGroup(dir, note string, mode Mode, w, errW io.Writer) int {
 	}
 	// Every member runs in the fan-out's one process, so its liveness is the
 	// set's: what a stop reaches, and whether a member recorded as running
-	// can still be waited on.
-	live := proc.RunnerLiveness(dir, group.RunnerPid, group.RunnerLock) == proc.Live
+	// can still be waited on. It is read from the members already read, so a
+	// fan-out whose members all ended never aims a stop at the PID it recorded.
+	live := proc.RunnerLiveness(fan.Runner(dir)) == proc.Live
 	running := slices.Contains(statuses, job.StatusRunning)
 
 	// The group's closing aggregates delivery alongside status: a member that

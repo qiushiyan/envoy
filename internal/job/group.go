@@ -6,6 +6,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/qiushiyan/envoy/internal/proc"
 )
 
 // GroupSchemaVersion is the only group.json schema this engine reads or
@@ -104,6 +106,15 @@ func ReadGroupRecord(dir string) (*GroupStamp, *Group, error) {
 	return &stamp, &g, nil
 }
 
+// Runner is what the manifest's stamp alone says about the process
+// supervising the fan-out in dir. A stamp carries no roster, so it never
+// establishes the work finished: the members another schema's directory holds
+// records for cannot either, since one that never wrote a record is invisible
+// there and may still be preparing its turn.
+func (s *GroupStamp) Runner(dir string) proc.Runner {
+	return proc.Runner{Dir: dir, Pid: s.RunnerPid, Claimed: s.RunnerLock}
+}
+
 // GroupWorkspace is one fan-out directory and the fixed names inside it. Each
 // member gets an ordinary job directory one level down, named after the member,
 // so every single-turn path in this package keeps working unchanged.
@@ -149,6 +160,23 @@ type Fan struct {
 type Member struct {
 	Name string
 	Record
+}
+
+// Runner is what the fan-out's manifest and its members' records say about
+// the process supervising it in dir. Only the roster names every member, so
+// only a fan-out read whole establishes its work finished: every member the
+// roster names has a record whose stamp says its turn is over. A member with
+// no record may still start, and one whose record does not parse says
+// nothing, so either leaves the work unfinished.
+func (f *Fan) Runner(dir string) proc.Runner {
+	over := true
+	for _, m := range f.Members {
+		if m.Stamp == nil || !finished(m.Stamp.Status) {
+			over = false
+			break
+		}
+	}
+	return proc.Runner{Dir: dir, Pid: f.Group.RunnerPid, Claimed: f.Group.RunnerLock, Finished: over}
 }
 
 // ReadFan reads the fan-out in dir as this engine's schema: ErrNoRecord when

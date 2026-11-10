@@ -140,3 +140,57 @@ func TestReadersSeparateAbsenceFromDamage(t *testing.T) {
 		t.Fatalf("an unreadable record is damage, not absence: %+v", m)
 	}
 }
+
+// Only a fan-out read whole establishes that its work is finished: every
+// member the roster names has a record whose stamp says its turn is over, in
+// whatever schema it was written. A member with no record may still start and
+// one that does not parse says nothing, so either leaves the work unfinished —
+// and a manifest's stamp alone, with no roster to read, never establishes it.
+func TestAFanOutsWorkIsFinishedOnlyWhenEveryMemberSaysSo(t *testing.T) {
+	member := func(dir, name, meta string) Member {
+		md := GroupWorkspace{Dir: dir}.Member(name).Dir
+		os.MkdirAll(md, 0o755)
+		if meta != "" {
+			if err := os.WriteFile(Workspace{Dir: md}.MetaPath(), []byte(meta), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return Member{Name: name, Record: ReadRecord(md)}
+	}
+	const (
+		ended   = `{"schemaVersion":10,"status":"ok","provider":"codex"}`
+		running = `{"schemaVersion":10,"status":"running","provider":"codex"}`
+		older   = `{"schemaVersion":9,"status":"failed","provider":"codex"}`
+	)
+	cases := []struct {
+		name     string
+		members  func(dir string) []Member
+		finished bool
+	}{
+		{"every member ended", func(d string) []Member {
+			return []Member{member(d, "codex", ended), member(d, "claude", ended)}
+		}, true},
+		{"one ended in another schema", func(d string) []Member {
+			return []Member{member(d, "codex", ended), member(d, "claude", older)}
+		}, true},
+		{"one still running", func(d string) []Member {
+			return []Member{member(d, "codex", ended), member(d, "claude", running)}
+		}, false},
+		{"one never wrote a record", func(d string) []Member {
+			return []Member{member(d, "codex", ended), member(d, "claude", "")}
+		}, false},
+		{"one whose record does not parse", func(d string) []Member {
+			return []Member{member(d, "codex", ended), member(d, "claude", "{")}
+		}, false},
+	}
+	for _, c := range cases {
+		dir := t.TempDir()
+		fan := Fan{Group: &Group{RunnerPid: 42}, Members: c.members(dir)}
+		if got := fan.Runner(dir); got.Finished != c.finished || got.Pid != 42 || got.Dir != dir {
+			t.Errorf("%s: Runner = %+v, want finished %v", c.name, got, c.finished)
+		}
+	}
+	if got := (&GroupStamp{RunnerPid: 42}).Runner("d"); got.Finished {
+		t.Errorf("a manifest's stamp alone must not establish its work finished: %+v", got)
+	}
+}

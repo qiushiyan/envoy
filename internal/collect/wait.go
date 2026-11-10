@@ -56,12 +56,12 @@ func waitDir(dir, note string, w, errW io.Writer) int {
 }
 
 func waitTurn(dir string, errW io.Writer) (string, int) {
-	awaitRunner(dir, func() (live, claimed bool) {
+	awaitRunner(dir, func() (proc.Runner, bool) {
 		stamp, err := job.ReadStamp(dir)
 		if err != nil {
-			return false, false
+			return proc.Runner{}, false
 		}
-		return turnLive(dir, stamp), stamp.RunnerLock
+		return stamp.Runner(dir), true
 	})
 	end := job.ReadRecord(dir)
 	switch {
@@ -81,13 +81,7 @@ func waitTurn(dir string, errW io.Writer) (string, int) {
 // as running, or one whose record will not read, did neither, so such a set
 // is reported as an ending the records do not hold, for collect to read.
 func waitGroup(dir string, errW io.Writer) (string, int) {
-	awaitRunner(dir, func() (live, claimed bool) {
-		stamp, _, err := job.ReadGroupRecord(dir)
-		if stamp == nil {
-			return false, false
-		}
-		return groupLive(dir, stamp, err), stamp.RunnerLock
-	})
+	awaitRunner(dir, fanRunner(dir))
 	fan, err := job.ReadFan(dir)
 	if err != nil {
 		reportUnreadableManifest("wait", dir, err, errW)
@@ -125,63 +119,34 @@ func ended(r job.Record) bool { return r.Err == nil && r.Meta.Status != job.Stat
 // nothing ran for it.
 func neverStarted(r job.Record) bool { return errors.Is(r.Err, job.ErrNoRecord) }
 
-// turnLive is whether a turn's runner is still running it. A claimed runner
-// is alive exactly while its claim is held — past its final record, until it
-// has released the session lock too. One known only by its PID is trusted
-// only while its record says running: a finished runner's PID may since have
-// been reused.
-func turnLive(dir string, stamp *job.Stamp) bool {
-	if proc.RunnerLiveness(dir, stamp.RunnerPid, stamp.RunnerLock) != proc.Live {
-		return false
+// fanRunner reads what a fan-out's records say about the process supervising
+// it, as of each look: its manifest's stamp, and — when the manifest is this
+// engine's — every member its roster names, which alone can establish that
+// the work is finished. A manifest that does not parse names no process.
+func fanRunner(dir string) func() (proc.Runner, bool) {
+	return func() (proc.Runner, bool) {
+		stamp, group, _ := job.ReadGroupRecord(dir)
+		switch {
+		case stamp == nil:
+			return proc.Runner{}, false
+		case group == nil:
+			return stamp.Runner(dir), true
+		}
+		fan := job.Fan{Group: group, Members: job.ReadMembers(dir, group)}
+		return fan.Runner(dir), true
 	}
-	return stamp.RunnerLock || stamp.Status == job.StatusRunning
 }
 
-// groupLive is whether the process supervising a fan-out is still running
-// it, read the way turnLive reads a turn: by its claim when it recorded one,
-// otherwise by its PID while some member is still recorded as running.
-func groupLive(dir string, stamp *job.GroupStamp, readErr error) bool {
-	if proc.RunnerLiveness(dir, stamp.RunnerPid, stamp.RunnerLock) != proc.Live {
-		return false
-	}
-	if stamp.RunnerLock {
-		return true
-	}
-	if _, ok := errors.AsType[*job.SchemaError](readErr); ok {
-		// Another version's roster is not read; its members are found by
-		// the records they hold.
-		members, err := job.RecordedMembers(dir)
-		if err != nil {
-			return false
-		}
-		for _, m := range members {
-			if m.Stamp != nil && m.Stamp.Status == job.StatusRunning {
-				return true
-			}
-		}
-		return false
-	}
-	fan, err := job.ReadFan(dir)
-	if err != nil {
-		return false
-	}
-	for _, m := range fan.Members {
-		if m.Err != nil || m.Meta.Status == job.StatusRunning {
-			return true
-		}
-	}
-	return false
-}
-
-// awaitRunner blocks while look reports the runner alive: on its claim when
-// it holds one, otherwise one poll interval at a time.
-func awaitRunner(dir string, look func() (live, claimed bool)) {
+// awaitRunner blocks while the runner look reads from the records is alive
+// (proc.RunnerLiveness): on its claim when it recorded one, otherwise one poll
+// interval at a time. A look whose records name no runner ends the wait.
+func awaitRunner(dir string, look func() (proc.Runner, bool)) {
 	for {
-		live, claimed := look()
-		if !live {
+		runner, named := look()
+		if !named || proc.RunnerLiveness(runner) != proc.Live {
 			return
 		}
-		if claimed && proc.AwaitDirUnlock(dir) == nil {
+		if runner.Claimed && proc.AwaitDirUnlock(dir) == nil {
 			continue
 		}
 		time.Sleep(waitPoll)

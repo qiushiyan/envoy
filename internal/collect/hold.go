@@ -67,8 +67,9 @@ func undelivered(dir string) (hold prose.NameHold, owner string, held bool) {
 	case err != nil:
 		return prose.NameHold{Kind: prose.HoldUnreadable}, owner, true
 	}
-	mayStillStart := proc.RunnerLiveness(dir, group.RunnerPid, group.RunnerLock) != proc.Gone
-	for _, m := range job.ReadMembers(dir, group) {
+	fan := job.Fan{Group: group, Members: job.ReadMembers(dir, group)}
+	mayStillStart := proc.RunnerLiveness(fan.Runner(dir)) != proc.Gone
+	for _, m := range fan.Members {
 		if errors.Is(m.Err, job.ErrNoRecord) {
 			if mayStillStart {
 				return prose.NameHold{Kind: prose.HoldUnrecorded, Member: m.Name}, owner, true
@@ -90,7 +91,7 @@ func undelivered(dir string) (hold prose.NameHold, owner string, held bool) {
 // name, so a hold past the runner would strand it for good, and a manifest
 // that records no runner gives this engine nothing to wait on.
 func otherFanHold(dir string, stamp *job.GroupStamp) (prose.NameHold, bool) {
-	if (stamp.RunnerPid > 0 || stamp.RunnerLock) && proc.RunnerLiveness(dir, stamp.RunnerPid, stamp.RunnerLock) != proc.Gone {
+	if (stamp.RunnerPid > 0 || stamp.RunnerLock) && proc.RunnerLiveness(stamp.Runner(dir)) != proc.Gone {
 		return prose.NameHold{Kind: prose.HoldOtherVersion}, true
 	}
 	return prose.NameHold{}, false
@@ -111,7 +112,7 @@ func stampHold(r job.Record) (prose.NameHold, bool) {
 	case stamp == nil:
 		return prose.NameHold{Kind: prose.HoldUnreadable}, true
 	case !slices.Contains(job.MetaSchemas, stamp.SchemaVersion):
-		if stamp.Status == job.StatusRunning && proc.RunnerLiveness(r.Dir, stamp.RunnerPid, stamp.RunnerLock) != proc.Gone {
+		if stamp.Status == job.StatusRunning && proc.RunnerLiveness(stamp.Runner(r.Dir)) != proc.Gone {
 			return prose.NameHold{Kind: prose.HoldOtherVersion}, true
 		}
 		return prose.NameHold{}, false

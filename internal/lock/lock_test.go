@@ -2,6 +2,7 @@ package lock
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -140,5 +141,38 @@ func TestAHolderThatClaimedItsJobIsLiveOnlyWhileTheClaimIsHeld(t *testing.T) {
 	_, err = Acquire("session-c", "/tmp/other", "instance-2")
 	if conflict, ok := err.(*Conflict); !ok || !conflict.HolderLive {
 		t.Fatalf("a holder whose claim is held must read as live, got %v", err)
+	}
+}
+
+// A holder known only by its PID — its record names no claim — is provably
+// live only while that record says its turn is still running. A terminal
+// record (published before the lock's removal, or reconciled as abandoned)
+// says the turn is over, so a PID that answers may belong to any process; the
+// lock is still refused and kept, but not as a live turn to wait for.
+func TestATerminalHolderKnownOnlyByItsPIDIsNotProvablyLive(t *testing.T) {
+	for _, c := range []struct {
+		status string
+		live   bool
+	}{{"running", true}, {"abandoned", false}, {"ok", false}} {
+		isolate(t)
+		holder := t.TempDir()
+		meta := fmt.Sprintf(`{"schemaVersion":10,"status":%q,"provider":"codex","runnerPid":%d}`, c.status, os.Getpid())
+		if err := os.WriteFile(filepath.Join(holder, "meta.json"), []byte(meta), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Acquire("session-c", holder, "instance-1"); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Acquire("session-c", t.TempDir(), "instance-2")
+		conflict, ok := err.(*Conflict)
+		if !ok {
+			t.Fatalf("%s holder: expected a conflict, got %v", c.status, err)
+		}
+		if conflict.HolderLive != c.live {
+			t.Errorf("%s holder: HolderLive = %v, want %v", c.status, conflict.HolderLive, c.live)
+		}
+		if _, err := os.Stat(lockPath("session-c")); err != nil {
+			t.Errorf("%s holder: the lock must never be reclaimed: %v", c.status, err)
+		}
 	}
 }
