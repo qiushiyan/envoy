@@ -101,27 +101,32 @@ type Meta struct {
 	// executed argv is CommandPrefix + ProviderArgv[1:]; ProviderArgv keeps
 	// its provider-native meaning. Absent in older records means unknown.
 	// This observation is never inherited by a continuation.
-	CommandPrefix             []string `json:"commandPrefix,omitempty"`
-	RunnerPid                 int      `json:"runnerPid"`
-	RunnerInstanceID          string   `json:"runnerInstanceId"`
-	ProviderPid               *int     `json:"providerPid"`
-	ProviderPgid              *int     `json:"providerPgid"`
-	ChildExitCode             *int     `json:"childExitCode"`
-	ChildExitSignal           *string  `json:"childExitSignal"`
-	PromptState               string   `json:"promptState"`
-	PromptStateEvidence       *string  `json:"promptStateEvidence"`
-	PromptAcceptedAt          *string  `json:"promptAcceptedAt"`
-	TerminationRequestedAt    *string  `json:"terminationRequestedAt"`
-	InterruptionSignal        *string  `json:"interruptionSignal"`
-	LastHeartbeatAt           *string  `json:"lastHeartbeatAt"`
-	ProviderTerminalAt        *string  `json:"providerTerminalAt"`
-	ProviderTerminalEventType *string  `json:"providerTerminalEventType"`
-	ProviderOutputBytes       int64    `json:"providerOutputBytes"`
-	ProviderEventCount        int64    `json:"providerEventCount"`
-	LastProviderOutputAt      *string  `json:"lastProviderOutputAt"`
-	LastProviderActivityAt    *string  `json:"lastProviderActivityAt"`
-	LastProviderEventType     *string  `json:"lastProviderEventType"`
-	ProviderReportedModel     *string  `json:"providerReportedModel"` // the provider's own announcement; never inferred
+	CommandPrefix          []string `json:"commandPrefix,omitempty"`
+	RunnerPid              int      `json:"runnerPid"`
+	RunnerInstanceID       string   `json:"runnerInstanceId"`
+	ProviderPid            *int     `json:"providerPid"`
+	ProviderPgid           *int     `json:"providerPgid"`
+	ChildExitCode          *int     `json:"childExitCode"`
+	ChildExitSignal        *string  `json:"childExitSignal"`
+	PromptState            string   `json:"promptState"`
+	PromptStateEvidence    *string  `json:"promptStateEvidence"`
+	PromptAcceptedAt       *string  `json:"promptAcceptedAt"`
+	TerminationRequestedAt *string  `json:"terminationRequestedAt"`
+	InterruptionSignal     *string  `json:"interruptionSignal"`
+	// ResidualCleanupStartedAt is when envoy began stopping what was left in
+	// the provider's process group after the provider itself had exited: its
+	// own action on the tree, never a stop of the turn, which ended the
+	// provider's way. Absent when nothing was left, and in older records.
+	ResidualCleanupStartedAt  *string `json:"residualCleanupStartedAt,omitempty"`
+	LastHeartbeatAt           *string `json:"lastHeartbeatAt"`
+	ProviderTerminalAt        *string `json:"providerTerminalAt"`
+	ProviderTerminalEventType *string `json:"providerTerminalEventType"`
+	ProviderOutputBytes       int64   `json:"providerOutputBytes"`
+	ProviderEventCount        int64   `json:"providerEventCount"`
+	LastProviderOutputAt      *string `json:"lastProviderOutputAt"`
+	LastProviderActivityAt    *string `json:"lastProviderActivityAt"`
+	LastProviderEventType     *string `json:"lastProviderEventType"`
+	ProviderReportedModel     *string `json:"providerReportedModel"` // the provider's own announcement; never inferred
 	// RunnerLock records that the runner held its claim on this directory
 	// (proc.DirLock) for as long as it ran, so whether it is still running
 	// is read from that claim rather than from a PID a later process may

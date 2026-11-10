@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/qiushiyan/envoy/internal/job"
+	"github.com/qiushiyan/envoy/internal/lock"
 	"github.com/qiushiyan/envoy/internal/provider"
 )
 
@@ -190,5 +191,118 @@ func TestAcceptanceIsNeverTakenBack(t *testing.T) {
 		job.Deref(m.PromptAcceptedAt) != job.Deref(accepted.PromptAcceptedAt) {
 		t.Fatalf("after a not_started ending: state %s evidence %v at %v, want the acceptance kept as first proven",
 			m.PromptState, job.Deref(m.PromptStateEvidence), job.Deref(m.PromptAcceptedAt))
+	}
+}
+
+// codexRun is a run of the codex driver that spawned nothing, so an ending can
+// be driven through onChildDone from what its stream and stops recorded.
+func codexRun(t *testing.T) *run {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir()) // session locks
+	ws := job.Workspace{Dir: t.TempDir()}
+	started := time.Now()
+	driver, err := provider.New("codex", provider.Options{}, ws, started)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &run{ws: ws, driver: driver, startedAt: started, progress: ws.Progress(), instance: "this-run",
+		opts: Options{Provider: "codex", Stdout: io.Discard, Stderr: io.Discard}}
+	r.initMeta()
+	r.writeMeta(nil)
+	return r
+}
+
+const (
+	codexStarted   = `{"type":"thread.started","thread_id":"thread-1"}`
+	codexAnswer    = `{"type":"item.completed","item":{"type":"agent_message","text":"the answer"}}`
+	codexCompleted = `{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}`
+)
+
+func (r *run) feed(lines ...string) {
+	for _, l := range lines {
+		r.handleEvents(r.driver.Feed(l))
+	}
+}
+
+// How a turn ended is decided in one order, from everything the stream
+// carried — a final record still in the line buffer included: a session held
+// by another turn first, then a stop envoy made before the provider's own
+// verdict, then a signal envoy did not send, and only then the driver's
+// conclusion. A verdict the provider did reach hands the ending to the driver
+// whatever stopped the process after it.
+func TestAnEndingIsDecidedInOneOrder(t *testing.T) {
+	cases := []struct {
+		name   string
+		drive  func(r *run) exitResult
+		status string
+		cause  string // "" = no failure
+	}{
+		{"the provider's own verdict", func(r *run) exitResult {
+			r.feed(codexStarted, codexAnswer, codexCompleted)
+			return exitResult{code: new(0)}
+		}, job.StatusOK, ""},
+		{"a cap before the verdict", func(r *run) exitResult {
+			r.feed(codexStarted)
+			r.requestTermination(stopTimeout, nil)
+			return exitResult{signal: new("SIGTERM")}
+		}, job.StatusTimeout, job.CauseTimeout},
+		{"an interrupt before the verdict", func(r *run) exitResult {
+			r.feed(codexStarted)
+			r.requestTermination(stopInterrupted, syscall.SIGINT)
+			return exitResult{signal: new("SIGINT")}
+		}, job.StatusInterrupted, job.CauseInterrupted},
+		{"a cap after the verdict, still in the line buffer", func(r *run) exitResult {
+			r.feed(codexStarted, codexAnswer)
+			r.requestTermination(stopTimeout, nil)
+			r.lineBuf = []byte(codexCompleted) // unterminated: only the final drain feeds it
+			return exitResult{signal: new("SIGTERM")}
+		}, job.StatusOK, ""},
+		{"a signal envoy did not send, before the verdict", func(r *run) exitResult {
+			r.feed(codexStarted, codexAnswer)
+			return exitResult{signal: new("SIGKILL")}
+		}, job.StatusInfra, job.CauseForeignSignal},
+		{"a signal envoy did not send, after the verdict", func(r *run) exitResult {
+			r.feed(codexStarted, codexAnswer, codexCompleted)
+			return exitResult{signal: new("SIGKILL")}
+		}, job.StatusFailed, job.CauseExitedAfterResponse},
+		{"a session held by another turn, then a stop", func(r *run) exitResult {
+			held, err := lock.Acquire("thread-1", t.TempDir(), "another-run")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { held.Release() })
+			r.feed(codexStarted) // the conflict stops the turn
+			r.requestTermination(stopTimeout, nil)
+			return exitResult{signal: new("SIGTERM")}
+		}, job.StatusInfra, job.CauseSessionConflict},
+	}
+	for _, c := range cases {
+		r := codexRun(t)
+		r.onChildDone(c.drive(r))
+		m := diskUsage(t, r)
+		cause := ""
+		if m.Failure != nil {
+			cause = m.Failure.Cause
+		}
+		if m.Status != c.status || cause != c.cause {
+			t.Errorf("%s: ended %s (%q), want %s (%q)", c.name, m.Status, cause, c.status, c.cause)
+		}
+	}
+}
+
+// A stop is logged by why envoy made it. A turn stopped because its session is
+// held by another turn says so, never naming a signal it did not receive.
+func TestASessionConflictStopIsLoggedByItsReason(t *testing.T) {
+	r := codexRun(t)
+	held, err := lock.Acquire("thread-1", t.TempDir(), "another-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Release()
+	r.feed(codexStarted)
+	r.escalationTimer.Stop()
+	progress, _ := os.ReadFile(r.ws.ProgressLogPath())
+	if !strings.Contains(string(progress), "state=stopping reason=session_conflict") {
+		t.Fatalf("progress.log must log the stop by its reason:\n%s", progress)
 	}
 }

@@ -61,7 +61,10 @@ func (r *run) requestTermination(reason stopReason, received os.Signal) {
 		requestedAt: requestedAt,
 		stream:      r.capStream(requestedAt),
 	}
-	progressReason, treeSignal := "SIGTERM", syscall.SIGTERM
+	// The progress line names why envoy is stopping the turn: the cap, the
+	// signal it received, or the session another turn holds.
+	var progressReason string
+	treeSignal := syscall.SIGTERM
 	switch reason {
 	case stopTimeout:
 		progressReason = "hard_cap"
@@ -71,6 +74,8 @@ func (r *run) requestTermination(reason stopReason, received os.Signal) {
 		if received == syscall.SIGINT {
 			treeSignal = syscall.SIGINT
 		}
+	case stopLockConflict:
+		progressReason = job.CauseSessionConflict
 	}
 	r.writeMeta(func(m *job.Meta) {
 		m.TerminationRequestedAt = new(job.ISO(requestedAt))
@@ -116,12 +121,22 @@ func (r *run) schedule(d time.Duration, fn func()) {
 }
 
 // cleanupResidual handles a dead child whose group still has members: stop
-// them too before publishing terminal state. A stop already under way covers
-// them.
+// them too before publishing terminal state. It is envoy's own action on the
+// tree, not a decision about the turn, so it records no termination — the
+// ending stays the provider's, and a cap or an interrupt that arrives during
+// it is still recorded as itself — but the record says when it began and the
+// log that it happened, since the time it takes is part of the turn's. A stop
+// already under way covers the residue.
 func (r *run) cleanupResidual() {
 	if r.done || r.escalation != notStopping {
 		return
 	}
+	startedAt := job.ISO(time.Now())
+	r.writeMeta(func(m *job.Meta) { m.ResidualCleanupStartedAt = new(startedAt) })
+	r.progress.Append("residual-cleanup",
+		job.KV{K: "elapsed", V: elapsed(r.startedAt)},
+		job.KV{K: "prompt", V: r.meta.PromptState},
+	)
 	r.escalate(syscall.SIGTERM)
 }
 

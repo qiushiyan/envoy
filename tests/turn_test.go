@@ -75,6 +75,10 @@ func TestCodexSuccess(t *testing.T) {
 	if _, has := meta["usage"]; has {
 		t.Fatalf("a codex record must carry no usage, got %v", meta["usage"])
 	}
+	// Nothing outlived the provider, so nothing was cleaned up after it.
+	if _, has := meta["residualCleanupStartedAt"]; has {
+		t.Fatalf("a provider that left nothing behind records no residual cleanup, got %v", meta["residualCleanupStartedAt"])
+	}
 	// The runner's claim on its directory is what liveness is read from.
 	if meta["runnerLock"] != true {
 		t.Fatalf("runnerLock = %v, want true", meta["runnerLock"])
@@ -556,6 +560,17 @@ func TestStubbornGrandchildAfterSuccessIsReaped(t *testing.T) {
 	}
 	if got := readFile(t, filepath.Join(outDir, "result.md")); got != "fake provider result" {
 		t.Fatalf("result.md = %q", got)
+	}
+	// Stopping the residue is envoy's own action on the tree, so the record
+	// says when it began and the log says it happened — without recording a
+	// stop of the turn, which ended the provider's way.
+	if meta["residualCleanupStartedAt"] == nil || meta["terminationRequestedAt"] != nil {
+		t.Fatalf("residualCleanupStartedAt = %v, terminationRequestedAt = %v; want the cleanup recorded and no stop requested",
+			meta["residualCleanupStartedAt"], meta["terminationRequestedAt"])
+	}
+	progress := readFile(t, filepath.Join(outDir, "progress.log"))
+	if !strings.Contains(progress, "state=residual-cleanup") || strings.Contains(progress, "state=stopping") {
+		t.Fatalf("progress.log must record the residual cleanup and no stop of the turn:\n%s", progress)
 	}
 	var pid int
 	fmt.Sscanf(readFile(t, pidFile), "%d", &pid)
