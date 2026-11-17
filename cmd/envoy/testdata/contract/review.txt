@@ -1,8 +1,8 @@
-$ envoy run review-r1 --with codex:gpt-6-astra:high --prompt-file $HOME/brief.md --baseline <base> --timeout-min 60
+$ envoy run review-r1 --with codex:gpt-6.2-astra:high --prompt-file $HOME/brief.md --baseline <base> --timeout-min 60
 exit 0
 --- stdout
 job: $HOME/.local/state/envoy/jobs/repo-<key>/review-r1
-provider: codex · model gpt-6-astra · effort high · hard cap 60m
+provider: codex · model gpt-6.2-astra · effort high · hard cap 60m
 baseline: <base>
 stop: kill -INT <pid>
 next: let this command run to completion, then collect the job: envoy collect '$HOME/.local/state/envoy/jobs/repo-<key>/review-r1'
@@ -20,7 +20,7 @@ exit 0
 --- stdout
 job: $HOME/.local/state/envoy/jobs/repo-<key>/review-r1
 status: ok
-provider: codex · model gpt-6-astra · effort high
+provider: codex · model gpt-6.2-astra · effort high
 duration: 0m
 tokens: input 13 · cachedInput 5 · output 8 · reasoningOutput 3
 prompt: accepted · evidence codex thread.started

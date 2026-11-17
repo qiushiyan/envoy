@@ -1,8 +1,8 @@
-$ envoy run delegate-r1 --with codex:gpt-6.1-sol:xhigh --allow-write --baseline <base> --prompt-file $HOME/brief.md --timeout-min 180
+$ envoy run delegate-r1 --with codex:gpt-6.2-sol:xhigh --allow-write --baseline <base> --prompt-file $HOME/brief.md --timeout-min 180
 exit 0
 --- stdout
 job: $HOME/.local/state/envoy/jobs/repo-<key>/delegate-r1
-provider: codex · model gpt-6.1-sol · effort xhigh · hard cap 180m
+provider: codex · model gpt-6.2-sol · effort xhigh · hard cap 180m
 baseline: <base>
 stop: kill -INT <pid>
 next: let this command run to completion, then collect the job: envoy collect '$HOME/.local/state/envoy/jobs/repo-<key>/delegate-r1'

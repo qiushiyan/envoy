@@ -183,7 +183,7 @@ func voicesBody() string {
 	return fmt.Sprintf(`--with provider[:model[:effort]]   a cold session
   --with codex                     the provider's own configured model
   --with claude:opus               a named model
-  --with codex:gpt-6-astra:high    model and effort
+  --with codex:gpt-6.2-astra:high  model and effort
   --with codex::high               effort alone; the model slot stays empty
 --with @<job>                      continue that finished job's conversation
   --with @consult-r1                        round 2 in the same session

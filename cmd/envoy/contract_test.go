@@ -306,7 +306,7 @@ func TestContracts(t *testing.T) {
 		// The review skill: one cold voice anchored on a baseline, read
 		// status-only while uncollected, collected, waited for, listed.
 		{"review", func(w *world, b *strings.Builder) {
-			w.step(b, nil, "run", "review-r1", "--with", "codex:gpt-6-astra:high", "--prompt-file", w.path("brief.md"), "--baseline", w.base, "--timeout-min", "60")
+			w.step(b, nil, "run", "review-r1", "--with", "codex:gpt-6.2-astra:high", "--prompt-file", w.path("brief.md"), "--baseline", w.base, "--timeout-min", "60")
 			w.step(b, nil, "collect", "--status-only", "review-r1")
 			w.step(b, nil, "pending")
 			w.step(b, nil, "wait", "review-r1")
@@ -318,20 +318,20 @@ func TestContracts(t *testing.T) {
 		// The consult skill's three shapes and its round 2, then the review
 		// skill seating a consult member warm beside a cold voice.
 		{"consult", func(w *world, b *strings.Builder) {
-			w.step(b, nil, "run", "consult-r1", "--with", "codex:gpt-6-astra:high", "--with", "claude:claude-opus-5-5", "--prompt-file", w.path("brief.md"), "--timeout-min", "30")
+			w.step(b, nil, "run", "consult-r1", "--with", "codex:gpt-6.2-astra:high", "--with", "claude:claude-opus-5-5", "--prompt-file", w.path("brief.md"), "--timeout-min", "30")
 			w.step(b, nil, "collect", "consult-r1")
-			w.step(b, nil, "run", "consult-r2", "--with", "claude:claude-fable-5-1="+w.path("critique.md"), "--with", "codex:gpt-6-astra:high="+w.path("survey.md"), "--timeout-min", "30")
+			w.step(b, nil, "run", "consult-r2", "--with", "claude:claude-fable-5-1="+w.path("critique.md"), "--with", "codex:gpt-6.2-astra:high="+w.path("survey.md"), "--timeout-min", "30")
 			w.step(b, nil, "collect", "consult-r2")
 			w.step(b, nil, "run", "consult-r3", "--with", "@consult-r1="+w.path("round2.md"), "--timeout-min", "30")
 			w.step(b, nil, "collect", "consult-r3")
-			w.step(b, nil, "run", "review-r1", "--with", "@consult-r1/codex-gpt-6-astra", "--with", "claude:claude-opus-5-5", "--prompt-file", w.path("brief.md"), "--baseline", w.base, "--timeout-min", "45")
+			w.step(b, nil, "run", "review-r1", "--with", "@consult-r1/codex-gpt-6.2-astra", "--with", "claude:claude-opus-5-5", "--prompt-file", w.path("brief.md"), "--baseline", w.base, "--timeout-min", "45")
 			w.step(b, nil, "collect", "review-r1")
-			w.step(b, nil, "run", "review-r2", "--with", "@consult-r1/codex-gpt-6-astra="+w.path("full.md"), "--with", "claude:claude-opus-5-5="+w.path("goal.md"), "--baseline", w.base, "--timeout-min", "45")
+			w.step(b, nil, "run", "review-r2", "--with", "@consult-r1/codex-gpt-6.2-astra="+w.path("full.md"), "--with", "claude:claude-opus-5-5="+w.path("goal.md"), "--baseline", w.base, "--timeout-min", "45")
 			w.step(b, nil, "collect", "review-r2")
 		}},
 		// The delegate skill: a write turn on a baseline.
 		{"delegate", func(w *world, b *strings.Builder) {
-			w.step(b, nil, "run", "delegate-r1", "--with", "codex:gpt-6.1-sol:xhigh", "--allow-write", "--baseline", w.base, "--prompt-file", w.path("brief.md"), "--timeout-min", "180")
+			w.step(b, nil, "run", "delegate-r1", "--with", "codex:gpt-6.2-sol:xhigh", "--allow-write", "--baseline", w.base, "--prompt-file", w.path("brief.md"), "--timeout-min", "180")
 			w.step(b, nil, "collect", "delegate-r1")
 		}},
 		// The planlab steward: job directories by path, a capped claude turn
@@ -343,7 +343,7 @@ func TestContracts(t *testing.T) {
 			w.step(b, nil, "collect", first)
 			w.step(b, nil, "run", second, "--prompt-file", w.path("next.md"), "--with", "@"+first, "--allow-write", "--cwd", w.repo, "--timeout-min", "30")
 			w.step(b, nil, "collect", second)
-			w.step(b, nil, "run", w.path("consult/job"), "--prompt-file", w.path("brief.md"), "--with", "codex:gpt-6-astra:high", "--cwd", w.repo, "--timeout-min", "12")
+			w.step(b, nil, "run", w.path("consult/job"), "--prompt-file", w.path("brief.md"), "--with", "codex:gpt-6.2-astra:high", "--cwd", w.repo, "--timeout-min", "12")
 			w.step(b, nil, "collect", w.path("consult/job"))
 			locks := filepath.Join(w.home, ".local", "state", "envoy", "locks")
 			if err := os.MkdirAll(locks, 0o755); err != nil {

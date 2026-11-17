@@ -525,3 +525,21 @@ each workaround.
   caller hits an `envoy: error:` from an argv form 0.14 accepted (a one-dash
   long option, `-v`), and whether agents read `envoy run --help` before a
   first dispatch or stop at `envoy -h`.
+- **2026-11-17 — GPT-6.2 Astra and Sol, read on codex-cli 0.169.0.** Codex's
+  model catalog lists `gpt-6.2-astra` (built-in effort `low`, where
+  `gpt-6-astra`'s was `medium`; 272k context) and `gpt-6.2-sol` (`low`; 500k),
+  both on `low` through `ultra`, which the codex effort list already held. The
+  flags the driver passes are all in 0.169.0's `exec` and `exec resume` help.
+  One live turn on `codex:gpt-6.2-astra:high` (a two-line prompt) ended ok in
+  5 s: `thread.started`, two `item.completed` items of type `error` carrying
+  codex's warning that it ignores three keys in the user config,
+  `turn.started`, the message, and `turn.completed`, whose usage gained
+  `cache_write_input_tokens`; the error items moved nothing, as they should.
+  An omitted effort now means `low` wherever a config sets none, so the skills
+  keep naming it. What stands (0.15.1): the engine still names no model; the
+  run help, the missing-voice refusal and the pins name `gpt-6.2-astra` and
+  `gpt-6.2-sol` as the skills now dispatch, and a dotted fan-out
+  member, `codex-gpt-6.2-astra`, continues by `@<job>/<member>` in the pins.
+  Compare next pass: whether a 6.2 codex turn is refused under OpenAI's
+  tighter cyber safeguards, and what its stream shows, since only claude's
+  refusals are recorded as `provider_refusal`.

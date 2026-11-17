@@ -101,7 +101,7 @@ func ContinueBlocked(dir string, kind ResumeBlockerKind, repair string) string {
 
 // RunNeedsVoice refuses a run with no member at all.
 func RunNeedsVoice() string {
-	return "at least one --with is required: a cold voice as provider[:model[:effort]] (codex, claude:opus, codex:gpt-6-astra:high), " +
+	return "at least one --with is required: a cold voice as provider[:model[:effort]] (codex, claude:opus, codex:gpt-6.2-astra:high), " +
 		"or @<job> to continue a finished job's conversation"
 }
 

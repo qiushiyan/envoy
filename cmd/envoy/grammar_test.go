@@ -24,11 +24,11 @@ func TestAnOlderWaitersArgvRunsInTheDetachedProcess(t *testing.T) {
 		tail []string
 		want int
 	}{
-		{"review-r1", []string{"review-r1", "--with", "codex:gpt-6-astra:high", "--prompt-file", brief, "--baseline", w.base, "--timeout-min", "60"}, 0},
-		{"consult-r1", []string{"consult-r1", "--with", "codex:gpt-6-astra:high", "--with", "claude:claude-opus-5-5", "--prompt-file", brief, "--timeout-min", "30"}, 0},
-		{"consult-r2", []string{"consult-r2", "--with", "claude:claude-fable-5-1=" + w.path("critique.md"), "--with", "codex:gpt-6-astra:high=" + w.path("survey.md")}, 0},
-		{"review-r2", []string{"review-r2", "--with", "@consult-r1/codex-gpt-6-astra", "--with", "claude:claude-opus-5-5", "--prompt-file", brief, "--baseline", w.base}, 0},
-		{"delegate-r1", []string{"delegate-r1", "--with", "codex:gpt-6.1-sol:xhigh", "--allow-write", "--baseline", w.base, "--prompt-file", brief, "--timeout-min", "180"}, 0},
+		{"review-r1", []string{"review-r1", "--with", "codex:gpt-6.2-astra:high", "--prompt-file", brief, "--baseline", w.base, "--timeout-min", "60"}, 0},
+		{"consult-r1", []string{"consult-r1", "--with", "codex:gpt-6.2-astra:high", "--with", "claude:claude-opus-5-5", "--prompt-file", brief, "--timeout-min", "30"}, 0},
+		{"consult-r2", []string{"consult-r2", "--with", "claude:claude-fable-5-1=" + w.path("critique.md"), "--with", "codex:gpt-6.2-astra:high=" + w.path("survey.md")}, 0},
+		{"review-r2", []string{"review-r2", "--with", "@consult-r1/codex-gpt-6.2-astra", "--with", "claude:claude-opus-5-5", "--prompt-file", brief, "--baseline", w.base}, 0},
+		{"delegate-r1", []string{"delegate-r1", "--with", "codex:gpt-6.2-sol:xhigh", "--allow-write", "--baseline", w.base, "--prompt-file", brief, "--timeout-min", "180"}, 0},
 		{w.path("steward/turn-1"), []string{w.path("steward/turn-1"), "--prompt-file", brief, "--with", "claude:claude-opus-5-5:high", "--allow-write", "--cwd", w.repo, "--timeout-min", "30", "--max-budget-usd", "0.50", "--instructions-file", w.path("rules.md")}, 0},
 		{w.path("steward/turn-2"), []string{w.path("steward/turn-2"), "--prompt-file", w.path("next.md"), "--with", "@" + w.path("steward/turn-1"), "--allow-write", "--cwd", w.repo, "--timeout-min", "30"}, 0},
 		{"dash-r1", []string{"dash-r1", "-with", "codex", "-prompt-file", brief}, 3},

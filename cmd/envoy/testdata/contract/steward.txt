@@ -72,11 +72,11 @@ fake provider result
 next: result.md above is this turn's return value — use it in the step that dispatched it.
 --- stderr
 
-$ envoy run $HOME/consult/job --prompt-file $HOME/brief.md --with codex:gpt-6-astra:high --cwd $HOME/repo --timeout-min 12
+$ envoy run $HOME/consult/job --prompt-file $HOME/brief.md --with codex:gpt-6.2-astra:high --cwd $HOME/repo --timeout-min 12
 exit 0
 --- stdout
 job: $HOME/consult/job
-provider: codex · model gpt-6-astra · effort high · hard cap 12m
+provider: codex · model gpt-6.2-astra · effort high · hard cap 12m
 stop: kill -INT <pid>
 next: let this command run to completion, then collect the job: envoy collect '$HOME/consult/job'
 session: sess-codex

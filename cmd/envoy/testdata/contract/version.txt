@@ -1,13 +1,13 @@
 $ envoy version
 exit 0
 --- stdout
-envoy 0.15.0
+envoy 0.15.1
 --- stderr
 
 $ envoy --version
 exit 0
 --- stdout
-envoy 0.15.0
+envoy 0.15.1
 --- stderr
 
 $ envoy -v

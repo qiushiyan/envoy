@@ -129,7 +129,7 @@ envoy: error: --max-budget-usd caps one claude voice; codex has no budget flag
 $ envoy run job --with claude --prompt-file $HOME/brief.md --version
 exit 0
 --- stdout
-envoy 0.15.0
+envoy 0.15.1
 --- stderr
 
 $ envoy run job --with codex --prompt-file $HOME/brief.md --instructions-file $HOME/absent.md
