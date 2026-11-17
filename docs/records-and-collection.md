@@ -33,7 +33,8 @@ the verb changed.
 The archive is what was sent: `prompt.md` is written from the one read that
 feeds the provider's stdin, never from a second read of the caller's file, and
 `instructions.md` from the standing-instructions text handed the driver —
-claude reads that very file. The record keeps the instructions' digest
+claude reads that very file, and agy reads it through the link its rules
+folder holds. The record keeps the instructions' digest
 (`instructionsSha256`), which is what tells an archive that was lost or edited
 from one that never existed: absence is no instructions, loss blocks the
 conversation.

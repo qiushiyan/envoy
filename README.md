@@ -1,7 +1,7 @@
 # envoy
 
-Run headless AI-session turns (`claude` or `codex`) as background-friendly,
-caller-named jobs and get them back as durable data.
+Run headless AI-session turns (`claude`, `codex` or `agy`) as
+background-friendly, caller-named jobs and get them back as durable data.
 
 ## Install
 
@@ -104,15 +104,16 @@ sent SIGTERM or SIGHUP exits by that signal and leaves its turn running.
 
 ## Running providers through a launcher
 
-Set `ENVOY_CODEX_CMD` or `ENVOY_CLAUDE_CMD` to a command prefix. For example,
-`headroom` is one possible launcher that selects an account when each turn starts:
+Set `ENVOY_<PROVIDER>_CMD` (`ENVOY_CODEX_CMD`, say) to a command prefix. For
+example, `headroom` is one possible launcher that selects an account when each
+turn starts:
 
 ```sh
 export ENVOY_CODEX_CMD="headroom launch --vendor codex --"
 export ENVOY_CLAUDE_CMD="headroom launch --"
 ```
 
-Unset, empty or whitespace-only values use the bare `codex` / `claude` from
+Unset, empty or whitespace-only values use the bare provider binary from
 PATH. Otherwise envoy splits on whitespace and appends the provider's normal
 arguments. No shell runs: quotes, escapes, variables and wildcards are literal;
 paths or arguments containing spaces are unsupported in the prefix. Use a

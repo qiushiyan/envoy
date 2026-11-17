@@ -1,11 +1,11 @@
 # Providers
 
-A provider is the CLI a turn runs: `claude` or `codex`. This doc is why the
-provider seam is shaped the way it is — what a driver owns, how the engine
-treats models, effort and permissions, how standing instructions reach each
-provider, why a transient error never fails a turn, why a refusal is recorded
-apart from other failures, and how launchers keep account choice outside the
-engine.
+A provider is the CLI a turn runs: `claude`, `codex` or `agy`, Google's
+Antigravity CLI. This doc is why the provider seam is shaped the way it is —
+what a driver owns, how the engine treats models, effort and permissions, how
+a prompt and the standing instructions reach each provider, why a transient
+error never fails a turn, why a refusal is recorded apart from other
+failures, and how launchers keep account choice outside the engine.
 
 ## The driver seam
 
@@ -16,21 +16,33 @@ provider name. Adding a provider is one driver file plus one entry in the
 provider registry, which every surface naming providers reads — voice
 parsing, effort validation, the spend-cap check, the help page.
 
+A driver may also lay out what its own argv names inside the job directory
+(`Driver.Prepare`), after the runner has archived the prompt and the
+instructions and before argv is computed; a layout that cannot be written
+stops the turn before spawn, as an unwritable archive does. agy's rules
+folder is laid out this way (§ Standing instructions ride every launch).
+
 ## Models and effort: observed, never inferred
 
 An omitted model or effort hands the choice to the provider's own
 configuration; the engine reports `(provider default)` and records only what
-the provider itself announced — claude's init-event model lands in
-`providerReportedModel`. Alias translation (`opus` → some concrete id) is
-rejected permanently: the mapping is the provider's, it changes under the
-engine's feet, and the first disagreement would be a silent model
-substitution. The request and the observation are never compared to conclude
-anything either: `opus` resolving to `claude-opus-5` is the provider's own
-aliasing, so a mismatch cannot prove a substitution and never gates behavior.
+the provider itself announced — claude's init-event model, and the model agy's
+transcript says answered (its stream names only the base model, and only for
+an explicit `--model`), land in `providerReportedModel`. Alias translation
+(`opus` → some concrete id) is rejected permanently: the mapping is the
+provider's, it changes under the engine's feet, and the first disagreement
+would be a silent model substitution. The request and the observation are
+never compared to conclude anything either: `opus` resolving to
+`claude-opus-5` is the provider's own aliasing, so a mismatch cannot prove a
+substitution and never gates behavior.
 
 Effort takes native provider vocabulary only, validated before spawn, because
 the providers fail differently on a bad value: claude silently degrades, and
-codex burns a turn on an API 400.
+codex burns a turn on an API 400. agy's vocabulary varies by model, and agy
+refuses a model or an effort it lacks before it creates a conversation, so
+its registry entry holds its flag's whole vocabulary, the per-model check
+stays agy's, and that refusal is recorded `not_started` — agy's own statement
+that no conversation exists.
 
 ## Permissions
 
@@ -57,10 +69,28 @@ diff, and "analyse only" is a prompt convention.
   into the engine; reading the refusal out of stderr as `not_started` would
   break the rule in § Launchers, and the retry it licensed would fail the same
   way.
+- **agy** runs every turn with the fixed `--dangerously-skip-permissions`, for
+  claude's reason: headless agy soft-denies every tool that asks for a
+  confirmation, and a project's own permission rules can ask. Its mode and
+  sandbox stay the user's configuration.
 
-There are no allow-lists and no `--add-dir`. The signal to revisit this is a
-read-only claude turn whose `git status` changed under it: the prompt was not
-enough.
+There are no allow-lists, and no `--add-dir` widens what a session reaches:
+agy's names only its rules folder. The signal to revisit this is a read-only
+claude turn whose `git status` changed under it: the prompt was not enough.
+
+## A prompt reaches the provider as written
+
+Every driver takes the prompt on stdin, from the one read `prompt.md` archives
+(`docs/records-and-collection.md`). agy's print mode would otherwise read a
+prompt that starts with `/` as a slash command or skill — `/model` answered
+SUCCESS with no turn at all — so its driver passes `--disable-slash-commands`
+on every launch (held by `TestAgyArgv`).
+
+Unguarded: agy keeps only the first 192,000 bytes of a prompt and reports
+SUCCESS, with nothing in the stream or the exit to say so. No guard was built
+because no brief has come near it — the store's prompts peaked at 32 KB
+(`EVIDENCE.md`, 2026-11-17); a brief that approaches the cap is the signal to
+refuse an agy prompt over it before launch, as effort is refused.
 
 ## Standing instructions ride every launch
 
@@ -76,15 +106,27 @@ driver spells them natively on every launch, a resume included
   has no file form that adds to codex's prompt — `model_instructions_file`
   replaces it — so the text rides inline and `providerArgv` holds it. It
   replaces any `developer_instructions` in the user's own codex config.
+- **agy** gets `--add-dir` naming the job's `agy-rules` folder, whose one
+  file, `AGENTS.md`, links to the job's `instructions.md`; agy loads the root
+  `AGENTS.md` of an added folder as a user rule beside its own system prompt,
+  so the file it read is the archive. agy has no flag that adds system-level
+  text. The user chose the rule over a custom agent (`--agent`), which
+  replaces agy's own prompt, and over refusing `--instructions-file` on agy,
+  which would keep it out of every consult round (`EVIDENCE.md`, 2026-11-17).
+  A flag that adds to agy's system prompt reopens it. Unguarded: agy cuts a
+  rule file past 24,000 bytes and demotes rules over a 20,000-token budget,
+  shared with the user's own rules, to a path the agent may read; the consult
+  skill's rules are 2.7 KB.
 
-What makes every launch necessary was read from both providers
-(`EVIDENCE.md`, 2026-10-11). Claude records the system prompt on a
-conversation's first request and reuses it until a compaction
-(`--system-prompt-snapshot`, on by default); the first request after one
-re-renders it from that launch's flags. codex keeps the first launch's
-developer message in the thread, ignores a resumed launch's changed text, and
-rebuilds its developer context from the current launch's config after a
-compaction, at the next launch and mid-turn alike.
+What makes every launch necessary was read from claude and codex
+(`EVIDENCE.md`, 2026-10-11); agy's behaviour after a compaction has not been
+read, though it recalled a rule on a resume launched without the folder.
+Claude records the system prompt on a conversation's first request and reuses
+it until a compaction (`--system-prompt-snapshot`, on by default); the first
+request after one re-renders it from that launch's flags. codex keeps the
+first launch's developer message in the thread, ignores a resumed launch's
+changed text, and rebuilds its developer context from the current launch's
+config after a compaction, at the next launch and mid-turn alike.
 
 The engine stops at passing the text. Whether a model follows a rule after a
 compaction summary reframes it is the model's: one probe answered as if its
@@ -132,14 +174,15 @@ say.
 
 ## Launchers
 
-`ENVOY_CODEX_CMD` and `ENVOY_CLAUDE_CMD` supply a command prefix (`headroom
-launch --vendor codex --`, say) that the runner prepends to the driver's argv;
+`ENVOY_<PROVIDER>_CMD` (`ENVOY_CODEX_CMD`, say) supplies a command prefix
+(`headroom launch --vendor codex --`) that the runner prepends to the
+driver's argv;
 `README.md` § Running providers through a launcher and `envoy -h` carry the
-configuration. Account selection and child environment changes belong to the
-launcher. envoy never detects a launcher or falls back when one fails: a
-fallback could spend on the very account the caller meant to avoid
-(`EVIDENCE.md`, 2026-09-21). Process groups, pipes and session locks supervise
-the resulting command unchanged.
+configuration. Account selection and child environment
+changes belong to the launcher. envoy never detects a launcher or falls back
+when one fails: a fallback could spend on the very account the caller meant
+to avoid (`EVIDENCE.md`, 2026-09-21). Process groups, pipes and session locks
+supervise the resulting command unchanged.
 
 The prefix is literal whitespace-separated argv, with complex setup left to a
 wrapper executable. Every dispatch — a continuation, a retry, a fan-out member
@@ -147,8 +190,8 @@ wrapper executable. Every dispatch — a continuation, a retry, a fan-out member
 with the launcher and a recorded prefix pins nothing.
 
 `meta.json.commandPrefix` records the resolved executable and prefix
-arguments, `["codex"]` / `["claude"]` for the defaults. The executed argv is
-`commandPrefix + providerArgv[1:]`, and `providerArgv` keeps its
+arguments, the bare provider name (`["codex"]`) for the defaults. The executed
+argv is `commandPrefix + providerArgv[1:]`, and `providerArgv` keeps its
 provider-native meaning. The field is an optional observation, so it leaves
 the schema where it is (`docs/records-and-collection.md` § Schema versions and
 the stamp), and an absent field in an older record means unavailable.
@@ -161,7 +204,9 @@ stderr alone never fails a turn.
 Claude transcript recovery — the evidence for the window before the first
 stream event — is best-effort in envoy's own config directory. A launcher may
 choose a child config directory envoy cannot know; a shared projects store can
-preserve recovery, but the engine cannot infer one from command text.
+preserve recovery, but the engine cannot infer one from command text. The
+agy transcript read for the model that answered is best-effort in envoy's own
+`HOME` the same way, and its absence leaves the model unreported.
 
 ## After a provider CLI upgrade
 

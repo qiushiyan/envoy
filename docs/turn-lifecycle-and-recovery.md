@@ -146,7 +146,12 @@ stream is read before teardown, since one read after it describes envoy's own
 cleanup.
 
 **The terminal envelope wins.** If the cap fires while an already-complete
-turn is draining, the observed success is published, not a timeout.
+turn is draining, the observed success is published, not a timeout. An
+envelope that only reports envoy's own stop is not the provider's ending:
+agy answers a stop with an ERROR result whose `finished_reason` is
+`interrupted`, and its driver leaves that unmarked, so the record is the
+timeout or interruption envoy made, with the prompt state the stream proved,
+never a provider verdict (held by `TestAStoppedAgyTurnIsTheStopNotAVerdict`).
 
 ## Recovery follows prompt state
 
@@ -199,6 +204,17 @@ and write intent from the job's `meta.json`, and its standing instructions
 from the job's `instructions.md`; explicit `--cwd` and `--baseline` win, and
 every continued turn records `resumedFrom`.
 
+A provider can also answer a resume without continuing: agy starts a new
+conversation for an id it cannot find, exits 0, and says so only in a stderr
+warning. That answer had none of the history it was sent to continue, so the
+turn fails as `session_not_continued`, and the new conversation becomes the
+job's session, since it holds the turn — which keeps `accepted` → resume
+true; the remedy says a follow-up must carry what the earlier conversation
+established. Keeping the requested id would send the follow-up into the same
+miss, and stopping the turn at the stream's first record would need a driver
+event for one provider's miss. Held by
+`TestAgyReplacedConversationIsNotAContinuation`.
+
 What carries over, and why (`EVIDENCE.md`, 2026-07-29):
 
 - **The cap never inherits.** It is phase policy — a 30-minute consult
@@ -211,12 +227,13 @@ What carries over, and why (`EVIDENCE.md`, 2026-07-29):
   it starts (`--instructions-file`), and every continued turn passes the source
   job's archived text again; a turn's prompt carries only that turn's job.
 
-Both providers keep the first launch's system-level text only until a
+claude and codex keep the first launch's system-level text only until a
 compaction, and the first launch after one takes whatever text that launch
 passed: a launch without the rules leaves the session without them, and later
 launches passing them cannot restore them until the next compaction
-(`EVIDENCE.md`, 2026-10-11). So the engine, not the caller, passes them on
-every launch, from the records. The same rule makes the text fixed: a
+(`EVIDENCE.md`, 2026-10-11); agy's behaviour after a compaction has not been
+read. So the engine, not the caller, passes them on every launch of every
+provider, from the records. The same rule makes the text fixed: a
 continuation accepts `--instructions-file` only when it matches the inherited
 text, and refuses a different one, or any for a conversation that started
 without, since the session would go on holding its first text while the

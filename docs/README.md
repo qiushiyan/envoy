@@ -135,9 +135,9 @@ name a read gives, and the continuation inspection dispatch shares — and
   continuing a conversation and the standing instructions it carries:**
   `docs/turn-lifecycle-and-recovery.md`
 - **Several voices as one job:** `docs/fan-out.md`
-- **Provider drivers, models and effort, permissions, how standing
-  instructions reach each provider, transient errors, refusals, launchers:**
-  `docs/providers.md`
+- **Provider drivers, models and effort, permissions, how a prompt and the
+  standing instructions reach each provider, transient errors, refusals,
+  launchers:** `docs/providers.md`
 - **Claude primary-turn context and token measurements (`meta.json.usage`):**
   `docs/primary-turn-usage.md`
 
@@ -153,8 +153,8 @@ name a read gives, and the continuation inspection dispatch shares — and
   (`docs/fan-out.md`).
 - **No live steering of a running turn:** a supplement is a follow-up turn
   (`docs/turn-lifecycle-and-recovery.md` § Continuation).
-- **No sandbox flag for codex, ever; for claude, no permission flag beyond the
-  fixed bypass** (`docs/providers.md` § Permissions).
+- **No sandbox flag for codex, ever; for claude and agy, no permission flag
+  beyond the fixed bypass** (`docs/providers.md` § Permissions).
 - **No activity-based hang detector and no timeout that resets on output**
   (`docs/turn-lifecycle-and-recovery.md`).
 - **No prompt templating:** prompts arrive as files, whole — one per voice when
