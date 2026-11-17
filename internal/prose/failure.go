@@ -53,6 +53,13 @@ func Failure(m *job.Meta) string {
 		return fmt.Sprintf("envoy stopped %s after receiving %s.", m.Provider, job.Deref(m.InterruptionSignal))
 	case job.CauseSessionConflict:
 		return fmt.Sprintf("%s reported a session id that another turn already holds, so this turn was stopped.", provider)
+	case job.CauseSessionNotContinued:
+		line := fmt.Sprintf("%s did not continue the conversation this turn resumed: it started a new one, session %s, without the earlier history, and this turn ran there.",
+			provider, job.Deref(m.SessionID))
+		if len(f.StderrTail) > 0 {
+			line += " Last provider detail: " + stderrDetail(f.StderrTail)
+		}
+		return line
 	case job.CauseAbandoned:
 		return "This turn ended without publishing a result: " + RunDetail(RunObservation{State: RunAbandoned}) + "."
 	default:
@@ -104,6 +111,8 @@ func remedy(f *job.Failure) string {
 		return "Fix the cause it reported first."
 	case job.CauseBudgetCap:
 		return "Raise the budget cap before continuing."
+	case job.CauseSessionNotContinued:
+		return "The new session holds only this turn, so a follow-up's prompt must carry whatever the earlier conversation established."
 	}
 	return ""
 }

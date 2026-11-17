@@ -1,8 +1,8 @@
 Usage: envoy <command> [flags]
 
-envoy runs headless claude or codex turns as jobs you name, and returns each as files.
+envoy runs headless agy, claude or codex turns as jobs you name, and returns each as files.
 
-A turn is one prompt sent to a session of the claude or codex CLI, run
+A turn is one prompt sent to a session of the agy, claude or codex CLI, run
 headless. envoy runs it as a job you name, in a process of its own, and leaves
 its result and records in a directory you read back by that name.
 

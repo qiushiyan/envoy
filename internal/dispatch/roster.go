@@ -350,7 +350,7 @@ func parseVoice(spec string) (voice, error) {
 		v.effort = parts[2]
 	}
 	if !provider.Known(v.provider) {
-		return voice{}, fmt.Errorf("--with '%s' must name provider %s, got '%s'", spec, strings.Join(provider.Names(), " or "), v.provider)
+		return voice{}, fmt.Errorf("--with '%s' must name provider %s, got '%s'", spec, provider.Series(provider.Names(), "or"), v.provider)
 	}
 	if err := provider.ValidateEffort(v.provider, v.effort); err != nil {
 		return voice{}, fmt.Errorf("--with '%s': %s", spec, err)

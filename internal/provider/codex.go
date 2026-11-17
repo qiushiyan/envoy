@@ -59,6 +59,9 @@ func newCodex(opts Options, ws job.Workspace) *codex {
 
 func (c *codex) PreflightSessionID() string { return c.sessionID }
 
+// Prepare: codex writes its last-message file itself.
+func (c *codex) Prepare() error { return nil }
+
 // Argv: `resume` takes the session id then `-` (prompt via stdin) and has no
 // --cd; cwd is set on the child process instead.
 func (c *codex) Argv() []string {

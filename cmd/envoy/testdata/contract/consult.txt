@@ -264,3 +264,107 @@ next: result.md above is this turn's return value — use it in the step that di
 next: the member results above are this fan-out's return value — use them in the step that dispatched it.
 --- stderr
 
+$ envoy run consult-r4 --with agy:gemini-4-carbon:high --with codex:gpt-6.2-astra:high --prompt-file $HOME/brief.md --instructions-file $HOME/rules.md --timeout-min 30
+exit 0
+--- stdout
+job: $HOME/.local/state/envoy/jobs/repo-<key>/consult-r4
+fan-out: 2 turns · hard cap 30m each
+member agy-gemini-4-carbon: model gemini-4-carbon · effort high · dir $HOME/.local/state/envoy/jobs/repo-<key>/consult-r4/agy-gemini-4-carbon · standing instructions
+member codex-gpt-6.2-astra: model gpt-6.2-astra · effort high · dir $HOME/.local/state/envoy/jobs/repo-<key>/consult-r4/codex-gpt-6.2-astra · standing instructions
+stop: kill -INT <pid>
+next: let this command run to completion — it exits once every member is done — then collect the job once: envoy collect '$HOME/.local/state/envoy/jobs/repo-<key>/consult-r4' · that single command returns every member's result
+
+status: ok — all 2 turns returned a result
+member agy-gemini-4-carbon: ok · result $HOME/.local/state/envoy/jobs/repo-<key>/consult-r4/agy-gemini-4-carbon/result.md
+member codex-gpt-6.2-astra: ok · result $HOME/.local/state/envoy/jobs/repo-<key>/consult-r4/codex-gpt-6.2-astra/result.md
+group: $HOME/.local/state/envoy/jobs/repo-<key>/consult-r4/group.json
+next: Collect the fan-out: envoy collect '$HOME/.local/state/envoy/jobs/repo-<key>/consult-r4' — it prints every member's result in one block.
+--- stderr
+
+$ envoy collect consult-r4
+exit 0
+--- stdout
+fan-out: $HOME/.local/state/envoy/jobs/repo-<key>/consult-r4
+status: ok — all 2 turns returned a result
+members: agy-gemini-4-carbon ok · codex-gpt-6.2-astra ok
+resume: envoy run <new-job-name> --with @'$HOME/.local/state/envoy/jobs/repo-<key>/consult-r4' --timeout-min 30 --prompt-file <your-follow-up.md>
+
+=== member agy-gemini-4-carbon ===
+job: $HOME/.local/state/envoy/jobs/repo-<key>/consult-r4/agy-gemini-4-carbon
+status: ok
+duration: 0m
+resume: envoy run <new-job-name> --with @'$HOME/.local/state/envoy/jobs/repo-<key>/consult-r4/agy-gemini-4-carbon' --timeout-min 30 --prompt-file <your-follow-up.md>
+
+--- result.md ---
+fake provider result
+
+
+next: result.md above is this turn's return value — use it in the step that dispatched it.
+
+=== member codex-gpt-6.2-astra ===
+job: $HOME/.local/state/envoy/jobs/repo-<key>/consult-r4/codex-gpt-6.2-astra
+status: ok
+duration: 0m
+resume: envoy run <new-job-name> --with @'$HOME/.local/state/envoy/jobs/repo-<key>/consult-r4/codex-gpt-6.2-astra' --timeout-min 30 --prompt-file <your-follow-up.md>
+
+--- result.md ---
+fake provider result
+
+next: result.md above is this turn's return value — use it in the step that dispatched it.
+
+next: the member results above are this fan-out's return value — use them in the step that dispatched it.
+--- stderr
+
+$ envoy run consult-r5 --with @consult-r4=$HOME/round2.md --timeout-min 30
+exit 0
+--- stdout
+job: $HOME/.local/state/envoy/jobs/repo-<key>/consult-r5
+fan-out: 2 turns · hard cap 30m each
+member agy-gemini-4-carbon: model gemini-4-carbon · effort high · dir $HOME/.local/state/envoy/jobs/repo-<key>/consult-r5/agy-gemini-4-carbon · continues $HOME/.local/state/envoy/jobs/repo-<key>/consult-r4/agy-gemini-4-carbon · standing instructions
+member codex-gpt-6.2-astra: model gpt-6.2-astra · effort high · dir $HOME/.local/state/envoy/jobs/repo-<key>/consult-r5/codex-gpt-6.2-astra · continues $HOME/.local/state/envoy/jobs/repo-<key>/consult-r4/codex-gpt-6.2-astra · standing instructions
+stop: kill -INT <pid>
+next: let this command run to completion — it exits once every member is done — then collect the job once: envoy collect '$HOME/.local/state/envoy/jobs/repo-<key>/consult-r5' · that single command returns every member's result
+
+status: ok — all 2 turns returned a result
+member agy-gemini-4-carbon: ok · result $HOME/.local/state/envoy/jobs/repo-<key>/consult-r5/agy-gemini-4-carbon/result.md
+member codex-gpt-6.2-astra: ok · result $HOME/.local/state/envoy/jobs/repo-<key>/consult-r5/codex-gpt-6.2-astra/result.md
+group: $HOME/.local/state/envoy/jobs/repo-<key>/consult-r5/group.json
+next: Collect the fan-out: envoy collect '$HOME/.local/state/envoy/jobs/repo-<key>/consult-r5' — it prints every member's result in one block.
+--- stderr
+
+$ envoy collect consult-r5
+exit 0
+--- stdout
+fan-out: $HOME/.local/state/envoy/jobs/repo-<key>/consult-r5
+status: ok — all 2 turns returned a result
+members: agy-gemini-4-carbon ok · codex-gpt-6.2-astra ok
+resume: envoy run <new-job-name> --with @'$HOME/.local/state/envoy/jobs/repo-<key>/consult-r5' --timeout-min 30 --prompt-file <your-follow-up.md>
+
+=== member agy-gemini-4-carbon ===
+job: $HOME/.local/state/envoy/jobs/repo-<key>/consult-r5/agy-gemini-4-carbon
+status: ok
+duration: 0m
+resumed-from: $HOME/.local/state/envoy/jobs/repo-<key>/consult-r4/agy-gemini-4-carbon
+resume: envoy run <new-job-name> --with @'$HOME/.local/state/envoy/jobs/repo-<key>/consult-r5/agy-gemini-4-carbon' --timeout-min 30 --prompt-file <your-follow-up.md>
+
+--- result.md ---
+fake provider result
+
+
+next: result.md above is this turn's return value — use it in the step that dispatched it.
+
+=== member codex-gpt-6.2-astra ===
+job: $HOME/.local/state/envoy/jobs/repo-<key>/consult-r5/codex-gpt-6.2-astra
+status: ok
+duration: 0m
+resumed-from: $HOME/.local/state/envoy/jobs/repo-<key>/consult-r4/codex-gpt-6.2-astra
+resume: envoy run <new-job-name> --with @'$HOME/.local/state/envoy/jobs/repo-<key>/consult-r5/codex-gpt-6.2-astra' --timeout-min 30 --prompt-file <your-follow-up.md>
+
+--- result.md ---
+fake provider result
+
+next: result.md above is this turn's return value — use it in the step that dispatched it.
+
+next: the member results above are this fan-out's return value — use them in the step that dispatched it.
+--- stderr
+

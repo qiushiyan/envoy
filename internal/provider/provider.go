@@ -134,6 +134,10 @@ type Driver interface {
 	// PreflightSessionID is the session id known before spawn ("" when the
 	// provider only reveals it mid-stream, like a fresh codex thread).
 	PreflightSessionID() string
+	// Prepare lays out what the driver's argv names inside the job directory,
+	// after the runner has archived the prompt and the instructions and
+	// before Argv. A turn whose layout cannot be written does not run.
+	Prepare() error
 	Argv() []string
 	ExtraEnv() []string
 	Feed(line string) []Event
@@ -168,6 +172,11 @@ type spec struct {
 }
 
 var registry = map[string]spec{
+	"agy": {
+		driver:      func(o Options, ws job.Workspace, startedAt time.Time) Driver { return newAgy(o, ws, startedAt) },
+		efforts:     []string{"low", "medium", "high", "xhigh", "max"},
+		belowLowest: []string{"none", "minimal"},
+	},
 	"claude": {
 		driver:      func(o Options, ws job.Workspace, startedAt time.Time) Driver { return newClaude(o, ws, startedAt) },
 		efforts:     []string{"low", "medium", "high", "xhigh", "max"},
@@ -182,6 +191,14 @@ var registry = map[string]spec{
 
 // Names lists the providers in a stable order.
 func Names() []string { return slices.Sorted(maps.Keys(registry)) }
+
+// Series joins names as a sentence lists them: "a", "a or b", "a, b or c".
+func Series(names []string, conj string) string {
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " " + conj + " " + names[len(names)-1]
+}
 
 // Known reports whether name is a provider this engine drives.
 func Known(name string) bool {
@@ -202,12 +219,14 @@ func New(name string, opts Options, ws job.Workspace, startedAt time.Time) (Driv
 }
 
 func unknownProvider(name string) error {
-	return fmt.Errorf("unknown provider '%s'; the providers are %s", name, strings.Join(Names(), " and "))
+	return fmt.Errorf("unknown provider '%s'; the providers are %s", name, Series(Names(), "and"))
 }
 
 // ValidateEffort rejects an invalid effort BEFORE spawn: claude silently
 // ignores an invalid effort (runs at default), codex burns a turn-start and
-// fails with an API 400 mid-stream.
+// fails with an API 400 mid-stream. agy refuses an effort its model lacks
+// before it creates a conversation, so its list is the flag's vocabulary and
+// each model's own subset stays agy's to check.
 func ValidateEffort(providerName, effort string) error {
 	s, ok := registry[providerName]
 	if !ok {

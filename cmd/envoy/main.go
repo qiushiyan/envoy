@@ -19,7 +19,7 @@ import (
 
 // version is the engine's, printed by `envoy version`. It changes with every
 // change to what callers read.
-const version = "0.15.1"
+const version = "0.16.0"
 
 type CLI struct {
 	VersionFlag kong.VersionFlag `name:"version" help:"Print the version and exit."`
@@ -149,7 +149,7 @@ func outcome(code int, err error) error {
 
 var app = clikit.App{
 	Name:        "envoy",
-	Description: "envoy runs headless claude or codex turns as jobs you name, and returns each as files.",
+	Description: "envoy runs headless agy, claude or codex turns as jobs you name, and returns each as files.",
 	New:         func() any { return &CLI{} },
 	Options:     []kong.Option{kong.Vars{"version": "envoy " + version}},
 	UsageCode:   job.ExitUsage,

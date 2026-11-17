@@ -40,7 +40,7 @@ $ envoy run job --with gemini --prompt-file $HOME/brief.md
 exit 3
 --- stdout
 --- stderr
-envoy: error: --with 'gemini' must name provider claude or codex, got 'gemini'
+envoy: error: --with 'gemini' must name provider agy, claude or codex, got 'gemini'
 
 $ envoy run job --with codex
 exit 3
@@ -118,18 +118,18 @@ $ envoy run job --with codex --prompt-file $HOME/brief.md --max-budget-usd 1
 exit 3
 --- stdout
 --- stderr
-envoy: error: --max-budget-usd caps one claude voice; codex has no budget flag
+envoy: error: --max-budget-usd caps one claude voice; agy and codex have no budget flag
 
 $ envoy run job --with claude --with codex --prompt-file $HOME/brief.md --max-budget-usd 1
 exit 3
 --- stdout
 --- stderr
-envoy: error: --max-budget-usd caps one claude voice; codex has no budget flag
+envoy: error: --max-budget-usd caps one claude voice; agy and codex have no budget flag
 
 $ envoy run job --with claude --prompt-file $HOME/brief.md --version
 exit 0
 --- stdout
-envoy 0.15.1
+envoy 0.16.0
 --- stderr
 
 $ envoy run job --with codex --prompt-file $HOME/brief.md --instructions-file $HOME/absent.md

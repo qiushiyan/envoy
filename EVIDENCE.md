@@ -543,3 +543,36 @@ each workaround.
   Compare next pass: whether a 6.2 codex turn is refused under OpenAI's
   tighter cyber safeguards, and what its stream shows, since only claude's
   refusals are recorded as `provider_refusal`.
+- **2026-11-17 — agy joins as a third provider, read on Antigravity CLI
+  1.5.10.** Sixteen spikes on Gemini 4 Carbon settled the driver. The prompt
+  rides stdin with no `-p`, which takes its prompt as a value (`-p=-` sends a
+  literal "-"), under `--output-format stream-json`: `init` names the
+  conversation, `step_update`s carry the user's input, tools, text deltas and
+  each model step's usage, and one `result` ends the turn. `--model
+  gemini-4-carbon --effort high` is Carbon (High); the model alone runs
+  Medium, and agy refuses a model or an effort it lacks before any
+  conversation exists. Four traps the driver covers: a prompt starting with
+  `/` is a slash command (`/model` answered SUCCESS with no turn) unless
+  `--disable-slash-commands`; a `--conversation` agy cannot find starts a new
+  one with exit 0 and only a stderr warning (`session_not_continued`); a stop
+  comes back as an ERROR result, `finished_reason` `interrupted`, which is the
+  stop and not a verdict; and `result.usage` counts the whole conversation, so
+  a resumed turn sums its own steps (a fresh turn's steps, 8825 + 2049 input,
+  matched its result's 10874). A turn stopped after its `user_input` step kept
+  the prompt: a resume answered what had been asked. agy has no system-prompt
+  flag; the AGENTS.md at the root of an `--add-dir` folder loads as a user
+  rule (input 8.8k → 9.1k tokens), where `--agent` replaced the default prompt
+  (3.2k) and a SessionStart hook injected a conversation step. A rule never
+  exercised was recalled on a resume without the folder. The transcript under
+  `~/.gemini/antigravity-cli/brain/<id>/` names the model that answered
+  (`gemini-4-carbon-high`); init names only the base model, and only for an
+  explicit `--model`. Left unguarded, by proportion: agy silently cuts a
+  prompt past 192,000 bytes and reports SUCCESS (759 prompts in the store,
+  counted today, peak at 32 KB), and caps a rule file at 24,000 bytes
+  (`VOICE.md` is 2.7 KB). Dogfood through the built binary: a Carbon turn on
+  the consult rules, its continuation and a stopped turn recorded `ok`, `ok`
+  and `interrupted`, each with the rule obeyed and the model reported. What
+  stands (0.16.0): the `agy` driver in `internal/provider`. Compare next
+  pass: what a quota or network failure looks like in the stream (only a
+  `--print-timeout` stop has shown `AGY_ERROR` on stderr with exit 3), whether
+  the rule survives a compaction, and whether any brief nears 192 KB.

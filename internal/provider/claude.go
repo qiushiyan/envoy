@@ -52,6 +52,9 @@ func newClaude(opts Options, ws job.Workspace, startedAt time.Time) *claude {
 
 func (c *claude) PreflightSessionID() string { return c.sessionID }
 
+// Prepare: the instructions file claude reads is the runner's own archive.
+func (c *claude) Prepare() error { return nil }
+
 func (c *claude) Argv() []string {
 	args := []string{"-p", "--output-format", "stream-json", "--verbose"}
 	if c.opts.Model != "" {
@@ -471,35 +474,7 @@ func claudeTranscript(sessionID string, since time.Time) *transcriptResult {
 	// Positional tail read: transcripts of long conversations reach tens of
 	// MB, and this runs on every heartbeat while acceptance is unproven —
 	// never load the whole file.
-	const maxBytes = 1 << 20
-	f, err := os.Open(transcript)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil
-	}
-	start := info.Size() - maxBytes
-	truncated := start > 0
-	if start < 0 {
-		start = 0
-	}
-	buf := make([]byte, info.Size()-start)
-	if len(buf) > 0 {
-		if n, rerr := f.ReadAt(buf, start); rerr != nil && n != len(buf) {
-			return nil
-		}
-	}
-	text := string(buf)
-	if truncated {
-		if i := strings.IndexByte(text, '\n'); i >= 0 {
-			text = text[i+1:]
-		} else {
-			text = ""
-		}
-	}
+	text := tailText(transcript, 1<<20)
 
 	result := &transcriptResult{}
 	for raw := range strings.SplitSeq(text, "\n") {

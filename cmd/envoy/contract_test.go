@@ -62,6 +62,7 @@ func newWorld(t *testing.T) *world {
 		"ENVOY_FAKE_SCENARIO":          "success",
 		"ENVOY_FAKE_SESSION_ID_CODEX":  "sess-codex",
 		"ENVOY_FAKE_SESSION_ID_CLAUDE": "sess-claude",
+		"ENVOY_FAKE_SESSION_ID_AGY":    "sess-agy",
 	} {
 		t.Setenv(k, v)
 	}
@@ -315,8 +316,9 @@ func TestContracts(t *testing.T) {
 			w.step(b, nil, "pending")
 			w.step(b, nil, "pending", "--base", filepath.Join(w.home, ".local", "state", "envoy", "jobs"))
 		}},
-		// The consult skill's three shapes and its round 2, then the review
-		// skill seating a consult member warm beside a cold voice.
+		// The consult skill's three shapes and its round 2, the review skill
+		// seating a consult member warm beside a cold voice, and the consult
+		// skill's Carbon voice.
 		{"consult", func(w *world, b *strings.Builder) {
 			w.step(b, nil, "run", "consult-r1", "--with", "codex:gpt-6.2-astra:high", "--with", "claude:claude-opus-5-5", "--prompt-file", w.path("brief.md"), "--timeout-min", "30")
 			w.step(b, nil, "collect", "consult-r1")
@@ -328,6 +330,12 @@ func TestContracts(t *testing.T) {
 			w.step(b, nil, "collect", "review-r1")
 			w.step(b, nil, "run", "review-r2", "--with", "@consult-r1/codex-gpt-6.2-astra="+w.path("full.md"), "--with", "claude:claude-opus-5-5="+w.path("goal.md"), "--baseline", w.base, "--timeout-min", "45")
 			w.step(b, nil, "collect", "review-r2")
+			// The consult skill's Carbon voice beside the default, on the
+			// skill's standing instructions, then a round that continues both.
+			w.step(b, nil, "run", "consult-r4", "--with", "agy:gemini-4-carbon:high", "--with", "codex:gpt-6.2-astra:high", "--prompt-file", w.path("brief.md"), "--instructions-file", w.path("rules.md"), "--timeout-min", "30")
+			w.step(b, nil, "collect", "consult-r4")
+			w.step(b, nil, "run", "consult-r5", "--with", "@consult-r4="+w.path("round2.md"), "--timeout-min", "30")
+			w.step(b, nil, "collect", "consult-r5")
 		}},
 		// The delegate skill: a write turn on a baseline.
 		{"delegate", func(w *world, b *strings.Builder) {

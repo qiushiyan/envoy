@@ -16,7 +16,7 @@ import (
 // safe. A section that serves several pages is one value returned by each.
 
 func (CLI) Help() string {
-	return `A turn is one prompt sent to a session of the claude or codex CLI, run
+	return `A turn is one prompt sent to a session of the agy, claude or codex CLI, run
 headless. envoy runs it as a job you name, in a process of its own, and leaves
 its result and records in a directory you read back by that name.
 
@@ -106,8 +106,9 @@ func (RunCmd) HelpSections() []clikit.Section {
 stays out of commits — go in --instructions-file once, when the conversation
 starts, instead of in each turn's prompt. The provider receives them as
 system-level text, codex as its developer_instructions setting, replacing any
-in its own config. Every turn that continues the conversation passes them
-again from the job's records, so the session keeps them after its context is
+in its own config, and agy as a rule: the AGENTS.md of a folder envoy adds to
+its workspace. Every turn that continues the conversation passes them again
+from the job's records, so the session keeps them after its context is
 compacted; a turn's prompt never needs to repeat them. A conversation keeps
 the instructions it started with: a continuation accepts --instructions-file
 only when the file matches them, and refuses a different one, or any for a
@@ -115,8 +116,8 @@ conversation that started without, because the session would go on holding
 its first text. A turn's prompt can add to them for that turn, but not
 reliably lift one: the model weighs system-level text above the prompt, so a
 changed rule takes a new conversation.`},
-		{Title: "Running providers through a launcher", Body: `ENVOY_CODEX_CMD and ENVOY_CLAUDE_CMD replace the bare provider command with a
-prefix. One possible launcher is headroom:
+		{Title: "Running providers through a launcher", Body: `ENVOY_CODEX_CMD, ENVOY_CLAUDE_CMD and ENVOY_AGY_CMD replace the bare provider
+command with a prefix. One possible launcher is headroom:
   export ENVOY_CODEX_CMD="headroom launch --vendor codex --"
   export ENVOY_CLAUDE_CMD="headroom launch --"
 Unset, empty or whitespace-only values keep the bare binary from PATH.
@@ -132,12 +133,13 @@ charge; envoy never substitutes a model of its own and reports
 recorded either way; ` + "`collect --status-only`" + ` prints it, and a difference from the
 request is the provider's own aliasing, not a substitution.
 
-Write intent, not a sandbox. envoy restricts no session: claude runs with its
-permission prompts bypassed, since a headless turn has no one to answer them,
-and codex under its own configuration. --allow-write records the intent and
-anchors the diff; any turn can still write, so "analyse only, change nothing"
-belongs in the prompt. A fan-out is refused --allow-write, since its members
-share one working tree; that refusal records intent too, and enforces nothing.
+Write intent, not a sandbox. envoy restricts no session: claude and agy run
+with their permission prompts bypassed, since a headless turn has no one to
+answer them, and codex under its own configuration. --allow-write records the
+intent and anchors the diff; any turn can still write, so "analyse only,
+change nothing" belongs in the prompt. A fan-out is refused --allow-write,
+since its members share one working tree; that refusal records intent too, and
+enforces nothing.
 
 Continuing. A finished job that holds a session prints ` + "`resume:`" + `, the exact
 command that continues its conversation as a new job — for a fan-out, the

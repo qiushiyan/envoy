@@ -42,6 +42,7 @@ const (
 	CauseTimeout               = "timeout"                 // the wall-clock cap ended the turn
 	CauseInterrupted           = "interrupted"             // a signal envoy received stopped the turn
 	CauseSessionConflict       = "session_conflict"        // the provider reported a session another turn holds
+	CauseSessionNotContinued   = "session_not_continued"   // the provider started a new session instead of continuing the one resumed
 	CauseAbandoned             = "abandoned"               // the runner died without publishing; set by collect
 )
 

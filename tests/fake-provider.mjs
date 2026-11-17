@@ -20,13 +20,17 @@ if (invocationFile) {
   // launch, from the file named, so a test sees what the provider received.
   const appendAt = providerArgs.indexOf('--append-system-prompt-file');
   const appendedSystemPrompt = appendAt >= 0 ? fs.readFileSync(providerArgs[appendAt + 1], 'utf8') : null;
+  // agy reads a root AGENTS.md of each folder --add-dir names as a rule.
+  const addDirAt = providerArgs.indexOf('--add-dir');
+  const agyRulePath = addDirAt >= 0 ? path.join(providerArgs[addDirAt + 1], 'AGENTS.md') : null;
+  const agyRule = agyRulePath && fs.existsSync(agyRulePath) ? fs.readFileSync(agyRulePath, 'utf8') : null;
   fs.writeFileSync(
     invocationFile,
-    JSON.stringify({ argv: providerArgs, env: process.env, pid: process.pid, cwd: process.cwd(), appendedSystemPrompt }),
+    JSON.stringify({ argv: providerArgs, env: process.env, pid: process.pid, cwd: process.cwd(), appendedSystemPrompt, agyRule }),
   );
 }
 
-if (!['codex', 'claude'].includes(provider)) {
+if (!['agy', 'codex', 'claude'].includes(provider)) {
   process.stderr.write(`unknown fake provider: ${provider}\n`);
   process.exit(64);
 }
@@ -160,7 +164,61 @@ function startGrandchild() {
   return grandchild;
 }
 
-if (provider === 'claude') {
+// agy 1.5.10's stream-json shapes (internal/provider/testdata/agy-1.5.10-*).
+function agyConversation() {
+  const index = providerArgs.indexOf('--conversation');
+  return index >= 0 ? providerArgs[index + 1] : sessionId;
+}
+
+function agyStep(conversation, step) {
+  return { event: 'step_update', step_update: { conversation_id: conversation, ...step } };
+}
+
+function agyUsage(input, output) {
+  return { input_tokens: input, output_tokens: output, thinking_tokens: 2, cache_read_tokens: 3, total_tokens: input + output };
+}
+
+// emitAgyTurn streams one turn into conversation: the init, the user's input,
+// a reply in two deltas, and the result. A resumed result's usage counts the
+// whole conversation, as agy's does.
+function emitAgyTurn(conversation) {
+  emit({ event: 'init', conversation_id: conversation, init: { cwd: process.cwd(), tools: ['view_file'], permission_mode: 'always-proceed' } });
+  emit(agyStep(conversation, { step_index: 0, state: 'DONE', step_type: 'user_input' }));
+  emit(agyStep(conversation, { step_index: 1, state: 'ACTIVE', step_type: 'agent_response', text_delta: finalText }));
+  emit(agyStep(conversation, { step_index: 1, state: 'DONE', step_type: 'agent_response', text_delta: '\n', usage: agyUsage(17, 9) }));
+  emit({ event: 'result', result: { conversation_id: conversation, status: 'SUCCESS', response: `${finalText}\n`, num_turns: 1, usage: agyUsage(17, 9) } });
+}
+
+if (provider === 'agy') {
+  if (scenario === 'success') {
+    emitAgyTurn(agyConversation());
+  } else if (scenario === 'conversation-replaced') {
+    // agy 1.5.10 answers a --conversation it cannot find by starting a new
+    // one: a warning on stderr, exit 0.
+    process.stderr.write(`warning: conversation "${agyConversation()}" not found\n`);
+    emitAgyTurn(process.env.ENVOY_FAKE_REPLACED_SESSION_ID ?? 'fake-replaced-session');
+  } else if (scenario === 'model-refused') {
+    const error = 'invalid model selection (--model "gemini-4-carbon" --effort "xhigh"): gemini-4-carbon has no "xhigh" effort (available: low, medium, high)';
+    emit({ event: 'result', result: { conversation_id: '', status: 'ERROR', response: '', error, num_turns: 0, usage: agyUsage(0, 0), finished_reason: 'error' } });
+    process.stderr.write(`error: ${error}\n`);
+    process.exitCode = 1;
+  } else if (scenario === 'interrupted-on-term') {
+    // A stop ends agy's turn with a result of its own: ERROR, interrupted.
+    const conversation = agyConversation();
+    emit({ event: 'init', conversation_id: conversation, init: { cwd: process.cwd(), tools: [], permission_mode: 'always-proceed' } });
+    emit(agyStep(conversation, { step_index: 0, state: 'DONE', step_type: 'user_input' }));
+    emit(agyStep(conversation, { step_index: 1, state: 'ACTIVE', step_type: 'agent_response', text_delta: 'half an answer' }));
+    process.on('SIGTERM', () => {
+      emit({ event: 'result', result: { conversation_id: conversation, status: 'ERROR', response: '', error: 'interrupted', num_turns: 1, usage: agyUsage(40, 5), finished_reason: 'interrupted' } });
+      process.stderr.write('error: interrupted\n');
+      setTimeout(() => process.exit(1), 20);
+    });
+    setInterval(() => {}, 60_000);
+  } else {
+    process.stderr.write(`unsupported fake agy scenario: ${scenario}\n`);
+    process.exit(64);
+  }
+} else if (provider === 'claude') {
   if (scenario === 'usage-capture') {
     const fixture = new URL('../internal/provider/testdata/claude-2.1.270-usage.jsonl', import.meta.url);
     const records = fs.readFileSync(fixture, 'utf8').trim().split('\n').map(JSON.parse);

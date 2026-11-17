@@ -235,8 +235,12 @@ func spendCapRefusal() string {
 			uncapped = append(uncapped, name)
 		}
 	}
-	return fmt.Sprintf("--max-budget-usd caps one %s voice; %s has no budget flag",
-		strings.Join(capped, " or "), strings.Join(uncapped, " or "))
+	verb := "has"
+	if len(uncapped) > 1 {
+		verb = "have"
+	}
+	return fmt.Sprintf("--max-budget-usd caps one %s voice; %s %s no budget flag",
+		provider.Series(capped, "or"), provider.Series(uncapped, "and"), verb)
 }
 
 // promptReadable reports why a prompt file cannot be sent: missing, a

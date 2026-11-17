@@ -28,8 +28,16 @@ func TestValidateEffort(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "Valid: low, medium, high, xhigh, max") {
 		t.Fatalf("claude ultra must list valid values, got: %v", err)
 	}
-	if err := ValidateEffort("gemini", "low"); err == nil {
-		t.Fatal("unknown provider must fail")
+	if err := ValidateEffort("gemini", "low"); err == nil || !strings.Contains(err.Error(), "the providers are agy, claude and codex") {
+		t.Fatalf("unknown provider must fail naming the providers, got: %v", err)
+	}
+	// agy's list is its --effort vocabulary; which of it a model has is agy's
+	// own check, made before it creates a conversation.
+	if err := ValidateEffort("agy", "high"); err != nil {
+		t.Fatalf("agy high must be valid: %v", err)
+	}
+	if err := ValidateEffort("agy", "ultra"); err == nil || !strings.Contains(err.Error(), "Valid: low, medium, high, xhigh, max") {
+		t.Fatalf("agy ultra must list valid values, got: %v", err)
 	}
 	// Effort travels in the voice (codex::high); there is no --effort flag to
 	// send the caller looking for.

@@ -59,7 +59,7 @@ Voices:
                                      two voices, two prompts, one job
     --with @consult-r1=round2.md     one NEW prompt to every member
 
-  Efforts — claude: low medium high xhigh max · codex: none minimal low medium high xhigh max ultra
+  Efforts — agy: low medium high xhigh max · claude: low medium high xhigh max · codex: none minimal low medium high xhigh max ultra
 
   Members never see each other's output. A fan-out reference counts as its
   members, and it stands alone: to seat one of its members beside others, name
@@ -73,8 +73,9 @@ Standing instructions:
   stays out of commits — go in --instructions-file once, when the conversation
   starts, instead of in each turn's prompt. The provider receives them as
   system-level text, codex as its developer_instructions setting, replacing any
-  in its own config. Every turn that continues the conversation passes them
-  again from the job's records, so the session keeps them after its context is
+  in its own config, and agy as a rule: the AGENTS.md of a folder envoy adds to
+  its workspace. Every turn that continues the conversation passes them again
+  from the job's records, so the session keeps them after its context is
   compacted; a turn's prompt never needs to repeat them. A conversation keeps
   the instructions it started with: a continuation accepts --instructions-file
   only when the file matches them, and refuses a different one, or any for a
@@ -84,8 +85,8 @@ Standing instructions:
   changed rule takes a new conversation.
 
 Running providers through a launcher:
-  ENVOY_CODEX_CMD and ENVOY_CLAUDE_CMD replace the bare provider command with a
-  prefix. One possible launcher is headroom:
+  ENVOY_CODEX_CMD, ENVOY_CLAUDE_CMD and ENVOY_AGY_CMD replace the bare provider
+  command with a prefix. One possible launcher is headroom:
     export ENVOY_CODEX_CMD="headroom launch --vendor codex --"
     export ENVOY_CLAUDE_CMD="headroom launch --"
   Unset, empty or whitespace-only values keep the bare binary from PATH.
@@ -103,12 +104,13 @@ What the flags cannot tell you:
   recorded either way; `collect --status-only` prints it, and a difference from the
   request is the provider's own aliasing, not a substitution.
 
-  Write intent, not a sandbox. envoy restricts no session: claude runs with its
-  permission prompts bypassed, since a headless turn has no one to answer them,
-  and codex under its own configuration. --allow-write records the intent and
-  anchors the diff; any turn can still write, so "analyse only, change nothing"
-  belongs in the prompt. A fan-out is refused --allow-write, since its members
-  share one working tree; that refusal records intent too, and enforces nothing.
+  Write intent, not a sandbox. envoy restricts no session: claude and agy run
+  with their permission prompts bypassed, since a headless turn has no one to
+  answer them, and codex under its own configuration. --allow-write records the
+  intent and anchors the diff; any turn can still write, so "analyse only,
+  change nothing" belongs in the prompt. A fan-out is refused --allow-write,
+  since its members share one working tree; that refusal records intent too, and
+  enforces nothing.
 
   Continuing. A finished job that holds a session prints `resume:`, the exact
   command that continues its conversation as a new job — for a fan-out, the

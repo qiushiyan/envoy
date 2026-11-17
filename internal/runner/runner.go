@@ -220,6 +220,11 @@ func Run(opts Options) Result {
 		fmt.Fprintf(opts.Stderr, "envoy: cannot prepare job dir: %s\n", err)
 		return Result{ExitCode: job.ExitInfra}
 	}
+	if err := driver.Prepare(); err != nil {
+		r.releaseLock()
+		fmt.Fprintf(opts.Stderr, "envoy: cannot prepare job dir: %s\n", err)
+		return Result{ExitCode: job.ExitInfra}
+	}
 	return r.execute(string(promptText))
 }
 

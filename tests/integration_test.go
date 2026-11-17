@@ -296,6 +296,9 @@ type invocation struct {
 	// AppendedSystemPrompt is what the file a claude launch named with
 	// --append-system-prompt-file held when it launched; nil when none.
 	AppendedSystemPrompt *string `json:"appendedSystemPrompt"`
+	// AgyRule is what the AGENTS.md of the folder an agy launch added with
+	// --add-dir held when it launched; nil when none.
+	AgyRule *string `json:"agyRule"`
 }
 
 func readInvocation(t *testing.T, path string) invocation {
