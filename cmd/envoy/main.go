@@ -19,7 +19,7 @@ import (
 
 // version is the engine's, printed by `envoy version`. It changes with every
 // change to what callers read.
-const version = "0.16.0"
+const version = "0.16.1"
 
 type CLI struct {
 	VersionFlag kong.VersionFlag `name:"version" help:"Print the version and exit."`

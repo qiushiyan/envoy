@@ -73,9 +73,8 @@ Standing instructions:
   stays out of commits — go in --instructions-file once, when the conversation
   starts, instead of in each turn's prompt. The provider receives them as
   system-level text, codex as its developer_instructions setting, replacing any
-  in its own config, and agy as a rule: the AGENTS.md of a folder envoy adds to
-  its workspace. Every turn that continues the conversation passes them again
-  from the job's records, so the session keeps them after its context is
+  in its own config. Every turn that continues the conversation passes them
+  again from the job's records, so the session keeps them after its context is
   compacted; a turn's prompt never needs to repeat them. A conversation keeps
   the instructions it started with: a continuation accepts --instructions-file
   only when the file matches them, and refuses a different one, or any for a

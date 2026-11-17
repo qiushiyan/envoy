@@ -42,7 +42,8 @@ codex burns a turn on an API 400. agy's vocabulary varies by model, and agy
 refuses a model or an effort it lacks before it creates a conversation, so
 its registry entry holds its flag's whole vocabulary, the per-model check
 stays agy's, and that refusal is recorded `not_started` — agy's own statement
-that no conversation exists.
+that no conversation exists. Its recovery hands back the original dispatch as
+the one to change, since agy refuses it again unchanged.
 
 ## Permissions
 

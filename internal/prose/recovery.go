@@ -50,6 +50,15 @@ func Recovery(m *job.Meta, resumeCmd, redispatchCmd, instructionsNote string) st
 		if instructionsNote != "" {
 			body += " " + instructionsNote
 		}
+		// A provider that refused the dispatch itself (agy, for a model or an
+		// effort it lacks) refuses it again unchanged, so the command is the
+		// one to change, not to repeat.
+		if remedy(m.Failure) != "" {
+			if redispatchCmd == "" {
+				return body + " Then dispatch it under a new job name."
+			}
+			return body + " Then dispatch it under a new job name, with that fix applied to the original dispatch:\n  " + redispatchCmd
+		}
 		if redispatchCmd == "" {
 			return body + " Dispatch it once more under a new job name; if it fails the same way, " + retryFailure
 		}

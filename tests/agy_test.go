@@ -95,12 +95,10 @@ func TestAgyReplacedConversationIsNotAContinuation(t *testing.T) {
 		t.Fatalf("cause = %v", cause)
 	}
 	col := runEnvoy(t, e, "collect", r2)
-	mustContain(t, "collect", col.stdout,
-		"Agy did not continue the conversation this turn resumed: it started a new one, session conv-new",
-		`warning: conversation "conv-old" not found`,
-		"a follow-up's prompt must carry whatever the earlier conversation established",
-		"--with @'"+r2+"'",
-		"fake provider result")
+	// What a caller acts on: the new session, agy's own words for the miss,
+	// the follow-up that continues the new session, and the answer it gave.
+	mustContain(t, "collect", col.stdout, "conv-new", `warning: conversation "conv-old" not found`,
+		"--with @'"+r2+"'", "fake provider result")
 }
 
 // A stop makes agy end its turn with a result of its own, ERROR
@@ -142,5 +140,5 @@ func TestAgyRefusedModelNeverStarted(t *testing.T) {
 		t.Fatalf("status %v, prompt %v, session %v", meta["status"], meta["promptState"], meta["sessionId"])
 	}
 	mustContain(t, "collect", runEnvoy(t, e, "collect", outDir).stdout,
-		`gemini-4-carbon has no "xhigh" effort`, "The provider never started")
+		`gemini-4-carbon has no "xhigh" effort`, "--with agy:gemini-4-carbon:xhigh")
 }
